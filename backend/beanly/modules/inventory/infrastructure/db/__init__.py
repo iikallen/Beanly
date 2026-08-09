@@ -1,0 +1,1 @@
+"""Inventory database adapters."""

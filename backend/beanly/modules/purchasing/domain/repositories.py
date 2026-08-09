@@ -1,0 +1,79 @@
+from datetime import datetime
+from decimal import Decimal
+from typing import Protocol
+from uuid import UUID
+
+from beanly.modules.purchasing.domain.entities import (
+    GoodsReceipt,
+    GoodsReceiptLine,
+    PurchaseOrder,
+    PurchaseOrderLine,
+    Supplier,
+)
+from beanly.modules.purchasing.domain.enums import GoodsReceiptStatus, PurchaseOrderStatus
+
+
+class PurchasingRepository(Protocol):
+    async def add_supplier(self, supplier: Supplier) -> Supplier: ...
+    async def update_supplier(self, supplier: Supplier) -> Supplier: ...
+    async def get_supplier(self, organization_id: UUID, supplier_id: UUID) -> Supplier | None: ...
+    async def list_suppliers(
+        self, organization_id: UUID, include_inactive: bool
+    ) -> list[Supplier]: ...
+    async def next_order_number(self) -> str: ...
+    async def add_order(self, order: PurchaseOrder) -> PurchaseOrder: ...
+    async def update_order(self, order: PurchaseOrder) -> PurchaseOrder: ...
+    async def get_order(
+        self, organization_id: UUID, order_id: UUID, *, lock: bool = False
+    ) -> PurchaseOrder | None: ...
+    async def list_orders(
+        self,
+        organization_id: UUID,
+        location_ids: tuple[UUID, ...],
+        supplier_id: UUID | None,
+        location_id: UUID | None,
+        warehouse_id: UUID | None,
+        status: PurchaseOrderStatus | None,
+        date_from: datetime | None,
+        date_to: datetime | None,
+    ) -> list[PurchaseOrder]: ...
+    async def add_order_lines(self, lines: tuple[PurchaseOrderLine, ...]) -> None: ...
+    async def replace_order_lines(
+        self,
+        organization_id: UUID,
+        order_id: UUID,
+        lines: tuple[PurchaseOrderLine, ...],
+    ) -> None: ...
+    async def get_order_lines(
+        self, organization_id: UUID, order_id: UUID
+    ) -> tuple[PurchaseOrderLine, ...]: ...
+    async def received_totals(
+        self, organization_id: UUID, order_id: UUID
+    ) -> dict[UUID, Decimal]: ...
+    async def next_receipt_number(self) -> str: ...
+    async def add_receipt(self, receipt: GoodsReceipt) -> GoodsReceipt: ...
+    async def update_receipt(self, receipt: GoodsReceipt) -> GoodsReceipt: ...
+    async def get_receipt(
+        self, organization_id: UUID, receipt_id: UUID, *, lock: bool = False
+    ) -> GoodsReceipt | None: ...
+    async def list_receipts(
+        self,
+        organization_id: UUID,
+        location_ids: tuple[UUID, ...],
+        purchase_order_id: UUID | None,
+        supplier_id: UUID | None,
+        status: GoodsReceiptStatus | None,
+    ) -> list[GoodsReceipt]: ...
+    async def add_receipt_lines(self, lines: tuple[GoodsReceiptLine, ...]) -> None: ...
+    async def replace_receipt_lines(
+        self,
+        organization_id: UUID,
+        receipt_id: UUID,
+        lines: tuple[GoodsReceiptLine, ...],
+    ) -> None: ...
+    async def get_receipt_lines(
+        self, organization_id: UUID, receipt_id: UUID
+    ) -> tuple[GoodsReceiptLine, ...]: ...
+    async def posted_receipt_count(self, organization_id: UUID, order_id: UUID) -> int: ...
+    async def commit(self) -> None: ...
+    async def rollback(self) -> None: ...

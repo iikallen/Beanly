@@ -1,0 +1,14 @@
+services:
+  backend-test:
+    build:
+      context: ./backend
+      target: test
+    env_file: .env
+    environment:
+      POSTGRES_TEST_URL: postgresql+asyncpg://beanly:beanly@postgres:5432/beanly
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    command: sh -c "ruff check --no-cache . && pytest -ra -p no:cacheprovider"
