@@ -89,6 +89,10 @@ from beanly.modules.payments.domain.exceptions import (
 from beanly.modules.payments.infrastructure.db.repositories import (
     SqlAlchemyPaymentRepository,
 )
+from beanly.modules.payments.infrastructure.inventory_gateway import (
+    InventorySaleGateway,
+    SalesOrderReferenceValidator,
+)
 from beanly.modules.payments.infrastructure.sales_gateway import SalesSettlementGateway
 from beanly.modules.purchasing.application.commands import (
     CreateGoodsReceiptCommand,
@@ -1470,7 +1474,7 @@ async def test_postgres_sales_idempotency_totals_shift_races_and_no_posting(
 
 
 @pytest.mark.anyio
-async def test_postgres_payments_atomicity_concurrency_and_no_posting(
+async def test_postgres_payments_atomicity_concurrency_and_sale_posting(
     postgres_inventory_database,
 ) -> None:
     database_url = postgres_inventory_database
@@ -1568,13 +1572,38 @@ async def test_postgres_payments_atomicity_concurrency_and_no_posting(
                     AddOrderItemInput(uuid4(), variant_id, (), 1, None),
                 )
 
-        def payment_service(session, *, repository=None, gateway=None, publisher=None):
+        def payment_service(
+            session, *, repository=None, gateway=None, inventory=None, publisher=None
+        ):
             sales_repository = SqlAlchemySalesRepository(session)
             organizations = OrganizationService(SqlAlchemyOrganizationRepository(session))
+            inventory_service = InventoryService(
+                SqlAlchemyInventoryRepository(session),
+                organizations,
+                reference_validator=SalesOrderReferenceValidator(sales_repository),
+            )
             return PaymentService(
                 repository or SqlAlchemyPaymentRepository(session),
                 gateway or SalesSettlementGateway(sales_repository, organizations),
+                inventory or InventorySaleGateway(inventory_service),
                 publisher,
+            )
+
+        async with sessions() as session:
+            await InventoryService(
+                SqlAlchemyInventoryRepository(session),
+                OrganizationService(SqlAlchemyOrganizationRepository(session)),
+            ).create_and_post(
+                context,
+                CreateAndPostCommand(
+                    context.organization_id,
+                    context.user_id,
+                    warehouse_id,
+                    InventoryTransactionType.OPENING_BALANCE,
+                    "Payment test cost basis",
+                    (QuantityInput(item_id, Decimal("1000"), UnitCode.G, Decimal("8")),),
+                    "payments:opening-balance",
+                ),
             )
 
         payment_input = CompletePaymentInput(
@@ -1609,7 +1638,9 @@ async def test_postgres_payments_atomicity_concurrency_and_no_posting(
             paid = (
                 await connection.execute(
                     text(
-                        "SELECT status, paid_by_user_id, paid_at FROM sales_orders "
+                        "SELECT status, paid_by_user_id, paid_at, "
+                        "inventory_transaction_id, cogs_amount, cogs_status "
+                        "FROM sales_orders "
                         "WHERE id=:order_id"
                     ),
                     {"order_id": concurrent_order.id},
@@ -1618,6 +1649,41 @@ async def test_postgres_payments_atomicity_concurrency_and_no_posting(
             assert paid.status == "PAID"
             assert paid.paid_by_user_id == context.user_id
             assert paid.paid_at is not None
+            assert paid.inventory_transaction_id is not None
+            assert paid.cogs_amount == Decimal("144.000000")
+            assert paid.cogs_status == "COMPLETE"
+            sale = (
+                await connection.execute(
+                    text(
+                        "SELECT tx.type, tx.status, tx.warehouse_id, "
+                        "tx.reference_type, tx.reference_id, tx.idempotency_key, "
+                        "line.quantity_delta, line.unit_cost_amount, "
+                        "line.total_cost_amount FROM inventory_transactions tx "
+                        "JOIN inventory_transaction_lines line "
+                        "ON line.transaction_id=tx.id "
+                        "WHERE tx.id=:transaction_id"
+                    ),
+                    {"transaction_id": paid.inventory_transaction_id},
+                )
+            ).one()
+            assert sale == (
+                "SALE",
+                "POSTED",
+                warehouse_id,
+                "ORDER",
+                concurrent_order.id,
+                f"sale:order:{concurrent_order.id}",
+                Decimal("-18.000000"),
+                Decimal("8.000000"),
+                Decimal("-144.000000"),
+            )
+            assert await connection.scalar(
+                text(
+                    "SELECT quantity FROM stock_balances "
+                    "WHERE warehouse_id=:warehouse_id AND inventory_item_id=:item_id"
+                ),
+                {"warehouse_id": warehouse_id, "item_id": item_id},
+            ) == Decimal("982.000000")
 
         cross_order = await new_order()
         with pytest.raises(PaymentIdempotencyConflict):
@@ -1644,6 +1710,69 @@ async def test_postgres_payments_atomicity_concurrency_and_no_posting(
         assert sum(not isinstance(value, Exception) for value in doubled) == 1
         assert sum(isinstance(value, OrderAlreadyPaid) for value in doubled) == 1
 
+        class FailingInventoryGateway(InventorySaleGateway):
+            async def stage_sale(self, *args, **kwargs):
+                await super().stage_sale(*args, **kwargs)
+                raise RuntimeError("forced inventory failure")
+
+        inventory_failure_order = await new_order()
+        async with engine.connect() as connection:
+            balance_before_inventory_failure = await connection.scalar(
+                text(
+                    "SELECT quantity FROM stock_balances "
+                    "WHERE warehouse_id=:warehouse_id AND inventory_item_id=:item_id"
+                ),
+                {"warehouse_id": warehouse_id, "item_id": item_id},
+            )
+        async with sessions() as session:
+            sales_repository = SqlAlchemySalesRepository(session)
+            organizations = OrganizationService(
+                SqlAlchemyOrganizationRepository(session)
+            )
+            failing_inventory = FailingInventoryGateway(
+                InventoryService(
+                    SqlAlchemyInventoryRepository(session),
+                    organizations,
+                    reference_validator=SalesOrderReferenceValidator(
+                        sales_repository
+                    ),
+                )
+            )
+            with pytest.raises(RuntimeError, match="forced inventory failure"):
+                await payment_service(
+                    session, inventory=failing_inventory
+                ).complete(
+                    context,
+                    inventory_failure_order.id,
+                    CompletePaymentInput(
+                        uuid4(),
+                        (PaymentLineInput(PaymentMethod.CARD, 670000),),
+                    ),
+                )
+        async with engine.connect() as connection:
+            assert await connection.scalar(
+                text("SELECT status FROM sales_orders WHERE id=:order_id"),
+                {"order_id": inventory_failure_order.id},
+            ) == "OPEN"
+            assert await connection.scalar(
+                text("SELECT count(*) FROM payments WHERE order_id=:order_id"),
+                {"order_id": inventory_failure_order.id},
+            ) == 0
+            assert await connection.scalar(
+                text(
+                    "SELECT count(*) FROM inventory_transactions "
+                    "WHERE type='SALE' AND reference_id=:order_id"
+                ),
+                {"order_id": inventory_failure_order.id},
+            ) == 0
+            assert await connection.scalar(
+                text(
+                    "SELECT quantity FROM stock_balances "
+                    "WHERE warehouse_id=:warehouse_id AND inventory_item_id=:item_id"
+                ),
+                {"warehouse_id": warehouse_id, "item_id": item_id},
+            ) == balance_before_inventory_failure
+
         class FailingPaymentRepository(SqlAlchemyPaymentRepository):
             async def add(self, value):
                 await super().add(value)
@@ -1664,8 +1793,23 @@ async def test_postgres_payments_atomicity_concurrency_and_no_posting(
                 )
 
         class FailingSalesGateway(SalesSettlementGateway):
-            async def mark_order_paid(self, order_id, paid_by_user_id, paid_at):
-                await super().mark_order_paid(order_id, paid_by_user_id, paid_at)
+            async def mark_order_paid(
+                self,
+                order_id,
+                paid_by_user_id,
+                paid_at,
+                inventory_transaction_id,
+                cogs_amount,
+                cogs_status,
+            ):
+                await super().mark_order_paid(
+                    order_id,
+                    paid_by_user_id,
+                    paid_at,
+                    inventory_transaction_id,
+                    cogs_amount,
+                    cogs_status,
+                )
                 raise RuntimeError("forced order failure")
 
         order_failure_order = await new_order()
@@ -1697,6 +1841,43 @@ async def test_postgres_payments_atomicity_concurrency_and_no_posting(
                     )
                 ).one()
                 assert (status_value, payment_count) == ("OPEN", 0)
+                assert await connection.scalar(
+                    text(
+                        "SELECT count(*) FROM inventory_transactions "
+                        "WHERE type='SALE' AND reference_id=:order_id"
+                    ),
+                    {"order_id": order_id},
+                ) == 0
+            assert await connection.scalar(
+                text(
+                    "SELECT quantity FROM stock_balances "
+                    "WHERE warehouse_id=:warehouse_id AND inventory_item_id=:item_id"
+                ),
+                {"warehouse_id": warehouse_id, "item_id": item_id},
+            ) == Decimal("964.000000")
+
+        timeline: list[str] = []
+
+        class VisibilityInventoryGateway(InventorySaleGateway):
+            def __init__(self, inventory) -> None:
+                super().__init__(inventory)
+                self.observed = None
+
+            async def publish(self, events):
+                transaction_id = next(
+                    event.transaction_id
+                    for event in events
+                    if hasattr(event, "transaction_id")
+                )
+                async with sessions() as check:
+                    self.observed = await check.scalar(
+                        text(
+                            "SELECT count(*) FROM inventory_transactions "
+                            "WHERE id=:id AND status='POSTED'"
+                        ),
+                        {"id": transaction_id},
+                    )
+                timeline.append("inventory")
 
         class VisibilityPublisher:
             def __init__(self) -> None:
@@ -1713,13 +1894,34 @@ async def test_postgres_payments_atomicity_concurrency_and_no_posting(
                             text("SELECT status FROM sales_orders WHERE id=:id"),
                             {"id": event.order_id},
                         ),
+                        await check.scalar(
+                            text(
+                                "SELECT count(*) FROM sales_orders "
+                                "WHERE id=:id AND inventory_transaction_id IS NOT NULL"
+                            ),
+                            {"id": event.order_id},
+                        ),
                     )
+                timeline.append("payment")
 
         event_order = await new_order()
         publisher = VisibilityPublisher()
         async with sessions() as session:
+            sales_repository = SqlAlchemySalesRepository(session)
+            organizations = OrganizationService(
+                SqlAlchemyOrganizationRepository(session)
+            )
+            visibility_inventory = VisibilityInventoryGateway(
+                InventoryService(
+                    SqlAlchemyInventoryRepository(session),
+                    organizations,
+                    reference_validator=SalesOrderReferenceValidator(
+                        sales_repository
+                    ),
+                )
+            )
             event_payment = await payment_service(
-                session, publisher=publisher
+                session, inventory=visibility_inventory, publisher=publisher
             ).complete(
                 context,
                 event_order.id,
@@ -1727,7 +1929,55 @@ async def test_postgres_payments_atomicity_concurrency_and_no_posting(
                     uuid4(), (PaymentLineInput(PaymentMethod.OTHER, 670000),)
                 ),
             )
-        assert publisher.observed == (1, "PAID")
+        assert visibility_inventory.observed == 1
+        assert publisher.observed == (1, "PAID", 1)
+        assert timeline == ["inventory", "payment"]
+
+        class FailingPublisherInventoryGateway(InventorySaleGateway):
+            async def publish(self, events):
+                assert events
+                raise RuntimeError("forced event failure")
+
+        event_failure_order = await new_order()
+        async with sessions() as session:
+            sales_repository = SqlAlchemySalesRepository(session)
+            organizations = OrganizationService(
+                SqlAlchemyOrganizationRepository(session)
+            )
+            failing_publisher_inventory = FailingPublisherInventoryGateway(
+                InventoryService(
+                    SqlAlchemyInventoryRepository(session),
+                    organizations,
+                    reference_validator=SalesOrderReferenceValidator(
+                        sales_repository
+                    ),
+                )
+            )
+            published_failure_payment = await payment_service(
+                session, inventory=failing_publisher_inventory
+            ).complete(
+                context,
+                event_failure_order.id,
+                CompletePaymentInput(
+                    uuid4(), (PaymentLineInput(PaymentMethod.OTHER, 670000),)
+                ),
+            )
+        async with engine.connect() as connection:
+            assert await connection.scalar(
+                text("SELECT status FROM sales_orders WHERE id=:id"),
+                {"id": event_failure_order.id},
+            ) == "PAID"
+            assert await connection.scalar(
+                text("SELECT count(*) FROM payments WHERE id=:id"),
+                {"id": published_failure_payment.id},
+            ) == 1
+            assert await connection.scalar(
+                text(
+                    "SELECT count(*) FROM inventory_transactions "
+                    "WHERE type='SALE' AND reference_id=:id"
+                ),
+                {"id": event_failure_order.id},
+            ) == 1
 
         cancel_race_order = await new_order()
 
@@ -1826,8 +2076,31 @@ async def test_postgres_payments_atomicity_concurrency_and_no_posting(
                 await transaction.rollback()
 
         async with engine.connect() as connection:
-            assert await connection.scalar(
+            sale_count = await connection.scalar(
                 text("SELECT count(*) FROM inventory_transactions WHERE type='SALE'")
+            )
+            assert sale_count == await connection.scalar(
+                text("SELECT count(*) FROM payments")
+            )
+            assert sale_count == await connection.scalar(
+                text(
+                    "SELECT count(*) FROM sales_orders "
+                    "WHERE status='PAID' AND inventory_transaction_id IS NOT NULL"
+                )
+            )
+            assert await connection.scalar(
+                text(
+                    "SELECT count(*) FROM inventory_transaction_lines line "
+                    "JOIN inventory_transactions tx ON tx.id=line.transaction_id "
+                    "WHERE tx.type='SALE' AND line.quantity_delta >= 0"
+                )
+            ) == 0
+            assert await connection.scalar(
+                text(
+                    "SELECT count(*) FROM (SELECT reference_id FROM "
+                    "inventory_transactions WHERE type='SALE' "
+                    "GROUP BY reference_id HAVING count(*) <> 1) duplicates"
+                )
             ) == 0
             finance_tables = (
                 await connection.execute(
@@ -1839,6 +2112,428 @@ async def test_postgres_payments_atomicity_concurrency_and_no_posting(
                 )
             ).scalars().all()
             assert finance_tables == [None, None, None, None]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_postgres_sale_uses_modifier_recipe_snapshots_current_wac_and_edge_cases(
+    postgres_inventory_database,
+) -> None:
+    database_url = postgres_inventory_database
+    context, warehouse_id, coffee_id = await seed_inventory_context(database_url)
+    engine = create_async_engine(database_url)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    item_specs = {
+        "milk": (uuid4(), "Regular milk", "ml"),
+        "oat": (uuid4(), "Oat milk", "ml"),
+        "cup": (uuid4(), "Cup", "pcs"),
+        "lid": (uuid4(), "Lid", "pcs"),
+        "scarce": (uuid4(), "Scarce coffee", "g"),
+        "zero": (uuid4(), "Free sample", "pcs"),
+        "archived": (uuid4(), "Archived garnish", "pcs"),
+        "missing": (uuid4(), "New syrup", "ml"),
+    }
+
+    try:
+        async with engine.begin() as connection:
+            location_id = await connection.scalar(
+                text("SELECT location_id FROM warehouses WHERE id=:warehouse_id"),
+                {"warehouse_id": warehouse_id},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO inventory_items "
+                    "(id, organization_id, name, sku, base_unit, is_active, "
+                    "created_at, updated_at) VALUES "
+                    "(:id, :organization_id, :name, NULL, :unit, true, now(), now())"
+                ),
+                [
+                    {
+                        "id": item_id,
+                        "organization_id": context.organization_id,
+                        "name": name,
+                        "unit": unit,
+                    }
+                    for item_id, name, unit in item_specs.values()
+                ],
+            )
+
+        async with sessions() as session:
+            organizations = OrganizationService(
+                SqlAlchemyOrganizationRepository(session)
+            )
+            inventory = InventoryService(
+                SqlAlchemyInventoryRepository(session), organizations
+            )
+            await inventory.create_and_post(
+                context,
+                CreateAndPostCommand(
+                    context.organization_id,
+                    context.user_id,
+                    warehouse_id,
+                    InventoryTransactionType.OPENING_BALANCE,
+                    "Stage 12 cost basis",
+                    (
+                        QuantityInput(coffee_id, Decimal("1000"), UnitCode.G, Decimal("8")),
+                        QuantityInput(
+                            item_specs["milk"][0], Decimal("10000"), UnitCode.ML, Decimal("0.7")
+                        ),
+                        QuantityInput(
+                            item_specs["oat"][0], Decimal("10000"), UnitCode.ML, Decimal("1.2")
+                        ),
+                        QuantityInput(
+                            item_specs["cup"][0], Decimal("100"), UnitCode.PCS, Decimal("35")
+                        ),
+                        QuantityInput(
+                            item_specs["lid"][0], Decimal("100"), UnitCode.PCS, Decimal("15")
+                        ),
+                        QuantityInput(
+                            item_specs["scarce"][0], Decimal("10"), UnitCode.G, Decimal("8")
+                        ),
+                        QuantityInput(
+                            item_specs["zero"][0], Decimal("10"), UnitCode.PCS, Decimal("0")
+                        ),
+                        QuantityInput(
+                            item_specs["archived"][0], Decimal("100"), UnitCode.PCS, Decimal("2")
+                        ),
+                    ),
+                    "sale-posting:opening",
+                ),
+            )
+            menu_service = MenuService(
+                SqlAlchemyMenuRepository(session),
+                MenuInventoryGateway(SqlAlchemyInventoryRepository(session)),
+                organizations,
+            )
+            category = await menu_service.create_category(context, "Sale snapshots", 0)
+            product = await menu_service.create_product(
+                context,
+                category.id,
+                "Snapshot product",
+                None,
+                None,
+                VariantInput("Default", None, 100000),
+            )
+            variant_id = product.variants[0].id
+
+        class MutableMenu:
+            def __init__(self) -> None:
+                self.components = ()
+                self.calls = 0
+
+            async def resolve_order_item(self, *args, **kwargs):
+                self.calls += 1
+                return SellableItemSnapshot(
+                    product.id,
+                    "Snapshot product",
+                    variant_id,
+                    "Default",
+                    100000,
+                    0,
+                    100000,
+                    (),
+                    self.components,
+                )
+
+        menu = MutableMenu()
+
+        def component(item_id: UUID, name: str, unit: UnitCode, quantity: str):
+            return SellableComponentSnapshot(item_id, name, unit, Decimal(quantity))
+
+        async with sessions() as session:
+            repository = SqlAlchemySalesRepository(session)
+            organizations = OrganizationService(
+                SqlAlchemyOrganizationRepository(session)
+            )
+            register = await RegisterService(repository, organizations).create(
+                context, location_id, "Sale snapshots"
+            )
+            shift = await ShiftService(
+                repository,
+                organizations,
+                InventorySalesGateway(SqlAlchemyInventoryRepository(session)),
+            ).open(context, register.id, warehouse_id)
+
+        async def new_order(
+            snapshots: tuple[tuple[SellableComponentSnapshot, ...], ...],
+            quantities: tuple[int, ...] | None = None,
+        ):
+            quantities = quantities or tuple(1 for _ in snapshots)
+            async with sessions() as session:
+                service = OrderService(
+                    SqlAlchemySalesRepository(session),
+                    OrganizationService(SqlAlchemyOrganizationRepository(session)),
+                    menu,
+                )
+                order = await service.create(
+                    context,
+                    CreateOrderInput(
+                        uuid4(), shift.id, OrderType.TAKEAWAY, None, None, None
+                    ),
+                )
+                for snapshot, quantity in zip(snapshots, quantities, strict=True):
+                    menu.components = snapshot
+                    order = await service.add_item(
+                        context,
+                        order.id,
+                        AddOrderItemInput(
+                            uuid4(), variant_id, (), quantity, None
+                        ),
+                    )
+                return order
+
+        def checkout(session):
+            sales_repository = SqlAlchemySalesRepository(session)
+            organizations = OrganizationService(
+                SqlAlchemyOrganizationRepository(session)
+            )
+            inventory = InventoryService(
+                SqlAlchemyInventoryRepository(session),
+                organizations,
+                reference_validator=SalesOrderReferenceValidator(
+                    sales_repository
+                ),
+            )
+            return PaymentService(
+                SqlAlchemyPaymentRepository(session),
+                SalesSettlementGateway(sales_repository, organizations),
+                InventorySaleGateway(inventory),
+            )
+
+        async def pay(order):
+            async with sessions() as session:
+                return await checkout(session).complete(
+                    context,
+                    order.id,
+                    CompletePaymentInput(
+                        uuid4(),
+                        (
+                            PaymentLineInput(
+                                PaymentMethod.CARD, order.total_minor
+                            ),
+                        ),
+                    ),
+                )
+
+        modified_cappuccino = (
+            component(coffee_id, "Coffee", UnitCode.G, "36"),
+            component(item_specs["oat"][0], "Oat milk", UnitCode.ML, "230"),
+            component(item_specs["cup"][0], "Cup", UnitCode.PCS, "1"),
+            component(item_specs["lid"][0], "Lid", UnitCode.PCS, "1"),
+        )
+        espresso = (component(coffee_id, "Coffee", UnitCode.G, "18"),)
+        snapshot_order = await new_order(
+            (modified_cappuccino, espresso), (2, 1)
+        )
+        calls_at_order_creation = menu.calls
+        menu.components = (
+            component(coffee_id, "Changed coffee recipe", UnitCode.G, "20"),
+            component(item_specs["milk"][0], "Regular milk", UnitCode.ML, "230"),
+        )
+        async with sessions() as session:
+            await InventoryService(
+                SqlAlchemyInventoryRepository(session),
+                OrganizationService(SqlAlchemyOrganizationRepository(session)),
+            ).create_and_post(
+                context,
+                CreateAndPostCommand(
+                    context.organization_id,
+                    context.user_id,
+                    warehouse_id,
+                    InventoryTransactionType.PURCHASE,
+                    "WAC changed after order",
+                    (
+                        QuantityInput(
+                            coffee_id,
+                            Decimal("1000"),
+                            UnitCode.G,
+                            total_cost_amount=Decimal("10000"),
+                        ),
+                    ),
+                    "sale-posting:wac-change",
+                ),
+            )
+        await pay(snapshot_order)
+        assert menu.calls == calls_at_order_creation
+
+        async with engine.connect() as connection:
+            order_state = (
+                await connection.execute(
+                    text(
+                        "SELECT inventory_transaction_id, cogs_amount, cogs_status "
+                        "FROM sales_orders WHERE id=:order_id"
+                    ),
+                    {"order_id": snapshot_order.id},
+                )
+            ).one()
+            assert order_state.cogs_amount == Decimal("1462.000000")
+            assert order_state.cogs_status == "COMPLETE"
+            lines = (
+                await connection.execute(
+                    text(
+                        "SELECT inventory_item_id, quantity_delta, unit_cost_amount "
+                        "FROM inventory_transaction_lines "
+                        "WHERE transaction_id=:transaction_id "
+                        "ORDER BY inventory_item_id"
+                    ),
+                    {"transaction_id": order_state.inventory_transaction_id},
+                )
+            ).all()
+            assert {item_id: (quantity, cost) for item_id, quantity, cost in lines} == {
+                coffee_id: (Decimal("-90.000000"), Decimal("9.000000")),
+                item_specs["oat"][0]: (
+                    Decimal("-460.000000"),
+                    Decimal("1.200000"),
+                ),
+                item_specs["cup"][0]: (
+                    Decimal("-2.000000"),
+                    Decimal("35.000000"),
+                ),
+                item_specs["lid"][0]: (
+                    Decimal("-2.000000"),
+                    Decimal("15.000000"),
+                ),
+            }
+            assert await connection.scalar(
+                text(
+                    "SELECT quantity FROM stock_balances WHERE warehouse_id=:warehouse_id "
+                    "AND inventory_item_id=:item_id"
+                ),
+                {"warehouse_id": warehouse_id, "item_id": coffee_id},
+            ) == Decimal("1910.000000")
+            assert await connection.scalar(
+                text(
+                    "SELECT quantity FROM stock_balances WHERE warehouse_id=:warehouse_id "
+                    "AND inventory_item_id=:item_id"
+                ),
+                {"warehouse_id": warehouse_id, "item_id": item_specs["milk"][0]},
+            ) == Decimal("10000.000000")
+
+        negative_order = await new_order(
+            ((component(item_specs["scarce"][0], "Scarce", UnitCode.G, "18"),),)
+        )
+        missing_order = await new_order(
+            ((component(item_specs["missing"][0], "Syrup", UnitCode.ML, "20"),),)
+        )
+        zero_order = await new_order(
+            ((component(item_specs["zero"][0], "Free", UnitCode.PCS, "1"),),)
+        )
+        inactive_order = await new_order(
+            ((component(item_specs["archived"][0], "Archived", UnitCode.PCS, "1"),),)
+        )
+        empty_order = await new_order(((),))
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("UPDATE inventory_items SET is_active=false WHERE id=:item_id"),
+                {"item_id": item_specs["archived"][0]},
+            )
+
+        for order in (
+            negative_order,
+            missing_order,
+            zero_order,
+            inactive_order,
+            empty_order,
+        ):
+            await pay(order)
+
+        async with engine.connect() as connection:
+            states = {
+                row.id: row
+                for row in (
+                    await connection.execute(
+                        text(
+                            "SELECT id, inventory_transaction_id, cogs_amount, cogs_status "
+                            "FROM sales_orders WHERE id = ANY(:order_ids)"
+                        ),
+                        {
+                            "order_ids": [
+                                negative_order.id,
+                                missing_order.id,
+                                zero_order.id,
+                                inactive_order.id,
+                                empty_order.id,
+                            ]
+                        },
+                    )
+                ).all()
+            }
+            assert (
+                states[negative_order.id].cogs_amount,
+                states[negative_order.id].cogs_status,
+            ) == (Decimal("144.000000"), "COMPLETE")
+            assert (
+                states[missing_order.id].cogs_amount,
+                states[missing_order.id].cogs_status,
+            ) == (Decimal("0.000000"), "INCOMPLETE")
+            assert (
+                states[zero_order.id].cogs_amount,
+                states[zero_order.id].cogs_status,
+            ) == (Decimal("0.000000"), "COMPLETE")
+            assert (
+                states[inactive_order.id].cogs_amount,
+                states[inactive_order.id].cogs_status,
+            ) == (Decimal("2.000000"), "COMPLETE")
+            assert states[empty_order.id].inventory_transaction_id is None
+            assert (
+                states[empty_order.id].cogs_amount,
+                states[empty_order.id].cogs_status,
+            ) == (Decimal("0.000000"), "COMPLETE")
+            assert await connection.scalar(
+                text(
+                    "SELECT count(*) FROM inventory_transactions "
+                    "WHERE type='SALE' AND reference_id=:order_id"
+                ),
+                {"order_id": empty_order.id},
+            ) == 0
+            for item_id, expected in (
+                (item_specs["scarce"][0], Decimal("-8.000000")),
+                (item_specs["missing"][0], Decimal("-20.000000")),
+                (item_specs["zero"][0], Decimal("9.000000")),
+                (item_specs["archived"][0], Decimal("99.000000")),
+            ):
+                assert await connection.scalar(
+                    text(
+                        "SELECT quantity FROM stock_balances "
+                        "WHERE warehouse_id=:warehouse_id AND inventory_item_id=:item_id"
+                    ),
+                    {"warehouse_id": warehouse_id, "item_id": item_id},
+                ) == expected
+
+        concurrent_orders = await asyncio.gather(
+            new_order(((component(coffee_id, "Coffee", UnitCode.G, "18"),),)),
+            new_order(((component(coffee_id, "Coffee", UnitCode.G, "18"),),)),
+        )
+        await asyncio.gather(*(pay(order) for order in concurrent_orders))
+        async with engine.connect() as connection:
+            assert await connection.scalar(
+                text(
+                    "SELECT quantity FROM stock_balances "
+                    "WHERE warehouse_id=:warehouse_id AND inventory_item_id=:item_id"
+                ),
+                {"warehouse_id": warehouse_id, "item_id": coffee_id},
+            ) == Decimal("1874.000000")
+            assert await connection.scalar(
+                text(
+                    "SELECT count(*) FROM inventory_transactions WHERE type='SALE' "
+                    "AND reference_id = ANY(:order_ids)"
+                ),
+                {"order_ids": [order.id for order in concurrent_orders]},
+            ) == 2
+
+        async with sessions() as session:
+            validator = SalesOrderReferenceValidator(
+                SqlAlchemySalesRepository(session)
+            )
+            with pytest.raises(InvalidInventoryOperation):
+                await validator.validate(
+                    uuid4(), "ORDER", snapshot_order.id
+                )
+            with pytest.raises(InvalidInventoryOperation):
+                await validator.validate(
+                    context.organization_id, "GOODS_RECEIPT", snapshot_order.id
+                )
     finally:
         await engine.dispose()
 
@@ -2082,7 +2777,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
             "alembic_version",
             *APPLICATION_TABLES,
         } <= upgraded["tables"]
-        assert upgraded["revision"] == "0011_payments"
+        assert upgraded["revision"] == "0012_sale_posting"
         assert await membership_state(test_url, legacy_membership_id) == ("ACTIVE", "ALL")
         assert set(upgraded["columns"]["organizations"]) == {
             "id",
@@ -2471,10 +3166,35 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
         assert upgraded["columns"]["sales_orders"]["paid_by_user_id"]["nullable"]
         assert upgraded["columns"]["sales_orders"]["paid_at"]["nullable"]
         assert upgraded["columns"]["sales_orders"]["paid_at"]["type"].timezone
+        assert {
+            "inventory_transaction_id",
+            "cogs_amount",
+            "cogs_status",
+        } <= set(upgraded["columns"]["sales_orders"])
+        assert upgraded["columns"]["sales_orders"]["inventory_transaction_id"][
+            "nullable"
+        ]
+        assert upgraded["columns"]["sales_orders"]["cogs_amount"]["nullable"]
+        assert upgraded["columns"]["sales_orders"]["cogs_status"]["nullable"]
+        assert (
+            str(upgraded["columns"]["sales_orders"]["cogs_amount"]["type"])
+            == "NUMERIC(20, 6)"
+        )
         assert (
             ("paid_by_user_id",),
             "users",
         ) in upgraded["foreign_keys"]["sales_orders"]
+        assert (
+            ("inventory_transaction_id",),
+            "inventory_transactions",
+        ) in upgraded["foreign_keys"]["sales_orders"]
+        assert ("inventory_transaction_id",) in upgraded["unique_constraints"][
+            "sales_orders"
+        ]
+        assert {
+            "ck_sales_order_cogs_nonnegative",
+            "ck_sales_order_cogs_status",
+        } <= upgraded["check_constraints"]["sales_orders"]
         assert set(upgraded["columns"]["payments"]) == {
             "id",
             "organization_id",
@@ -2567,6 +3287,24 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
                 )
         finally:
             await legacy_engine.dispose()
+
+        await asyncio.to_thread(command.downgrade, config, "0011_payments")
+        sale_posting_downgraded = await database_snapshot(test_url)
+        assert PAYMENT_TABLES <= sale_posting_downgraded["tables"]
+        assert {
+            "inventory_transaction_id",
+            "cogs_amount",
+            "cogs_status",
+        }.isdisjoint(sale_posting_downgraded["columns"]["sales_orders"])
+        assert sale_posting_downgraded["revision"] == "0011_payments"
+        await asyncio.to_thread(command.upgrade, config, "0012_sale_posting")
+        sale_posting_reupgraded = await database_snapshot(test_url)
+        assert sale_posting_reupgraded["revision"] == "0012_sale_posting"
+        assert {
+            "inventory_transaction_id",
+            "cogs_amount",
+            "cogs_status",
+        } <= set(sale_posting_reupgraded["columns"]["sales_orders"])
 
         await asyncio.to_thread(command.downgrade, config, "0010_sales_pos")
         payments_downgraded = await database_snapshot(test_url)
@@ -2736,7 +3474,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
         await asyncio.to_thread(command.upgrade, config, "head")
         reupgraded = await database_snapshot(test_url)
         assert APPLICATION_TABLES <= reupgraded["tables"]
-        assert reupgraded["revision"] == "0011_payments"
+        assert reupgraded["revision"] == "0012_sale_posting"
         assert await membership_state(test_url, legacy_membership_id) == ("ACTIVE", "ALL")
     finally:
         await admin_engine.dispose()

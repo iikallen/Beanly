@@ -197,7 +197,7 @@ async def test_full_single_method_payment(app_client, method: str) -> None:
 
 
 @pytest.mark.anyio
-async def test_payment_flow_validation_idempotency_summary_and_no_posting(
+async def test_payment_flow_validation_idempotency_summary_and_sale_posting(
     app_client,
 ) -> None:
     client, sessions = app_client
@@ -350,6 +350,9 @@ async def test_payment_flow_validation_idempotency_summary_and_no_posting(
     assert paid_order["status"] == "PAID"
     assert paid_order["paid_at"] is not None
     assert paid_order["paid_by_user_id"] is not None
+    assert {"inventory_transaction_id", "cogs_amount", "cogs_status"}.isdisjoint(
+        paid_order
+    )
 
     for response in (
         await client.get(f"/api/v1/payments/{payment['id']}", headers=headers),
@@ -384,10 +387,12 @@ async def test_payment_flow_validation_idempotency_summary_and_no_posting(
 
     async with sessions() as session:
         assert await session.scalar(select(func.count()).select_from(PaymentModel)) == 1
-        assert (
-            await session.scalar(select(func.count()).select_from(InventoryTransactionModel))
-            == 0
-        )
+        transactions = (
+            await session.execute(select(InventoryTransactionModel))
+        ).scalars().all()
+        assert len(transactions) == 1
+        assert transactions[0].type == "SALE"
+        assert transactions[0].status == "POSTED"
 
 
 @pytest.mark.anyio

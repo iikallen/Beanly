@@ -118,7 +118,9 @@ class InventoryTransactionModel(Base):
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id"))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, index=True
+    )
     posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reversal_of_id: Mapped[UUID | None] = mapped_column(
         Uuid, ForeignKey("inventory_transactions.id"), nullable=True

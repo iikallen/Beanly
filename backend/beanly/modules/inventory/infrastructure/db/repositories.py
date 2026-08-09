@@ -96,14 +96,20 @@ class SqlAlchemyInventoryRepository:
         )
         return [to_item(model) for model in models]
 
-    async def get_item(self, organization_id: UUID, item_id: UUID) -> InventoryItem | None:
-        model = await self.session.scalar(
-            select(InventoryItemModel).where(
-                InventoryItemModel.organization_id == organization_id,
-                InventoryItemModel.id == item_id,
-                InventoryItemModel.is_active.is_(True),
-            )
+    async def get_item(
+        self,
+        organization_id: UUID,
+        item_id: UUID,
+        *,
+        include_inactive: bool = False,
+    ) -> InventoryItem | None:
+        statement = select(InventoryItemModel).where(
+            InventoryItemModel.organization_id == organization_id,
+            InventoryItemModel.id == item_id,
         )
+        if not include_inactive:
+            statement = statement.where(InventoryItemModel.is_active.is_(True))
+        model = await self.session.scalar(statement)
         return to_item(model) if model else None
 
     async def get_items_by_ids(

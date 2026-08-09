@@ -7,7 +7,12 @@ from beanly.modules.sales.domain.entities import (
     RegisterShift,
     SalesOrder,
 )
-from beanly.modules.sales.domain.enums import OrderStatus, OrderType, RegisterShiftStatus
+from beanly.modules.sales.domain.enums import (
+    OrderStatus,
+    OrderType,
+    RegisterShiftStatus,
+    SaleCostStatus,
+)
 from beanly.modules.sales.infrastructure.db.models import (
     PosRegisterModel,
     RegisterShiftModel,
@@ -137,4 +142,7 @@ def to_order(model: SalesOrderModel) -> SalesOrder:
                 model.__dict__.get("items", ()), key=lambda item: (item.created_at, item.id)
             )
         ),
+        model.inventory_transaction_id,
+        model.cogs_amount,
+        SaleCostStatus(model.cogs_status) if model.cogs_status else None,
     )

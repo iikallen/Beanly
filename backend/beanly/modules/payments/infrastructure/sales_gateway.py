@@ -1,14 +1,23 @@
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
+from beanly.modules.inventory.domain.value_objects import UnitCode
 from beanly.modules.organizations.application.queries.list_locations import ListLocationsQuery
 from beanly.modules.organizations.application.services.organization_service import (
     OrganizationService,
 )
 from beanly.modules.organizations.domain.entities import TenantContext
-from beanly.modules.payments.application.ports import PayableOrderSnapshot
-from beanly.modules.payments.domain.exceptions import OrderAlreadyPaid, PaymentNotFound
-from beanly.modules.sales.domain.enums import RegisterShiftStatus
+from beanly.modules.payments.application.ports import (
+    PayableOrderSnapshot,
+    SaleComponentSnapshot,
+)
+from beanly.modules.payments.domain.exceptions import (
+    InvalidPayment,
+    OrderAlreadyPaid,
+    PaymentNotFound,
+)
+from beanly.modules.sales.domain.enums import RegisterShiftStatus, SaleCostStatus
 from beanly.modules.sales.domain.exceptions import OrderImmutable
 from beanly.modules.sales.domain.repositories import SalesRepository
 
@@ -32,6 +41,23 @@ class SalesSettlementGateway:
             raise PaymentNotFound("Order not found")
         await self.organizations.ensure_location_access(context, order.location_id)
         shift = await self.repository.get_shift(context.organization_id, order.shift_id)
+        components: dict[UUID, tuple[UnitCode, Decimal]] = {}
+        for item in order.items:
+            for component in item.components:
+                quantity = component.quantity_per_unit * item.quantity
+                current = components.get(component.inventory_item_id)
+                if current is None:
+                    components[component.inventory_item_id] = (
+                        component.base_unit,
+                        quantity,
+                    )
+                elif current[0] != component.base_unit:
+                    raise InvalidPayment("Order component units conflict")
+                else:
+                    components[component.inventory_item_id] = (
+                        component.base_unit,
+                        current[1] + quantity,
+                    )
         return PayableOrderSnapshot(
             order.id,
             order.organization_id,
@@ -44,13 +70,33 @@ class SalesSettlementGateway:
             order.created_by_user_id,
             bool(order.items),
             shift is not None and shift.status == RegisterShiftStatus.OPEN,
+            order.number,
+            tuple(
+                SaleComponentSnapshot(item_id, base_unit, quantity)
+                for item_id, (base_unit, quantity) in sorted(
+                    components.items(), key=lambda pair: str(pair[0])
+                )
+            ),
         )
 
     async def mark_order_paid(
-        self, order_id: UUID, paid_by_user_id: UUID, paid_at: datetime
+        self,
+        order_id: UUID,
+        paid_by_user_id: UUID,
+        paid_at: datetime,
+        inventory_transaction_id: UUID | None,
+        cogs_amount: Decimal,
+        cogs_status: SaleCostStatus,
     ) -> None:
         try:
-            await self.repository.mark_order_paid(order_id, paid_by_user_id, paid_at)
+            await self.repository.mark_order_paid(
+                order_id,
+                paid_by_user_id,
+                paid_at,
+                inventory_transaction_id,
+                cogs_amount,
+                cogs_status,
+            )
         except OrderImmutable as exc:
             raise OrderAlreadyPaid("Order is already paid") from exc
 

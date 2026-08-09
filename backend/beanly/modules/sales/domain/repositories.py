@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
 
@@ -8,7 +9,7 @@ from beanly.modules.sales.domain.entities import (
     RegisterShift,
     SalesOrder,
 )
-from beanly.modules.sales.domain.enums import OrderStatus
+from beanly.modules.sales.domain.enums import OrderStatus, SaleCostStatus
 
 
 class SalesRepository(Protocol):
@@ -47,7 +48,13 @@ class SalesRepository(Protocol):
     ) -> list[SalesOrder]: ...
     async def update_order(self, value: SalesOrder) -> SalesOrder: ...
     async def mark_order_paid(
-        self, order_id: UUID, paid_by_user_id: UUID, paid_at: datetime
+        self,
+        order_id: UUID,
+        paid_by_user_id: UUID,
+        paid_at: datetime,
+        inventory_transaction_id: UUID | None,
+        cogs_amount: Decimal,
+        cogs_status: SaleCostStatus,
     ) -> None: ...
     async def get_item_by_client_id(
         self, order_id: UUID, client_item_id: UUID

@@ -272,6 +272,7 @@ class InventoryService:
             context.organization_id,
             command.lines,
             opening=command.type == InventoryTransactionType.OPENING_BALANCE,
+            include_inactive=command.type == InventoryTransactionType.SALE,
         )
         if not lines:
             raise InvalidInventoryOperation("At least one line is required")
@@ -348,6 +349,7 @@ class InventoryService:
             context.organization_id,
             command.lines,
             opening=command.type == InventoryTransactionType.OPENING_BALANCE,
+            include_inactive=command.type == InventoryTransactionType.SALE,
         )
         reference_type, reference_id = _reference(command.reference_type, command.reference_id)
         self._assert_same_request(
@@ -580,7 +582,11 @@ class InventoryService:
             raise InvalidInventoryOperation("Transaction has no lines")
         deltas: dict[UUID, Decimal] = defaultdict(Decimal)
         for line in lines:
-            await self._item(context.organization_id, line.inventory_item_id)
+            await self._item(
+                context.organization_id,
+                line.inventory_item_id,
+                include_inactive=transaction.type == InventoryTransactionType.SALE,
+            )
             deltas[line.inventory_item_id] += line.quantity_delta
         if any(delta == 0 for delta in deltas.values()):
             raise InvalidInventoryOperation("Net item movement cannot be zero")
@@ -664,10 +670,15 @@ class InventoryService:
         values: tuple[QuantityInput, ...],
         *,
         opening: bool = False,
+        include_inactive: bool = False,
     ) -> tuple[PreparedLine, ...]:
         totals: dict[UUID, PreparedLine] = {}
         for value in values:
-            item = await self._item(organization_id, value.inventory_item_id)
+            item = await self._item(
+                organization_id,
+                value.inventory_item_id,
+                include_inactive=include_inactive,
+            )
             try:
                 quantity = to_base_quantity(value.quantity, value.unit_code, item.base_unit)
             except ValueError as exc:
@@ -803,11 +814,30 @@ class InventoryService:
         await self._ensure_location(context, warehouse.location_id)
         return warehouse
 
-    async def _item(self, organization_id: UUID, item_id: UUID) -> InventoryItem:
-        item = await self.repository.get_item(organization_id, item_id)
+    async def _item(
+        self,
+        organization_id: UUID,
+        item_id: UUID,
+        *,
+        include_inactive: bool = False,
+    ) -> InventoryItem:
+        item = await self.repository.get_item(
+            organization_id, item_id, include_inactive=include_inactive
+        )
         if item is None:
             raise InventoryNotFound
         return item
+
+    async def current_costs(
+        self,
+        context: TenantContext,
+        warehouse_id: UUID,
+        item_ids: tuple[UUID, ...],
+    ) -> dict[UUID, Decimal]:
+        await self._warehouse(context, warehouse_id)
+        return await self.repository.get_current_costs(
+            context.organization_id, warehouse_id, item_ids
+        )
 
     async def _accessible_location_ids(self, context: TenantContext) -> tuple[UUID, ...]:
         locations = await self.organizations.list_locations(

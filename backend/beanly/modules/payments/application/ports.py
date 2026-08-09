@@ -1,10 +1,35 @@
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
 
+from beanly.modules.inventory.domain.value_objects import UnitCode
 from beanly.modules.organizations.domain.entities import TenantContext
-from beanly.modules.sales.domain.enums import OrderStatus
+from beanly.modules.sales.domain.enums import OrderStatus, SaleCostStatus
+
+
+@dataclass(frozen=True, slots=True)
+class SaleComponentSnapshot:
+    inventory_item_id: UUID
+    base_unit: UnitCode
+    quantity: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class SaleStockLine:
+    inventory_item_id: UUID
+    base_unit: UnitCode
+    quantity: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class StagedSaleResult:
+    inventory_transaction_id: UUID | None
+    cogs_amount: Decimal
+    cogs_status: SaleCostStatus
+    missing_cost_item_ids: tuple[UUID, ...]
+    events: tuple[object, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +45,8 @@ class PayableOrderSnapshot:
     created_by_user_id: UUID
     has_items: bool
     shift_is_open: bool
+    order_number: int
+    sale_components: tuple[SaleComponentSnapshot, ...]
 
 
 class SalesSettlementPort(Protocol):
@@ -28,7 +55,13 @@ class SalesSettlementPort(Protocol):
     ) -> PayableOrderSnapshot: ...
 
     async def mark_order_paid(
-        self, order_id: UUID, paid_by_user_id: UUID, paid_at: datetime
+        self,
+        order_id: UUID,
+        paid_by_user_id: UUID,
+        paid_at: datetime,
+        inventory_transaction_id: UUID | None,
+        cogs_amount: Decimal,
+        cogs_status: SaleCostStatus,
     ) -> None: ...
 
     async def ensure_location_access(
@@ -42,6 +75,20 @@ class SalesSettlementPort(Protocol):
     async def ensure_shift_access(
         self, context: TenantContext, shift_id: UUID
     ) -> None: ...
+
+
+class InventorySalePort(Protocol):
+    async def stage_sale(
+        self,
+        context: TenantContext,
+        *,
+        order_id: UUID,
+        order_number: int,
+        warehouse_id: UUID,
+        lines: tuple[SaleStockLine, ...],
+    ) -> StagedSaleResult: ...
+
+    async def publish(self, events: tuple[object, ...]) -> None: ...
 
 
 class PaymentEventPublisher(Protocol):

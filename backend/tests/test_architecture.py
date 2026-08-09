@@ -125,7 +125,7 @@ def test_sales_uses_application_ports_and_has_no_stage_eleven_side_effects() -> 
         assert "RecipeModel" not in source, path
 
 
-def test_payments_uses_sales_boundary_and_has_no_stage_twelve_side_effects() -> None:
+def test_payments_settlement_uses_ports_and_never_reads_menu_or_finance() -> None:
     payments = Path("beanly/modules/payments")
     for layer in (payments / "domain", payments / "application"):
         for path in layer.rglob("*.py"):
@@ -133,12 +133,15 @@ def test_payments_uses_sales_boundary_and_has_no_stage_twelve_side_effects() -> 
             assert "fastapi" not in source.casefold(), path
             assert "sqlalchemy" not in source.casefold(), path
             assert "sales.infrastructure" not in source, path
+            assert "inventory.infrastructure" not in source, path
 
     for path in payments.rglob("*.py"):
         source = path.read_text(encoding="utf-8")
         assert "SalesOrderModel" not in source, path
         assert "OrderService" not in source, path
-        assert "InventoryTransactionType.SALE" not in source, path
+        assert "modules.menu" not in source, path
+        assert "modules.finance" not in source, path
+        assert "MenuService" not in source, path
+        assert "RecipeModel" not in source, path
         assert "FinanceModel" not in source, path
         assert "RevenueModel" not in source, path
-        assert "COGS" not in source, path

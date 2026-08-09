@@ -3,6 +3,10 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, status
 
 from beanly.modules.identity.api.dependencies import SessionDep
+from beanly.modules.inventory.application.services import InventoryService
+from beanly.modules.inventory.infrastructure.db.repositories import (
+    SqlAlchemyInventoryRepository,
+)
 from beanly.modules.organizations.api.dependencies import TenantContextDep
 from beanly.modules.organizations.application.services.organization_service import (
     OrganizationService,
@@ -16,15 +20,26 @@ from beanly.modules.payments.application.payment_service import PaymentService
 from beanly.modules.payments.infrastructure.db.repositories import (
     SqlAlchemyPaymentRepository,
 )
+from beanly.modules.payments.infrastructure.inventory_gateway import (
+    InventorySaleGateway,
+    SalesOrderReferenceValidator,
+)
 from beanly.modules.payments.infrastructure.sales_gateway import SalesSettlementGateway
 from beanly.modules.sales.infrastructure.db.repositories import SqlAlchemySalesRepository
 
 
 def payment_service(session: SessionDep) -> PaymentService:
     organizations = OrganizationService(SqlAlchemyOrganizationRepository(session))
+    sales_repository = SqlAlchemySalesRepository(session)
+    inventory = InventoryService(
+        SqlAlchemyInventoryRepository(session),
+        organizations,
+        reference_validator=SalesOrderReferenceValidator(sales_repository),
+    )
     return PaymentService(
         SqlAlchemyPaymentRepository(session),
-        SalesSettlementGateway(SqlAlchemySalesRepository(session), organizations),
+        SalesSettlementGateway(sales_repository, organizations),
+        InventorySaleGateway(inventory),
     )
 
 
@@ -50,4 +65,3 @@ PaymentAccessDep = Annotated[
     TenantContext,
     Depends(_permission(Permission.PAYMENTS_READ, Permission.PAYMENTS_CREATE)),
 ]
-

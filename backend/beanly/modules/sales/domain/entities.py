@@ -4,7 +4,12 @@ from decimal import Decimal
 from uuid import UUID
 
 from beanly.modules.inventory.domain.value_objects import UnitCode
-from beanly.modules.sales.domain.enums import OrderStatus, OrderType, RegisterShiftStatus
+from beanly.modules.sales.domain.enums import (
+    OrderStatus,
+    OrderType,
+    RegisterShiftStatus,
+    SaleCostStatus,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,3 +110,6 @@ class SalesOrder:
     created_at: datetime
     updated_at: datetime
     items: tuple[OrderItem, ...] = ()
+    inventory_transaction_id: UUID | None = None
+    cogs_amount: Decimal | None = None
+    cogs_status: SaleCostStatus | None = None

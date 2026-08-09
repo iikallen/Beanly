@@ -5,9 +5,11 @@ from uuid import UUID, uuid4
 
 from beanly.modules.organizations.domain.entities import TenantContext
 from beanly.modules.payments.application.ports import (
+    InventorySalePort,
     NullPaymentEventPublisher,
     PaymentEventPublisher,
     SalesSettlementPort,
+    SaleStockLine,
 )
 from beanly.modules.payments.domain.entities import Payment, PaymentLine, ShiftPaymentSummary
 from beanly.modules.payments.domain.enums import PaymentMethod
@@ -48,10 +50,12 @@ class PaymentService:
         self,
         repository: PaymentRepository,
         sales: SalesSettlementPort,
+        inventory: InventorySalePort,
         publisher: PaymentEventPublisher | None = None,
     ) -> None:
         self.repository = repository
         self.sales = sales
+        self.inventory = inventory
         self.publisher = publisher or NullPaymentEventPublisher()
 
     async def complete(
@@ -81,6 +85,20 @@ class PaymentService:
                 raise InvalidPayment("Payment total is outside BIGINT")
             if amount_minor != order.total_minor:
                 raise PaymentAmountMismatch("Payment lines must equal the order total")
+            staged_sale = await self.inventory.stage_sale(
+                context,
+                order_id=order.id,
+                order_number=order.order_number,
+                warehouse_id=order.warehouse_id,
+                lines=tuple(
+                    SaleStockLine(
+                        component.inventory_item_id,
+                        component.base_unit,
+                        component.quantity,
+                    )
+                    for component in order.sale_components
+                ),
+            )
             now = datetime.now(UTC)
             payment_id = uuid4()
             payment = Payment(
@@ -112,7 +130,14 @@ class PaymentService:
                 ),
             )
             saved = await self.repository.add(payment)
-            await self.sales.mark_order_paid(order.id, context.user_id, now)
+            await self.sales.mark_order_paid(
+                order.id,
+                context.user_id,
+                now,
+                staged_sale.inventory_transaction_id,
+                staged_sale.cogs_amount,
+                staged_sale.cogs_status,
+            )
             await self.repository.commit()
         except PaymentConflict as exc:
             await self.repository.rollback()
@@ -126,6 +151,7 @@ class PaymentService:
         except Exception:
             await self.repository.rollback()
             raise
+        await self._publish_inventory(staged_sale.events)
         await self._publish(
             PaymentCompleted(
                 saved.id,
@@ -219,6 +245,12 @@ class PaymentService:
             await self.publisher.publish(event)
         except Exception:
             logger.exception("Payment event publish failed")
+
+    async def _publish_inventory(self, events: tuple[object, ...]) -> None:
+        try:
+            await self.inventory.publish(events)
+        except Exception:
+            logger.exception("Inventory event publish failed after payment commit")
 
 
 @dataclass(frozen=True, slots=True)

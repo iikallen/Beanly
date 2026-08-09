@@ -92,6 +92,15 @@ class SalesOrderModel(Base):
         CheckConstraint("guest_count IS NULL OR guest_count > 0", name="ck_order_guest_count"),
         CheckConstraint("subtotal_minor >= 0", name="ck_order_subtotal_nonnegative"),
         CheckConstraint("total_minor >= 0", name="ck_order_total_nonnegative"),
+        CheckConstraint(
+            "cogs_amount IS NULL OR cogs_amount >= 0",
+            name="ck_sales_order_cogs_nonnegative",
+        ),
+        CheckConstraint(
+            "cogs_status IS NULL OR cogs_status IN ('COMPLETE', 'INCOMPLETE')",
+            name="ck_sales_order_cogs_status",
+        ),
+        UniqueConstraint("inventory_transaction_id"),
         Index("ix_sales_orders_organization_created", "organization_id", "created_at"),
     )
 
@@ -124,7 +133,14 @@ class SalesOrderModel(Base):
         Uuid, ForeignKey("users.id"), nullable=True
     )
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    inventory_transaction_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("inventory_transactions.id"), nullable=True
+    )
+    cogs_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    cogs_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, index=True
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )

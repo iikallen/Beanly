@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import func, select, update
@@ -12,7 +13,11 @@ from beanly.modules.sales.domain.entities import (
     RegisterShift,
     SalesOrder,
 )
-from beanly.modules.sales.domain.enums import OrderStatus, RegisterShiftStatus
+from beanly.modules.sales.domain.enums import (
+    OrderStatus,
+    RegisterShiftStatus,
+    SaleCostStatus,
+)
 from beanly.modules.sales.domain.exceptions import (
     InvalidSalesOperation,
     OrderImmutable,
@@ -273,7 +278,13 @@ class SqlAlchemySalesRepository:
         return saved
 
     async def mark_order_paid(
-        self, order_id: UUID, paid_by_user_id: UUID, paid_at: datetime
+        self,
+        order_id: UUID,
+        paid_by_user_id: UUID,
+        paid_at: datetime,
+        inventory_transaction_id: UUID | None,
+        cogs_amount: Decimal,
+        cogs_status: SaleCostStatus,
     ) -> None:
         result = await self.session.execute(
             update(SalesOrderModel)
@@ -285,6 +296,9 @@ class SqlAlchemySalesRepository:
                 status=OrderStatus.PAID.value,
                 paid_by_user_id=paid_by_user_id,
                 paid_at=paid_at,
+                inventory_transaction_id=inventory_transaction_id,
+                cogs_amount=cogs_amount,
+                cogs_status=cogs_status.value,
                 updated_at=paid_at,
             )
         )
@@ -479,6 +493,9 @@ def _order_values(value: SalesOrder) -> dict[str, object]:
         "cancel_reason": value.cancel_reason,
         "paid_by_user_id": value.paid_by_user_id,
         "paid_at": value.paid_at,
+        "inventory_transaction_id": value.inventory_transaction_id,
+        "cogs_amount": value.cogs_amount,
+        "cogs_status": value.cogs_status.value if value.cogs_status else None,
         "created_at": value.created_at,
         "updated_at": value.updated_at,
     }
