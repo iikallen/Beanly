@@ -329,6 +329,109 @@ export type MenuReadModel = {
   }>;
 };
 
+export type PosRegister = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  name: string;
+  is_active: boolean;
+  created_by_user_id: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PosWarehouseChoice = {
+  id: string;
+  location_id: string;
+  name: string;
+};
+
+export type RegisterShiftStatus = "OPEN" | "CLOSED";
+
+export type RegisterShift = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  register_id: string;
+  warehouse_id: string;
+  status: RegisterShiftStatus;
+  opened_by_user_id: string;
+  closed_by_user_id: string | null;
+  opened_at: string;
+  closed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SalesOrderType = "DINE_IN" | "TAKEAWAY" | "DELIVERY";
+export type SalesOrderStatus = "OPEN" | "PAID" | "CANCELLED";
+
+export type SalesOrderModifier = {
+  id: string;
+  order_item_id: string;
+  modifier_group_id: string;
+  modifier_group_name: string;
+  modifier_option_id: string;
+  modifier_option_name: string;
+  price_delta_minor: string;
+  sort_order: number;
+};
+
+export type SalesOrderComponent = {
+  id: string;
+  order_item_id: string;
+  inventory_item_id: string;
+  inventory_item_name: string;
+  base_unit: InventoryUnitCode;
+  quantity_per_unit: string;
+  created_at: string;
+};
+
+export type SalesOrderItem = {
+  id: string;
+  order_id: string;
+  client_item_id: string;
+  product_id: string;
+  product_variant_id: string;
+  product_name: string;
+  variant_name: string;
+  quantity: number;
+  base_price_minor: string;
+  modifier_price_minor: string;
+  unit_price_minor: string;
+  line_total_minor: string;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+  modifiers: SalesOrderModifier[];
+  components: SalesOrderComponent[];
+};
+
+export type SalesOrder = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  shift_id: string;
+  warehouse_id: string;
+  number: string;
+  client_order_id: string;
+  order_type: SalesOrderType;
+  status: SalesOrderStatus;
+  currency_code: string;
+  guest_count: number | null;
+  table_label: string | null;
+  note: string | null;
+  subtotal_minor: string;
+  total_minor: string;
+  created_by_user_id: string;
+  cancelled_by_user_id: string | null;
+  cancelled_at: string | null;
+  cancel_reason: string | null;
+  created_at: string;
+  updated_at: string;
+  items: SalesOrderItem[];
+};
+
 export type WarehouseResponse = {
   id: string;
   organization_id: string;
@@ -1091,6 +1194,165 @@ export const api = {
     request<MenuReadModel>(`/api/v1/menu?${new URLSearchParams({ location_id: locationId })}`, {
       headers: tenantAuthorization(organizationId, accessToken),
     }),
+  listPosRegisters: (locationId: string, organizationId: string, accessToken: string) =>
+    request<PosRegister[]>(
+      `/api/v1/sales/registers?${new URLSearchParams({ location_id: locationId })}`,
+      { headers: tenantAuthorization(organizationId, accessToken) },
+    ),
+  listPosWarehouses: (locationId: string, organizationId: string, accessToken: string) =>
+    request<PosWarehouseChoice[]>(
+      `/api/v1/sales/warehouses?${new URLSearchParams({ location_id: locationId })}`,
+      { headers: tenantAuthorization(organizationId, accessToken) },
+    ),
+  createPosRegister: (
+    input: { location_id: string; name: string },
+    organizationId: string,
+    accessToken: string,
+  ) => request<PosRegister>("/api/v1/sales/registers", {
+    method: "POST",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  updatePosRegister: (
+    registerId: string,
+    input: { name: string },
+    organizationId: string,
+    accessToken: string,
+  ) => request<PosRegister>(`/api/v1/sales/registers/${registerId}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  deactivatePosRegister: (
+    registerId: string,
+    organizationId: string,
+    accessToken: string,
+  ) => request<PosRegister>(`/api/v1/sales/registers/${registerId}/deactivate`, {
+    method: "POST",
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  getCurrentRegisterShift: (
+    registerId: string,
+    organizationId: string,
+    accessToken: string,
+  ) => request<RegisterShift | null>(
+    `/api/v1/sales/shifts/current?${new URLSearchParams({ register_id: registerId })}`,
+    { headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  openRegisterShift: (
+    input: { register_id: string; warehouse_id: string },
+    organizationId: string,
+    accessToken: string,
+  ) => request<RegisterShift>("/api/v1/sales/shifts/open", {
+    method: "POST",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  closeRegisterShift: (
+    shiftId: string,
+    organizationId: string,
+    accessToken: string,
+  ) => request<RegisterShift>(`/api/v1/sales/shifts/${shiftId}/close`, {
+    method: "POST",
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  listSalesOrders: (
+    organizationId: string,
+    accessToken: string,
+    filters: { locationId?: string; shiftId?: string; status?: SalesOrderStatus } = {},
+  ) => request<SalesOrder[]>(`/api/v1/sales/orders?${salesOrderFilters(filters)}`, {
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  getSalesOrder: (orderId: string, organizationId: string, accessToken: string) =>
+    request<SalesOrder>(`/api/v1/sales/orders/${orderId}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  createSalesOrder: (
+    input: {
+      client_order_id: string;
+      shift_id: string;
+      order_type: SalesOrderType;
+      guest_count?: number | null;
+      table_label?: string | null;
+      note?: string | null;
+    },
+    organizationId: string,
+    accessToken: string,
+  ) => request<SalesOrder>("/api/v1/sales/orders", {
+    method: "POST",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  updateSalesOrder: (
+    orderId: string,
+    input: Partial<Pick<SalesOrder, "order_type" | "guest_count" | "table_label" | "note">>,
+    organizationId: string,
+    accessToken: string,
+  ) => request<SalesOrder>(`/api/v1/sales/orders/${orderId}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  cancelSalesOrder: (
+    orderId: string,
+    reason: string,
+    organizationId: string,
+    accessToken: string,
+  ) => request<SalesOrder>(`/api/v1/sales/orders/${orderId}/cancel`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  addSalesOrderItem: (
+    orderId: string,
+    input: {
+      client_item_id: string;
+      variant_id: string;
+      selected_option_ids: string[];
+      quantity: number;
+      note?: string | null;
+    },
+    organizationId: string,
+    accessToken: string,
+  ) => request<SalesOrder>(`/api/v1/sales/orders/${orderId}/items`, {
+    method: "POST",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  updateSalesOrderItem: (
+    orderId: string,
+    itemId: string,
+    input: { quantity?: number; note?: string | null },
+    organizationId: string,
+    accessToken: string,
+  ) => request<SalesOrder>(`/api/v1/sales/orders/${orderId}/items/${itemId}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  configureSalesOrderItem: (
+    orderId: string,
+    itemId: string,
+    selectedOptionIds: string[],
+    organizationId: string,
+    accessToken: string,
+  ) => request<SalesOrder>(
+    `/api/v1/sales/orders/${orderId}/items/${itemId}/configuration`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ selected_option_ids: selectedOptionIds }),
+      headers: tenantAuthorization(organizationId, accessToken),
+    },
+  ),
+  removeSalesOrderItem: (
+    orderId: string,
+    itemId: string,
+    organizationId: string,
+    accessToken: string,
+  ) => request<SalesOrder>(`/api/v1/sales/orders/${orderId}/items/${itemId}`, {
+    method: "DELETE",
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
   listSuppliers: (
     organizationId: string,
     accessToken: string,
@@ -1300,6 +1562,18 @@ function receiptFilters(filters: {
   const params = new URLSearchParams();
   if (filters.purchaseOrderId) params.set("purchase_order_id", filters.purchaseOrderId);
   if (filters.supplierId) params.set("supplier_id", filters.supplierId);
+  if (filters.status) params.set("status", filters.status);
+  return params.toString();
+}
+
+function salesOrderFilters(filters: {
+  locationId?: string;
+  shiftId?: string;
+  status?: SalesOrderStatus;
+}) {
+  const params = new URLSearchParams();
+  if (filters.locationId) params.set("location_id", filters.locationId);
+  if (filters.shiftId) params.set("shift_id", filters.shiftId);
   if (filters.status) params.set("status", filters.status);
   return params.toString();
 }

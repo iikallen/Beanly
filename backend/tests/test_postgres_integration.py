@@ -92,6 +92,17 @@ from beanly.modules.purchasing.infrastructure.inventory_gateway import (
     InventoryApplicationGateway,
     PurchasingReferenceValidator,
 )
+from beanly.modules.sales.application.commands import AddOrderItemInput, CreateOrderInput
+from beanly.modules.sales.application.order_service import OrderService
+from beanly.modules.sales.application.ports import (
+    SellableComponentSnapshot,
+    SellableItemSnapshot,
+)
+from beanly.modules.sales.application.register_service import RegisterService
+from beanly.modules.sales.application.shift_service import ShiftService
+from beanly.modules.sales.domain.enums import OrderType
+from beanly.modules.sales.infrastructure.db.repositories import SqlAlchemySalesRepository
+from beanly.modules.sales.infrastructure.inventory_gateway import InventorySalesGateway
 
 ORGANIZATION_TABLES = {"organizations", "locations", "organization_memberships"}
 TEAM_TABLES = {
@@ -130,6 +141,14 @@ MENU_MODIFIER_TABLES = {
     "modifier_option_location_settings",
 }
 MENU_TABLES |= MENU_MODIFIER_TABLES
+SALES_TABLES = {
+    "pos_registers",
+    "register_shifts",
+    "sales_orders",
+    "sales_order_items",
+    "sales_order_item_modifiers",
+    "sales_order_item_components",
+}
 APPLICATION_TABLES = (
     ORGANIZATION_TABLES
     | TEAM_TABLES
@@ -137,6 +156,7 @@ APPLICATION_TABLES = (
     | INVENTORY_LEDGER_TABLES
     | PURCHASING_TABLES
     | MENU_TABLES
+    | SALES_TABLES
 )
 
 
@@ -184,6 +204,7 @@ def _inspect_schema(sync) -> dict:
         for table in APPLICATION_TABLES & tables
     }
     revision = sync.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    sequences = set(inspector.get_sequence_names())
     return {
         "tables": tables,
         "columns": columns,
@@ -193,6 +214,7 @@ def _inspect_schema(sync) -> dict:
         "check_constraints": check_constraints,
         "primary_keys": primary_keys,
         "revision": revision,
+        "sequences": sequences,
     }
 
 
@@ -1188,6 +1210,247 @@ async def test_postgres_menu_recipe_and_default_variant_concurrency(
 
 
 @pytest.mark.anyio
+async def test_postgres_sales_idempotency_totals_shift_races_and_no_posting(
+    postgres_inventory_database,
+) -> None:
+    database_url = postgres_inventory_database
+    context, warehouse_id, item_id = await seed_inventory_context(database_url)
+    engine = create_async_engine(database_url)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.connect() as connection:
+        location_id = await connection.scalar(
+            text("SELECT location_id FROM warehouses WHERE id=:warehouse_id"),
+            {"warehouse_id": warehouse_id},
+        )
+
+    try:
+        async with sessions() as session:
+            inventory = SqlAlchemyInventoryRepository(session)
+            organizations = OrganizationService(SqlAlchemyOrganizationRepository(session))
+            menu = MenuService(
+                SqlAlchemyMenuRepository(session),
+                MenuInventoryGateway(inventory),
+                organizations,
+            )
+            category = await menu.create_category(context, "Sales", 0)
+            product = await menu.create_product(
+                context,
+                category.id,
+                "Concurrent item",
+                None,
+                None,
+                VariantInput("Default", None, 10000),
+            )
+            variant_id = product.variants[0].id
+
+        class StaticMenu:
+            async def resolve_order_item(self, *args, **kwargs):
+                return SellableItemSnapshot(
+                    product.id,
+                    "Concurrent item",
+                    variant_id,
+                    "Default",
+                    10000,
+                    5000,
+                    15000,
+                    (),
+                    (
+                        SellableComponentSnapshot(
+                            item_id, "Coffee", UnitCode.G, Decimal("18")
+                        ),
+                    ),
+                )
+
+        def services(session):
+            repository = SqlAlchemySalesRepository(session)
+            organizations = OrganizationService(SqlAlchemyOrganizationRepository(session))
+            return (
+                RegisterService(repository, organizations),
+                ShiftService(
+                    repository,
+                    organizations,
+                    InventorySalesGateway(SqlAlchemyInventoryRepository(session)),
+                ),
+                OrderService(repository, organizations, StaticMenu()),
+            )
+
+        async with sessions() as session:
+            register_service, _, _ = services(session)
+            register = await register_service.create(context, location_id, "Concurrent")
+
+        async def open_shift():
+            async with sessions() as session:
+                _, shift_service, _ = services(session)
+                return await shift_service.open(context, register.id, warehouse_id)
+
+        opened = await asyncio.gather(open_shift(), open_shift(), return_exceptions=True)
+        assert sum(not isinstance(value, Exception) for value in opened) == 1
+        assert sum(isinstance(value, Exception) for value in opened) == 1
+        shift = next(value for value in opened if not isinstance(value, Exception))
+        async with engine.connect() as connection:
+            assert (
+                await connection.scalar(
+                    text(
+                        "SELECT count(*) FROM register_shifts "
+                        "WHERE register_id=:register_id AND status='OPEN'"
+                    ),
+                    {"register_id": register.id},
+                )
+                == 1
+            )
+
+        client_order_id = uuid4()
+
+        async def create_order(client_id=client_order_id, shift_id=shift.id):
+            async with sessions() as session:
+                _, _, order_service = services(session)
+                return await order_service.create(
+                    context,
+                    CreateOrderInput(
+                        client_id,
+                        shift_id,
+                        OrderType.TAKEAWAY,
+                        None,
+                        None,
+                        None,
+                    ),
+                )
+
+        async with sessions() as session:
+            register_service, shift_service, _ = services(session)
+            second_register = await register_service.create(
+                context, location_id, "Second concurrent"
+            )
+            second_shift = await shift_service.open(
+                context, second_register.id, warehouse_id
+            )
+        cross_shift_client_id = uuid4()
+        cross_shift_orders = await asyncio.gather(
+            create_order(cross_shift_client_id, shift.id),
+            create_order(cross_shift_client_id, second_shift.id),
+        )
+        assert cross_shift_orders[0].id == cross_shift_orders[1].id
+        async with engine.connect() as connection:
+            assert (
+                await connection.scalar(
+                    text(
+                        "SELECT count(*) FROM sales_orders "
+                        "WHERE organization_id=:organization_id "
+                        "AND client_order_id=:client_order_id"
+                    ),
+                    {
+                        "organization_id": context.organization_id,
+                        "client_order_id": cross_shift_client_id,
+                    },
+                )
+                == 1
+            )
+
+        duplicate_orders = await asyncio.gather(
+            *(create_order() for _ in range(10))
+        )
+        assert len({value.id for value in duplicate_orders}) == 1
+        order = duplicate_orders[0]
+        async with engine.connect() as connection:
+            assert (
+                await connection.scalar(
+                    text(
+                        "SELECT count(*) FROM sales_orders "
+                        "WHERE organization_id=:organization_id "
+                        "AND client_order_id=:client_order_id"
+                    ),
+                    {
+                        "organization_id": context.organization_id,
+                        "client_order_id": client_order_id,
+                    },
+                )
+                == 1
+            )
+
+        async def add_item(client_item_id):
+            async with sessions() as session:
+                _, _, order_service = services(session)
+                return await order_service.add_item(
+                    context,
+                    order.id,
+                    AddOrderItemInput(client_item_id, variant_id, (), 1, None),
+                )
+
+        distinct_ids = [uuid4() for _ in range(10)]
+        await asyncio.gather(*(add_item(value) for value in distinct_ids))
+        duplicate_item_id = uuid4()
+        duplicates = await asyncio.gather(
+            *(add_item(duplicate_item_id) for _ in range(10))
+        )
+        assert len({value.id for value in duplicates}) == 1
+        async with engine.connect() as connection:
+            line_count, total = (
+                await connection.execute(
+                    text(
+                        "SELECT count(item.id), orders.total_minor "
+                        "FROM sales_orders orders "
+                        "JOIN sales_order_items item ON item.order_id=orders.id "
+                        "WHERE orders.id=:order_id GROUP BY orders.total_minor"
+                    ),
+                    {"order_id": order.id},
+                )
+            ).one()
+            duplicate_count = await connection.scalar(
+                text(
+                    "SELECT count(*) FROM sales_order_items "
+                    "WHERE order_id=:order_id AND client_item_id=:client_item_id"
+                ),
+                {"order_id": order.id, "client_item_id": duplicate_item_id},
+            )
+            assert (line_count, total, duplicate_count) == (11, 165000, 1)
+
+        async with sessions() as session:
+            register_service, shift_service, _ = services(session)
+            race_register = await register_service.create(context, location_id, "Shift race")
+            race_shift = await shift_service.open(context, race_register.id, warehouse_id)
+
+        async def close_race_shift():
+            async with sessions() as session:
+                _, shift_service, _ = services(session)
+                return await shift_service.close(context, race_shift.id)
+
+        raced = await asyncio.gather(
+            create_order(uuid4(), race_shift.id),
+            close_race_shift(),
+            return_exceptions=True,
+        )
+        assert sum(not isinstance(value, Exception) for value in raced) == 1
+        async with engine.connect() as connection:
+            race_status = await connection.scalar(
+                text("SELECT status FROM register_shifts WHERE id=:shift_id"),
+                {"shift_id": race_shift.id},
+            )
+            race_orders = await connection.scalar(
+                text("SELECT count(*) FROM sales_orders WHERE shift_id=:shift_id"),
+                {"shift_id": race_shift.id},
+            )
+            assert (race_status, race_orders) in {("CLOSED", 0), ("OPEN", 1)}
+            assert (
+                await connection.scalar(
+                    text("SELECT count(*) FROM inventory_transactions WHERE type='SALE'")
+                )
+                == 0
+            )
+            absent_tables = (
+                await connection.execute(
+                    text(
+                        "SELECT to_regclass(name) FROM unnest(ARRAY["
+                        "'payments','payment_transactions','finance_entries',"
+                        "'revenues','cogs_entries']) AS name"
+                    )
+                )
+            ).scalars().all()
+            assert absent_tables == [None, None, None, None, None]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.anyio
 async def test_postgres_purchasing_atomic_posting_and_concurrency(
     postgres_inventory_database,
 ) -> None:
@@ -1426,7 +1689,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
             "alembic_version",
             *APPLICATION_TABLES,
         } <= upgraded["tables"]
-        assert upgraded["revision"] == "0009_modifiers"
+        assert upgraded["revision"] == "0010_sales_pos"
         assert await membership_state(test_url, legacy_membership_id) == ("ACTIVE", "ALL")
         assert set(upgraded["columns"]["organizations"]) == {
             "id",
@@ -1752,6 +2015,63 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
         assert {"ck_modifier_price_nonnegative"} <= upgraded["check_constraints"][
             "modifier_option_prices"
         ]
+        assert "sales_order_number_seq" in upgraded["sequences"]
+        assert (
+            "organization_id",
+            "location_id",
+            "name",
+        ) in upgraded["unique_constraints"]["pos_registers"]
+        assert (
+            "organization_id",
+            "client_order_id",
+        ) in upgraded["unique_constraints"]["sales_orders"]
+        assert (
+            "order_id",
+            "client_item_id",
+        ) in upgraded["unique_constraints"]["sales_order_items"]
+        assert str(upgraded["columns"]["sales_orders"]["number"]["type"]) == "BIGINT"
+        assert (
+            str(upgraded["columns"]["sales_order_item_components"]["quantity_per_unit"]["type"])
+            == "NUMERIC(20, 6)"
+        )
+        assert {
+            "ck_sales_order_type",
+            "ck_sales_order_status",
+            "ck_order_guest_count",
+            "ck_order_subtotal_nonnegative",
+            "ck_order_total_nonnegative",
+        } <= upgraded["check_constraints"]["sales_orders"]
+        assert {"ck_register_shift_status"} <= upgraded["check_constraints"][
+            "register_shifts"
+        ]
+        assert {
+            "ck_sales_order_item_quantity",
+            "ck_order_item_base_price",
+            "ck_order_item_modifier_price",
+            "ck_order_item_unit_price",
+            "ck_order_item_line_total",
+        } <= upgraded["check_constraints"]["sales_order_items"]
+        assert {"ck_order_item_component_quantity"} <= upgraded["check_constraints"][
+            "sales_order_item_components"
+        ]
+        assert {
+            "ix_pos_registers_organization_id",
+            "ix_pos_registers_location_id",
+        } <= upgraded["indexes"]["pos_registers"]
+        assert {
+            "ix_register_shifts_organization_id",
+            "ix_register_shifts_location_id",
+            "ix_register_shifts_register_id",
+            "ix_register_shifts_status",
+            "uq_register_shifts_open_register",
+        } <= upgraded["indexes"]["register_shifts"]
+        assert {
+            "ix_sales_orders_organization_id",
+            "ix_sales_orders_location_id",
+            "ix_sales_orders_shift_id",
+            "ix_sales_orders_status",
+            "ix_sales_orders_created_at",
+        } <= upgraded["indexes"]["sales_orders"]
 
         legacy_engine = create_async_engine(test_url)
         try:
@@ -1785,6 +2105,14 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
         finally:
             await legacy_engine.dispose()
 
+        await asyncio.to_thread(command.downgrade, config, "0009_modifiers")
+        sales_downgraded = await database_snapshot(test_url)
+        assert not SALES_TABLES & sales_downgraded["tables"]
+        assert APPLICATION_TABLES - SALES_TABLES <= sales_downgraded["tables"]
+        assert "sales_order_number_seq" not in sales_downgraded["sequences"]
+        assert sales_downgraded["revision"] == "0009_modifiers"
+        await asyncio.to_thread(command.upgrade, config, "head")
+
         await asyncio.to_thread(command.downgrade, config, "0008_menu")
         modifiers_downgraded = await database_snapshot(test_url)
         assert not MENU_MODIFIER_TABLES & modifiers_downgraded["tables"]
@@ -1815,11 +2143,22 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
                         "WHERE indexname='uq_inventory_transactions_idempotency'"
                     )
                 )
+                open_shift_index = await connection.scalar(
+                    text(
+                        "SELECT indexdef FROM pg_indexes "
+                        "WHERE indexname='uq_register_shifts_open_register'"
+                    )
+                )
         finally:
             await index_engine.dispose()
         assert index_definition is not None
         assert "UNIQUE" in index_definition
         assert "WHERE (idempotency_key IS NOT NULL)" in index_definition
+        assert open_shift_index is not None
+        assert "UNIQUE" in open_shift_index
+        assert "WHERE" in open_shift_index
+        assert "status" in open_shift_index
+        assert "OPEN" in open_shift_index
 
         inventory_context, inventory_warehouse_id, inventory_item_id = await seed_inventory_context(
             test_url
@@ -1922,7 +2261,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
         await asyncio.to_thread(command.upgrade, config, "head")
         reupgraded = await database_snapshot(test_url)
         assert APPLICATION_TABLES <= reupgraded["tables"]
-        assert reupgraded["revision"] == "0009_modifiers"
+        assert reupgraded["revision"] == "0010_sales_pos"
         assert await membership_state(test_url, legacy_membership_id) == ("ACTIVE", "ALL")
     finally:
         await admin_engine.dispose()

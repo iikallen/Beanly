@@ -37,6 +37,9 @@ class Permission(StrEnum):
     SALES_READ_OWN = "sales.read_own"
     SALES_CREATE = "sales.create"
     SALES_REFUND = "sales.refund"
+    SALES_REGISTER_MANAGE = "sales.register.manage"
+    SALES_SHIFT_MANAGE = "sales.shift.manage"
+    SALES_CANCEL = "sales.cancel"
     PAYMENTS_READ = "payments.read"
     PAYMENTS_CREATE = "payments.create"
     PAYMENTS_REFUND = "payments.refund"
@@ -80,6 +83,9 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.SALES_READ,
             Permission.SALES_CREATE,
             Permission.SALES_REFUND,
+            Permission.SALES_REGISTER_MANAGE,
+            Permission.SALES_SHIFT_MANAGE,
+            Permission.SALES_CANCEL,
             Permission.PAYMENTS_READ,
             Permission.PAYMENTS_CREATE,
             Permission.PAYMENTS_REFUND,
@@ -111,6 +117,9 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.MENU_PRICE_WRITE,
             Permission.MENU_MODIFIER_WRITE,
             Permission.SALES_READ,
+            Permission.SALES_REGISTER_MANAGE,
+            Permission.SALES_SHIFT_MANAGE,
+            Permission.SALES_CANCEL,
             Permission.ANALYTICS_READ,
         }
     ),
@@ -133,6 +142,7 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.MENU_READ,
             Permission.SALES_CREATE,
             Permission.SALES_READ_OWN,
+            Permission.SALES_SHIFT_MANAGE,
             Permission.PAYMENTS_CREATE,
         }
     ),
@@ -141,6 +151,8 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.ORGANIZATION_READ,
             Permission.MENU_READ,
             Permission.SALES_CREATE,
+            Permission.SALES_READ_OWN,
+            Permission.SALES_SHIFT_MANAGE,
             Permission.INVENTORY_READ_LIMITED,
         }
     ),

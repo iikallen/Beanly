@@ -36,6 +36,9 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.SALES_READ,
                 Permission.SALES_CREATE,
                 Permission.SALES_REFUND,
+                Permission.SALES_REGISTER_MANAGE,
+                Permission.SALES_SHIFT_MANAGE,
+                Permission.SALES_CANCEL,
                 Permission.PAYMENTS_READ,
                 Permission.PAYMENTS_CREATE,
                 Permission.PAYMENTS_REFUND,
@@ -67,6 +70,9 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.MENU_PRICE_WRITE,
                 Permission.MENU_MODIFIER_WRITE,
                 Permission.SALES_READ,
+                Permission.SALES_REGISTER_MANAGE,
+                Permission.SALES_SHIFT_MANAGE,
+                Permission.SALES_CANCEL,
                 Permission.ANALYTICS_READ,
             }
         ),
@@ -89,6 +95,7 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.MENU_READ,
                 Permission.SALES_CREATE,
                 Permission.SALES_READ_OWN,
+                Permission.SALES_SHIFT_MANAGE,
                 Permission.PAYMENTS_CREATE,
             }
         ),
@@ -97,6 +104,8 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.ORGANIZATION_READ,
                 Permission.MENU_READ,
                 Permission.SALES_CREATE,
+                Permission.SALES_READ_OWN,
+                Permission.SALES_SHIFT_MANAGE,
                 Permission.INVENTORY_READ_LIMITED,
             }
         ),

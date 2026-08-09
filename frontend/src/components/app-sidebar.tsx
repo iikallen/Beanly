@@ -6,6 +6,7 @@ import {
   Package,
   LayoutDashboard,
   LogOut,
+  Monitor,
   Settings as SettingsIcon,
   ShoppingCart,
   Users,
@@ -23,7 +24,7 @@ export function AppSidebar({
   teamView,
   onTeamView,
 }: {
-  active: "dashboard" | "inventory" | "menu" | "purchasing" | "team" | "settings";
+  active: "dashboard" | "pos" | "inventory" | "menu" | "purchasing" | "team" | "settings";
   teamView?: "employees" | "invitations";
   onTeamView?: (view: "employees" | "invitations") => void;
 }) {
@@ -75,6 +76,14 @@ export function AppSidebar({
         >
           <LayoutDashboard aria-hidden="true" />
           Dashboard
+        </button>
+        <button
+          className={active === "pos" ? "app-nav-item is-active" : "app-nav-item"}
+          type="button"
+          onClick={() => router.push("/app/pos")}
+        >
+          <Monitor aria-hidden="true" />
+          POS
         </button>
         <button
           className={active === "team" ? "app-nav-item is-active" : "app-nav-item"}

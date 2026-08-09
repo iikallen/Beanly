@@ -95,3 +95,31 @@ def test_menu_uses_inventory_application_boundary() -> None:
         assert "StockBalance" not in source, path
         if path != Path("beanly/modules/menu/api/dependencies.py"):
             assert "inventory.infrastructure" not in source, path
+
+
+def test_sales_uses_application_ports_and_has_no_stage_eleven_side_effects() -> None:
+    sales = Path("beanly/modules/sales")
+    for layer in (sales / "domain", sales / "application"):
+        for path in layer.rglob("*.py"):
+            source = path.read_text(encoding="utf-8")
+            assert "fastapi" not in source.casefold(), path
+            assert "sqlalchemy" not in source.casefold(), path
+            assert "menu.infrastructure" not in source, path
+            assert "inventory.infrastructure" not in source, path
+
+    forbidden_side_effects = (
+        "InventoryTransactionType.SALE",
+        "SaleCompleted",
+        "PaymentModel",
+        "FinanceModel",
+        "RevenueModel",
+        "COGS",
+    )
+    for path in sales.rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        assert not any(name in source for name in forbidden_side_effects), path
+        assert "menu.infrastructure.db.models" not in source, path
+        assert "ProductModel" not in source, path
+        assert "ProductVariantModel" not in source, path
+        assert "ModifierOptionModel" not in source, path
+        assert "RecipeModel" not in source, path
