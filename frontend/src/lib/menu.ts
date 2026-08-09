@@ -6,6 +6,10 @@ export function isPositiveMenuDecimal(value: string) {
   return NON_NEGATIVE_DECIMAL.test(value.trim()) && Number(value) > 0;
 }
 
+export function isNonZeroSignedMenuDecimal(value: string) {
+  return /^[+-]?\d+(?:\.\d{1,6})?$/.test(value.trim()) && Number(value) !== 0;
+}
+
 export function parseMenuPriceToMinor(value: string) {
   const trimmed = value.trim().replaceAll(" ", "").replace(",", ".");
   if (!/^\d+(?:\.\d{0,2})?$/.test(trimmed)) return null;

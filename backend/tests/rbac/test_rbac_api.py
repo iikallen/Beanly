@@ -407,6 +407,65 @@ async def test_owner_admin_manager_and_barista_api_permissions(app_client, monke
             json={"base_price_minor": 1},
         )
     ).status_code == 403
+    activated = await client.patch(
+        f"/api/v1/menu/products/{menu_product.json()['id']}",
+        headers=manager_headers,
+        json={"status": "ACTIVE"},
+    )
+    assert activated.status_code == 200
+    modifier_group = await client.post(
+        f"/api/v1/menu/variants/{variant_id}/modifier-groups",
+        headers=manager_headers,
+        json={
+            "name": "Milk",
+            "selection_type": "SINGLE",
+            "min_selections": 0,
+            "max_selections": 1,
+        },
+    )
+    assert modifier_group.status_code == 201, modifier_group.text
+    assert (
+        await client.post(
+            f"/api/v1/menu/variants/{variant_id}/modifier-groups",
+            headers=barista_headers,
+            json={
+                "name": "Forbidden",
+                "selection_type": "SINGLE",
+                "min_selections": 0,
+                "max_selections": 1,
+            },
+        )
+    ).status_code == 403
+    option = await client.post(
+        f"/api/v1/menu/modifier-groups/{modifier_group.json()['id']}/options",
+        headers=admin_headers,
+        json={"name": "Regular", "base_price_delta_minor": 0, "is_default": True},
+    )
+    assert option.status_code == 201, option.text
+    for read_headers in (accountant_headers, cashier_headers, barista_headers):
+        menu = await client.get(
+            "/api/v1/menu",
+            headers=read_headers,
+            params={"location_id": location_id},
+        )
+        assert menu.status_code == 200, menu.text
+        projected = menu.json()["categories"][0]["products"][0]["variants"][0]
+        assert projected["modifier_groups"][0]["name"] == "Milk"
+        assert projected["modifier_groups"][0]["options"][0]["name"] == "Regular"
+        assert (
+            await client.get(
+                f"/api/v1/menu/variants/{variant_id}/modifier-groups",
+                headers=read_headers,
+            )
+        ).status_code == 403
+        assert (
+            await client.post(
+                f"/api/v1/menu/variants/{variant_id}/customization-preview",
+                headers=read_headers,
+                params={"warehouse_id": warehouse.json()["id"], "location_id": location_id},
+                json={"selected_option_ids": []},
+            )
+        ).status_code == 403
     assert (
         await client.get(
             f"/api/v1/menu/variants/{variant_id}/recipe",

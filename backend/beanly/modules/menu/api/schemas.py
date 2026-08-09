@@ -3,11 +3,17 @@ from decimal import Decimal
 from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_serializer, field_validator
+from pydantic import BaseModel, Field, field_serializer, field_validator, model_validator
 
 from beanly.modules.inventory.domain.value_objects import UnitCode, decimal_string
 from beanly.modules.menu.domain.entities import (
     Category,
+    CustomizationPreview,
+    ModifierGroup,
+    ModifierOption,
+    ModifierOptionComponent,
+    ModifierOptionLocationSetting,
+    ModifierOptionPrice,
     Product,
     ProductLocationSetting,
     ProductVariant,
@@ -15,7 +21,11 @@ from beanly.modules.menu.domain.entities import (
     RecipeDetail,
     VariantPrice,
 )
-from beanly.modules.menu.domain.enums import ProductStatus, RecipeCostStatus
+from beanly.modules.menu.domain.enums import (
+    ModifierSelectionType,
+    ProductStatus,
+    RecipeCostStatus,
+)
 
 
 class CategoryRequest(BaseModel):
@@ -75,6 +85,213 @@ class ProductPatchRequest(BaseModel):
     status: ProductStatus | None = None
 
 
+class ModifierGroupRequest(BaseModel):
+    name: Annotated[str, Field(min_length=1, max_length=150)]
+    selection_type: ModifierSelectionType
+    min_selections: Annotated[int, Field(ge=0)]
+    max_selections: Annotated[int, Field(ge=1)]
+    sort_order: int = 0
+
+    @model_validator(mode="after")
+    def valid_limits(self) -> "ModifierGroupRequest":
+        if self.min_selections > self.max_selections:
+            raise ValueError("min_selections cannot exceed max_selections")
+        if self.selection_type == ModifierSelectionType.SINGLE and self.max_selections != 1:
+            raise ValueError("SINGLE modifier groups must have max_selections=1")
+        return self
+
+
+class ModifierGroupPatchRequest(BaseModel):
+    name: Annotated[str | None, Field(min_length=1, max_length=150)] = None
+    selection_type: ModifierSelectionType | None = None
+    min_selections: Annotated[int | None, Field(ge=0)] = None
+    max_selections: Annotated[int | None, Field(ge=1)] = None
+    sort_order: int | None = None
+
+
+class ModifierOptionRequest(BaseModel):
+    name: Annotated[str, Field(min_length=1, max_length=150)]
+    base_price_delta_minor: Annotated[int, Field(ge=0, le=9223372036854775807)] = 0
+    is_default: bool = False
+    sort_order: int = 0
+
+
+class ModifierOptionPatchRequest(BaseModel):
+    name: Annotated[str | None, Field(min_length=1, max_length=150)] = None
+    base_price_delta_minor: Annotated[int | None, Field(ge=0, le=9223372036854775807)] = None
+    is_default: bool | None = None
+    sort_order: int | None = None
+
+
+class ModifierComponentRequest(BaseModel):
+    inventory_item_id: UUID
+    quantity_delta: Annotated[Decimal, Field(allow_inf_nan=False)]
+    unit: UnitCode
+    sort_order: int = 0
+
+    @field_validator("quantity_delta", mode="before")
+    @classmethod
+    def decimal_string_only(cls, value: object) -> object:
+        if not isinstance(value, str):
+            raise ValueError("quantity_delta must be a decimal string")
+        return value
+
+    @field_validator("quantity_delta")
+    @classmethod
+    def nonzero(cls, value: Decimal) -> Decimal:
+        if value == 0:
+            raise ValueError("quantity_delta must be non-zero")
+        return value
+
+
+class ModifierComponentsRequest(BaseModel):
+    components: Annotated[list[ModifierComponentRequest], Field(max_length=500)]
+
+
+class ModifierPriceRequest(BaseModel):
+    price_delta_minor: Annotated[int, Field(ge=0, le=9223372036854775807)]
+
+
+class ModifierLocationRequest(BaseModel):
+    is_available: bool
+
+
+class CustomizationPreviewRequest(BaseModel):
+    selected_option_ids: Annotated[list[UUID], Field(max_length=500)]
+
+
+class ModifierComponentResponse(BaseModel):
+    inventory_item_id: UUID
+    item_name: str | None
+    base_unit: UnitCode | None
+    quantity_delta: Decimal
+    sort_order: int
+
+    @field_serializer("quantity_delta")
+    def serialize_quantity(self, value: Decimal) -> str:
+        return decimal_string(value)
+
+    @classmethod
+    def from_entity(cls, value: ModifierOptionComponent) -> "ModifierComponentResponse":
+        return cls(
+            inventory_item_id=value.inventory_item_id,
+            item_name=value.item_name,
+            base_unit=value.base_unit,
+            quantity_delta=value.quantity_delta,
+            sort_order=value.sort_order,
+        )
+
+
+class ModifierOptionMenuResponse(BaseModel):
+    id: UUID
+    name: str
+    base_price_delta_minor: str
+    location_price_delta_minor: str | None
+    effective_price_delta_minor: str
+    is_default: bool
+    sort_order: int
+    is_available: bool
+
+    @classmethod
+    def from_entity(cls, value: ModifierOption) -> "ModifierOptionMenuResponse":
+        return cls(
+            id=value.id,
+            name=value.name,
+            base_price_delta_minor=str(value.base_price_delta_minor),
+            location_price_delta_minor=(
+                str(value.location_price_delta_minor)
+                if value.location_price_delta_minor is not None
+                else None
+            ),
+            effective_price_delta_minor=str(
+                value.effective_price_delta_minor
+                if value.effective_price_delta_minor is not None
+                else value.base_price_delta_minor
+            ),
+            is_default=value.is_default,
+            sort_order=value.sort_order,
+            is_available=value.is_available,
+        )
+
+
+class ModifierOptionResponse(ModifierOptionMenuResponse):
+    organization_id: UUID
+    modifier_group_id: UUID
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+    components: list[ModifierComponentResponse]
+
+    @classmethod
+    def from_entity(cls, value: ModifierOption) -> "ModifierOptionResponse":
+        menu = ModifierOptionMenuResponse.from_entity(value)
+        return cls(
+            **menu.model_dump(),
+            organization_id=value.organization_id,
+            modifier_group_id=value.modifier_group_id,
+            is_active=value.is_active,
+            created_at=value.created_at,
+            updated_at=value.updated_at,
+            components=[ModifierComponentResponse.from_entity(item) for item in value.components],
+        )
+
+
+class ModifierGroupMenuResponse(BaseModel):
+    id: UUID
+    name: str
+    selection_type: ModifierSelectionType
+    min_selections: int
+    max_selections: int
+    sort_order: int
+    is_active: bool
+    options: list[ModifierOptionMenuResponse]
+
+    @classmethod
+    def from_entity(cls, value: ModifierGroup) -> "ModifierGroupMenuResponse":
+        return cls(
+            id=value.id,
+            name=value.name,
+            selection_type=value.selection_type,
+            min_selections=value.min_selections,
+            max_selections=value.max_selections,
+            sort_order=value.sort_order,
+            is_active=value.is_active,
+            options=[ModifierOptionMenuResponse.from_entity(item) for item in value.options],
+        )
+
+
+class ModifierGroupResponse(BaseModel):
+    id: UUID
+    organization_id: UUID
+    product_variant_id: UUID
+    name: str
+    selection_type: ModifierSelectionType
+    min_selections: int
+    max_selections: int
+    sort_order: int
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+    options: list[ModifierOptionResponse]
+
+    @classmethod
+    def from_entity(cls, value: ModifierGroup) -> "ModifierGroupResponse":
+        return cls(
+            id=value.id,
+            organization_id=value.organization_id,
+            product_variant_id=value.product_variant_id,
+            name=value.name,
+            selection_type=value.selection_type,
+            min_selections=value.min_selections,
+            max_selections=value.max_selections,
+            sort_order=value.sort_order,
+            is_active=value.is_active,
+            created_at=value.created_at,
+            updated_at=value.updated_at,
+            options=[ModifierOptionResponse.from_entity(item) for item in value.options],
+        )
+
+
 class VariantResponse(BaseModel):
     id: UUID
     organization_id: UUID
@@ -89,6 +306,7 @@ class VariantResponse(BaseModel):
     sort_order: int
     created_at: datetime
     updated_at: datetime
+    modifier_groups: list[ModifierGroupMenuResponse]
 
     @classmethod
     def from_entity(cls, value: ProductVariant) -> "VariantResponse":
@@ -112,6 +330,9 @@ class VariantResponse(BaseModel):
             sort_order=value.sort_order,
             created_at=value.created_at,
             updated_at=value.updated_at,
+            modifier_groups=[
+                ModifierGroupMenuResponse.from_entity(group) for group in value.modifier_groups
+            ],
         )
 
 
@@ -354,3 +575,103 @@ class BatchCostVariantResponse(BaseModel):
 class BatchCostsResponse(BaseModel):
     warehouse_id: UUID
     variants: list[BatchCostVariantResponse]
+
+
+class ModifierPriceResponse(BaseModel):
+    option_id: UUID
+    location_id: UUID
+    price_delta_minor: str | None
+
+    @classmethod
+    def from_entity(
+        cls, option_id: UUID, location_id: UUID, value: ModifierOptionPrice | None
+    ) -> "ModifierPriceResponse":
+        return cls(
+            option_id=option_id,
+            location_id=location_id,
+            price_delta_minor=str(value.price_delta_minor) if value else None,
+        )
+
+
+class ModifierLocationResponse(BaseModel):
+    option_id: UUID
+    location_id: UUID
+    is_available: bool
+
+    @classmethod
+    def from_entity(cls, value: ModifierOptionLocationSetting) -> "ModifierLocationResponse":
+        return cls(
+            option_id=value.modifier_option_id,
+            location_id=value.location_id,
+            is_available=value.is_available,
+        )
+
+
+class EffectiveComponentResponse(BaseModel):
+    inventory_item_id: UUID
+    name: str
+    quantity: Decimal
+    base_unit: UnitCode
+    unit_cost: Decimal | None
+    cost: Decimal | None
+
+    @field_serializer("quantity", "unit_cost", "cost")
+    def serialize_decimal(self, value: Decimal | None) -> str | None:
+        return decimal_string(value) if value is not None else None
+
+
+class CustomizationPreviewResponse(BaseModel):
+    variant_id: UUID
+    selected_option_ids: list[UUID]
+    base_price_minor: str
+    modifier_price_minor: str
+    final_price_minor: str
+    base_recipe_cost: Decimal | None
+    modifier_cost_delta: Decimal | None
+    final_cost: Decimal | None
+    food_cost_percent: Decimal | None
+    gross_profit: Decimal | None
+    gross_margin_percent: Decimal | None
+    status: RecipeCostStatus
+    missing_cost_items: list[str]
+    effective_components: list[EffectiveComponentResponse]
+
+    @field_serializer(
+        "base_recipe_cost",
+        "modifier_cost_delta",
+        "final_cost",
+        "food_cost_percent",
+        "gross_profit",
+        "gross_margin_percent",
+    )
+    def serialize_decimal(self, value: Decimal | None) -> str | None:
+        return decimal_string(value) if value is not None else None
+
+    @classmethod
+    def from_entity(cls, value: CustomizationPreview) -> "CustomizationPreviewResponse":
+        return cls(
+            variant_id=value.variant_id,
+            selected_option_ids=list(value.selected_option_ids),
+            base_price_minor=str(value.base_price_minor),
+            modifier_price_minor=str(value.modifier_price_minor),
+            final_price_minor=str(value.final_price_minor),
+            base_recipe_cost=value.base_recipe_cost,
+            modifier_cost_delta=value.modifier_cost_delta,
+            final_cost=value.final_cost,
+            food_cost_percent=value.food_cost_percent,
+            gross_profit=value.gross_profit,
+            gross_margin_percent=value.gross_margin_percent,
+            status=value.status,
+            missing_cost_items=list(value.missing_cost_items),
+            effective_components=[
+                EffectiveComponentResponse(
+                    inventory_item_id=item.inventory_item_id,
+                    name=item.name,
+                    quantity=item.quantity,
+                    base_unit=item.base_unit,
+                    unit_cost=item.unit_cost,
+                    cost=item.cost,
+                )
+                for item in value.effective_components
+            ],
+        )

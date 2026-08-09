@@ -32,6 +32,7 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.MENU_RECIPE_READ,
                 Permission.MENU_RECIPE_WRITE,
                 Permission.MENU_PRICE_WRITE,
+                Permission.MENU_MODIFIER_WRITE,
                 Permission.SALES_READ,
                 Permission.SALES_CREATE,
                 Permission.SALES_REFUND,
@@ -64,6 +65,7 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.MENU_RECIPE_READ,
                 Permission.MENU_RECIPE_WRITE,
                 Permission.MENU_PRICE_WRITE,
+                Permission.MENU_MODIFIER_WRITE,
                 Permission.SALES_READ,
                 Permission.ANALYTICS_READ,
             }

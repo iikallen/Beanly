@@ -12,3 +12,11 @@ class MenuConflict(MenuError):
 
 class InvalidMenuOperation(MenuError):
     pass
+
+
+class InvalidModifierSelection(MenuError):
+    pass
+
+
+class InvalidModifierRecipe(MenuError):
+    pass

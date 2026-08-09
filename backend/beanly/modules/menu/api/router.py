@@ -5,6 +5,9 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
 
 from beanly.modules.menu.api.dependencies import (
+    CustomizationServiceDep,
+    MenuModifierReadDep,
+    MenuModifierWriteDep,
     MenuPriceWriteDep,
     MenuProductArchiveDep,
     MenuProductCreateDep,
@@ -20,8 +23,21 @@ from beanly.modules.menu.api.schemas import (
     CategoryPatchRequest,
     CategoryRequest,
     CategoryResponse,
+    CustomizationPreviewRequest,
+    CustomizationPreviewResponse,
     MenuCategoryResponse,
     MenuResponse,
+    ModifierComponentsRequest,
+    ModifierGroupPatchRequest,
+    ModifierGroupRequest,
+    ModifierGroupResponse,
+    ModifierLocationRequest,
+    ModifierLocationResponse,
+    ModifierOptionPatchRequest,
+    ModifierOptionRequest,
+    ModifierOptionResponse,
+    ModifierPriceRequest,
+    ModifierPriceResponse,
     ProductCreateRequest,
     ProductLocationRequest,
     ProductLocationResponse,
@@ -36,10 +52,16 @@ from beanly.modules.menu.api.schemas import (
     VariantPriceResponse,
     VariantResponse,
 )
-from beanly.modules.menu.application.commands import RecipeComponentInput, VariantInput
+from beanly.modules.menu.application.commands import (
+    ModifierComponentInput,
+    RecipeComponentInput,
+    VariantInput,
+)
 from beanly.modules.menu.domain.enums import ProductStatus
 from beanly.modules.menu.domain.exceptions import (
     InvalidMenuOperation,
+    InvalidModifierRecipe,
+    InvalidModifierSelection,
     MenuConflict,
     MenuNotFound,
 )
@@ -366,6 +388,245 @@ async def set_product_location(
     return ProductLocationResponse.from_entity(value)
 
 
+@router.post(
+    "/variants/{variant_id}/modifier-groups",
+    response_model=ModifierGroupResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_modifier_group(
+    variant_id: UUID,
+    payload: ModifierGroupRequest,
+    context: MenuModifierWriteDep,
+    service: MenuServiceDep,
+) -> ModifierGroupResponse:
+    try:
+        value = await service.create_modifier_group(
+            context,
+            variant_id,
+            payload.name,
+            payload.selection_type,
+            payload.min_selections,
+            payload.max_selections,
+            payload.sort_order,
+        )
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return ModifierGroupResponse.from_entity(value)
+
+
+@router.get("/variants/{variant_id}/modifier-groups", response_model=list[ModifierGroupResponse])
+async def list_modifier_groups(
+    variant_id: UUID,
+    context: MenuModifierReadDep,
+    service: MenuServiceDep,
+    location_id: UUID | None = None,
+) -> list[ModifierGroupResponse]:
+    try:
+        values = await service.list_modifier_groups(context, variant_id, location_id)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return [ModifierGroupResponse.from_entity(value) for value in values]
+
+
+@router.patch("/modifier-groups/{group_id}", response_model=ModifierGroupResponse)
+async def update_modifier_group(
+    group_id: UUID,
+    payload: ModifierGroupPatchRequest,
+    context: MenuModifierWriteDep,
+    service: MenuServiceDep,
+) -> ModifierGroupResponse:
+    if not payload.model_fields_set:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "No fields to update")
+    try:
+        value = await service.update_modifier_group(
+            context,
+            group_id,
+            name=payload.name,
+            selection_type=payload.selection_type,
+            min_selections=payload.min_selections,
+            max_selections=payload.max_selections,
+            sort_order=payload.sort_order,
+        )
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return ModifierGroupResponse.from_entity(value)
+
+
+@router.post("/modifier-groups/{group_id}/archive", response_model=ModifierGroupResponse)
+async def archive_modifier_group(
+    group_id: UUID, context: MenuModifierWriteDep, service: MenuServiceDep
+) -> ModifierGroupResponse:
+    try:
+        value = await service.archive_modifier_group(context, group_id)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return ModifierGroupResponse.from_entity(value)
+
+
+@router.post(
+    "/modifier-groups/{group_id}/options",
+    response_model=ModifierOptionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_modifier_option(
+    group_id: UUID,
+    payload: ModifierOptionRequest,
+    context: MenuModifierWriteDep,
+    service: MenuServiceDep,
+) -> ModifierOptionResponse:
+    try:
+        value = await service.create_modifier_option(
+            context,
+            group_id,
+            payload.name,
+            payload.base_price_delta_minor,
+            payload.is_default,
+            payload.sort_order,
+        )
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return ModifierOptionResponse.from_entity(value)
+
+
+@router.patch("/modifier-options/{option_id}", response_model=ModifierOptionResponse)
+async def update_modifier_option(
+    option_id: UUID,
+    payload: ModifierOptionPatchRequest,
+    context: MenuModifierWriteDep,
+    service: MenuServiceDep,
+) -> ModifierOptionResponse:
+    if not payload.model_fields_set:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "No fields to update")
+    try:
+        value = await service.update_modifier_option(
+            context,
+            option_id,
+            name=payload.name,
+            base_price_delta_minor=payload.base_price_delta_minor,
+            is_default=payload.is_default,
+            sort_order=payload.sort_order,
+        )
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return ModifierOptionResponse.from_entity(value)
+
+
+@router.post("/modifier-options/{option_id}/archive", response_model=ModifierOptionResponse)
+async def archive_modifier_option(
+    option_id: UUID, context: MenuModifierWriteDep, service: MenuServiceDep
+) -> ModifierOptionResponse:
+    try:
+        value = await service.archive_modifier_option(context, option_id)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return ModifierOptionResponse.from_entity(value)
+
+
+@router.put("/modifier-options/{option_id}/components", response_model=ModifierOptionResponse)
+async def replace_modifier_components(
+    option_id: UUID,
+    payload: ModifierComponentsRequest,
+    context: MenuModifierWriteDep,
+    service: MenuServiceDep,
+) -> ModifierOptionResponse:
+    inputs = tuple(
+        ModifierComponentInput(
+            value.inventory_item_id,
+            value.quantity_delta,
+            value.unit,
+            value.sort_order,
+        )
+        for value in payload.components
+    )
+    try:
+        value = await service.replace_modifier_components(context, option_id, inputs)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return ModifierOptionResponse.from_entity(value)
+
+
+@router.put(
+    "/modifier-options/{option_id}/prices/{location_id}",
+    response_model=ModifierPriceResponse,
+)
+async def set_modifier_option_price(
+    option_id: UUID,
+    location_id: UUID,
+    payload: ModifierPriceRequest,
+    context: MenuModifierWriteDep,
+    service: MenuServiceDep,
+) -> ModifierPriceResponse:
+    try:
+        value = await service.set_modifier_option_price(
+            context, option_id, location_id, payload.price_delta_minor
+        )
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return ModifierPriceResponse.from_entity(option_id, location_id, value)
+
+
+@router.delete(
+    "/modifier-options/{option_id}/prices/{location_id}",
+    response_model=ModifierPriceResponse,
+)
+async def delete_modifier_option_price(
+    option_id: UUID,
+    location_id: UUID,
+    context: MenuModifierWriteDep,
+    service: MenuServiceDep,
+) -> ModifierPriceResponse:
+    try:
+        await service.delete_modifier_option_price(context, option_id, location_id)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return ModifierPriceResponse.from_entity(option_id, location_id, None)
+
+
+@router.put(
+    "/modifier-options/{option_id}/locations/{location_id}",
+    response_model=ModifierLocationResponse,
+)
+async def set_modifier_option_location(
+    option_id: UUID,
+    location_id: UUID,
+    payload: ModifierLocationRequest,
+    context: MenuModifierWriteDep,
+    service: MenuServiceDep,
+) -> ModifierLocationResponse:
+    try:
+        value = await service.set_modifier_option_location(
+            context, option_id, location_id, payload.is_available
+        )
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return ModifierLocationResponse.from_entity(value)
+
+
+@router.post(
+    "/variants/{variant_id}/customization-preview",
+    response_model=CustomizationPreviewResponse,
+)
+async def customization_preview(
+    variant_id: UUID,
+    warehouse_id: UUID,
+    location_id: UUID,
+    payload: CustomizationPreviewRequest,
+    context: MenuModifierReadDep,
+    service: CustomizationServiceDep,
+) -> CustomizationPreviewResponse:
+    try:
+        value = await service.preview(
+            context,
+            variant_id,
+            warehouse_id,
+            location_id,
+            tuple(payload.selected_option_ids),
+        )
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return CustomizationPreviewResponse.from_entity(value)
+
+
 @router.get("", response_model=MenuResponse)
 async def get_menu(
     location_id: UUID, context: MenuReadDep, service: MenuServiceDep
@@ -398,6 +659,16 @@ def _http_error(exc: Exception) -> HTTPException:
         return HTTPException(status.HTTP_404_NOT_FOUND, str(exc) or "Menu resource not found")
     if isinstance(exc, OrganizationAccessDenied):
         return HTTPException(status.HTTP_403_FORBIDDEN, "Location access denied")
+    if isinstance(exc, InvalidModifierRecipe):
+        return HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            {"code": "INVALID_MODIFIER_RECIPE", "message": str(exc)},
+        )
+    if isinstance(exc, InvalidModifierSelection):
+        return HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            {"code": "INVALID_MODIFIER_SELECTION", "message": str(exc)},
+        )
     if isinstance(exc, (MenuConflict, InvalidMenuOperation, IntegrityError)):
         return HTTPException(status.HTTP_409_CONFLICT, str(exc) or "Menu conflict")
     if isinstance(exc, ValueError):

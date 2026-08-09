@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, ArrowLeft, Check, CircleAlert, Plus, Save, UtensilsCrossed } from "lucide-react";
+import { Archive, ArrowLeft, Check, CircleAlert, Plus, Save, SlidersHorizontal, UtensilsCrossed } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
@@ -253,6 +253,7 @@ export default function ProductEditorPage() {
                 canReadRecipe={permissions.canReadRecipe}
                 canWriteRecipe={permissions.canWriteRecipe}
                 canWritePrice={permissions.canWritePrice}
+                canWriteModifier={permissions.canWriteModifier}
                 cost={costs[variant.id]}
                 costRestricted={!permissions.loading && !permissions.canReadRecipe}
                 currency={currentOrganization?.currency_code ?? "KZT"}
@@ -288,6 +289,7 @@ function VariantEditor({
   canReadRecipe,
   canWriteRecipe,
   canWritePrice,
+  canWriteModifier,
   onChanged,
   onError,
 }: {
@@ -305,6 +307,7 @@ function VariantEditor({
   canReadRecipe: boolean;
   canWriteRecipe: boolean;
   canWritePrice: boolean;
+  canWriteModifier: boolean;
   onChanged: (message: string) => Promise<void>;
   onError: (message: string) => void;
 }) {
@@ -368,10 +371,10 @@ function VariantEditor({
       <div className="menu-variant-topline"><div><strong>{variant.name}</strong><span>{variant.is_default ? "Default variant" : variant.sku || "No SKU"}</span></div><span className={menuStatusClass(variant.status)}>{formatMenuStatus(variant.status)}</span></div>
       <div className="menu-variant-grid"><label><span>Name</span><input maxLength={100} required disabled={!canEdit} value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} /></label><label><span>SKU <small>Optional</small></span><input maxLength={100} disabled={!canEdit} value={draft.sku} onChange={(event) => setDraft((current) => ({ ...current, sku: event.target.value }))} /></label><label><span>Base price ({currency})</span><input inputMode="decimal" disabled={!canWritePrice} value={draft.price} onChange={(event) => setDraft((current) => ({ ...current, price: event.target.value }))} /></label><label><span>{locationName} price <small>Optional override</small></span><input inputMode="decimal" disabled={!canWritePrice} value={draft.locationPrice} onChange={(event) => setDraft((current) => ({ ...current, locationPrice: event.target.value }))} placeholder={`Uses ${formatMenuPriceMinor(variant.base_price_minor, currency)}`} /></label></div>
       <div className={cost?.status === "INCOMPLETE" ? "menu-variant-cost is-incomplete" : "menu-variant-cost"}>
-        <div><span>Effective price</span><strong>{formatMenuPriceMinor(cost?.price_minor ?? variant.effective_price_minor, currency)}</strong></div><div><span>Recipe cost</span><strong>{costRestricted ? "Restricted" : cost === undefined ? "…" : cost === null ? "Not set" : formatMenuMoney(cost.recipe_cost, currency)}</strong></div><div><span>Food cost</span><strong>{costRestricted ? "Restricted" : cost === undefined ? "…" : formatMenuPercent(cost?.food_cost_percent ?? null)}</strong></div><div><span>Gross margin</span><strong>{costRestricted ? "Restricted" : cost === undefined ? "…" : formatMenuPercent(cost?.gross_margin_percent ?? null)}</strong></div>
+        <div><span>Effective price</span><strong>{formatMenuPriceMinor(cost?.price_minor ?? variant.effective_price_minor, currency)}</strong></div><div><span>Recipe cost</span><strong>{costRestricted ? "Restricted" : cost === undefined ? "…" : cost === null ? "Not set" : formatMenuMoney(cost.recipe_cost, currency)}</strong></div><div><span>Food cost</span><strong>{costRestricted ? "Restricted" : cost === undefined ? "…" : formatMenuPercent(cost?.food_cost_percent ?? null)}</strong></div><div><span>Gross margin</span><strong>{costRestricted ? "Restricted" : cost === undefined ? "…" : formatMenuPercent(cost?.gross_margin_percent ?? null)}</strong></div><div><span>Modifiers</span><strong>{variant.modifier_groups?.filter((group) => group.is_active).length ?? 0} groups</strong></div>
         {cost?.status === "INCOMPLETE" && <p><CircleAlert aria-hidden="true" /><span><strong>Cost incomplete</strong>{cost.missing_cost_items.length ? `${cost.missing_cost_items.join(", ")} ${cost.missing_cost_items.length === 1 ? "has" : "have"} no inventory cost yet.` : "One or more ingredients have no inventory cost yet."}</span></p>}
       </div>
-      <div className="menu-variant-actions">{canReadRecipe && <Link className="menu-secondary-button" href={`/app/menu/products/${productId}/variants/${variant.id}/recipe${locationId ? `?location_id=${encodeURIComponent(locationId)}` : ""}`}><UtensilsCrossed aria-hidden="true" />{canWriteRecipe ? "Edit recipe" : "View recipe"}</Link>}{(canEdit || canWritePrice) && <button className="menu-primary-button" disabled={saving || !draft.name.trim()} type="submit"><Save aria-hidden="true" />{saving ? "Saving…" : "Save variant"}</button>}{canArchive && <button className="menu-icon-button is-danger" disabled={saving} type="button" onClick={() => void archiveVariant()} aria-label={`Archive ${variant.name}`}><Archive aria-hidden="true" /></button>}</div>
+      <div className="menu-variant-actions">{canReadRecipe && <Link className="menu-secondary-button" href={`/app/menu/products/${productId}/variants/${variant.id}/recipe${locationId ? `?location_id=${encodeURIComponent(locationId)}` : ""}`}><UtensilsCrossed aria-hidden="true" />{canWriteRecipe ? "Edit recipe" : "View recipe"}</Link>}{canWriteModifier && <Link className="menu-secondary-button" href={`/app/menu/products/${productId}/variants/${variant.id}/modifiers`}><SlidersHorizontal aria-hidden="true" />Edit modifiers</Link>}{(canEdit || canWritePrice) && <button className="menu-primary-button" disabled={saving || !draft.name.trim()} type="submit"><Save aria-hidden="true" />{saving ? "Saving…" : "Save variant"}</button>}{canArchive && <button className="menu-icon-button is-danger" disabled={saving} type="button" onClick={() => void archiveVariant()} aria-label={`Archive ${variant.name}`}><Archive aria-hidden="true" /></button>}</div>
     </form>
   );
 }

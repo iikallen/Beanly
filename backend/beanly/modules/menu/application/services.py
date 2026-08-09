@@ -5,7 +5,11 @@ from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID, uuid4
 
 from beanly.modules.inventory.domain.value_objects import to_base_quantity
-from beanly.modules.menu.application.commands import RecipeComponentInput, VariantInput
+from beanly.modules.menu.application.commands import (
+    ModifierComponentInput,
+    RecipeComponentInput,
+    VariantInput,
+)
 from beanly.modules.menu.application.ports import (
     InventoryCostPort,
     MenuEventPublisher,
@@ -14,6 +18,11 @@ from beanly.modules.menu.application.ports import (
 from beanly.modules.menu.domain.entities import (
     Category,
     ComponentCost,
+    ModifierGroup,
+    ModifierOption,
+    ModifierOptionComponent,
+    ModifierOptionLocationSetting,
+    ModifierOptionPrice,
     Product,
     ProductLocationSetting,
     ProductVariant,
@@ -24,7 +33,11 @@ from beanly.modules.menu.domain.entities import (
     RecipeDetail,
     VariantPrice,
 )
-from beanly.modules.menu.domain.enums import ProductStatus, RecipeCostStatus
+from beanly.modules.menu.domain.enums import (
+    ModifierSelectionType,
+    ProductStatus,
+    RecipeCostStatus,
+)
 from beanly.modules.menu.domain.events import (
     CategoryCreated,
     ProductArchived,
@@ -674,6 +687,332 @@ class MenuService:
             )
         )
 
+    async def create_modifier_group(
+        self,
+        context: TenantContext,
+        variant_id: UUID,
+        name: str,
+        selection_type: ModifierSelectionType,
+        min_selections: int,
+        max_selections: int,
+        sort_order: int,
+    ) -> ModifierGroup:
+        variant = await self._variant(context.organization_id, variant_id)
+        if variant.status == ProductStatus.ARCHIVED:
+            raise InvalidMenuOperation("Cannot add modifiers to an archived variant")
+        _validate_group(selection_type, min_selections, max_selections)
+        now = datetime.now(UTC)
+        return await self._write(
+            self.repository.add_modifier_group(
+                ModifierGroup(
+                    uuid4(),
+                    context.organization_id,
+                    variant_id,
+                    normalized_name(name, 150),
+                    selection_type,
+                    min_selections,
+                    max_selections,
+                    sort_order,
+                    True,
+                    now,
+                    now,
+                )
+            )
+        )
+
+    async def list_modifier_groups(
+        self,
+        context: TenantContext,
+        variant_id: UUID,
+        location_id: UUID | None = None,
+        *,
+        active_only: bool = False,
+    ) -> list[ModifierGroup]:
+        await self._variant(context.organization_id, variant_id)
+        if location_id is not None:
+            await self.organizations.ensure_location_access(context, location_id)
+        values = await self.repository.list_modifier_groups(
+            context.organization_id, variant_id, location_id, active_only
+        )
+        item_ids = tuple(
+            dict.fromkeys(
+                component.inventory_item_id
+                for group in values
+                for option in group.options
+                for component in option.components
+            )
+        )
+        items = await self.inventory.get_items(context.organization_id, item_ids)
+        return [
+            replace(
+                group,
+                options=tuple(
+                    replace(
+                        option,
+                        components=tuple(
+                            replace(
+                                component,
+                                item_name=(
+                                    items[component.inventory_item_id].name
+                                    if component.inventory_item_id in items
+                                    else None
+                                ),
+                                base_unit=(
+                                    items[component.inventory_item_id].base_unit
+                                    if component.inventory_item_id in items
+                                    else None
+                                ),
+                            )
+                            for component in option.components
+                        ),
+                    )
+                    for option in group.options
+                ),
+            )
+            for group in values
+        ]
+
+    async def update_modifier_group(
+        self,
+        context: TenantContext,
+        group_id: UUID,
+        *,
+        name: str | None,
+        selection_type: ModifierSelectionType | None,
+        min_selections: int | None,
+        max_selections: int | None,
+        sort_order: int | None,
+    ) -> ModifierGroup:
+        group = await self._modifier_group(context.organization_id, group_id)
+        if not group.is_active:
+            raise InvalidMenuOperation("Archived modifier groups cannot be updated")
+        updated = replace(
+            group,
+            name=normalized_name(name, 150) if name is not None else group.name,
+            selection_type=selection_type or group.selection_type,
+            min_selections=(min_selections if min_selections is not None else group.min_selections),
+            max_selections=(max_selections if max_selections is not None else group.max_selections),
+            sort_order=sort_order if sort_order is not None else group.sort_order,
+            updated_at=datetime.now(UTC),
+        )
+        _validate_group(updated.selection_type, updated.min_selections, updated.max_selections)
+        active_defaults = sum(option.is_default and option.is_active for option in updated.options)
+        if active_defaults > updated.max_selections:
+            raise MenuConflict("Default options exceed max selections")
+        return await self._write(self.repository.update_modifier_group(updated))
+
+    async def archive_modifier_group(self, context: TenantContext, group_id: UUID) -> ModifierGroup:
+        group = await self._modifier_group(context.organization_id, group_id)
+        if not group.is_active:
+            raise InvalidMenuOperation("Modifier group is already archived")
+        return await self._write(
+            self.repository.update_modifier_group(
+                replace(group, is_active=False, updated_at=datetime.now(UTC))
+            )
+        )
+
+    async def create_modifier_option(
+        self,
+        context: TenantContext,
+        group_id: UUID,
+        name: str,
+        base_price_delta_minor: int,
+        is_default: bool,
+        sort_order: int,
+    ) -> ModifierOption:
+        group = await self._modifier_group(context.organization_id, group_id)
+        if not group.is_active:
+            raise InvalidMenuOperation("Cannot add options to an archived modifier group")
+        _validate_minor(base_price_delta_minor)
+        if is_default and sum(value.is_default and value.is_active for value in group.options) >= (
+            group.max_selections
+        ):
+            raise MenuConflict("Default options exceed max selections")
+        now = datetime.now(UTC)
+        return await self._write(
+            self.repository.add_modifier_option(
+                ModifierOption(
+                    uuid4(),
+                    context.organization_id,
+                    group_id,
+                    normalized_name(name, 150),
+                    base_price_delta_minor,
+                    is_default,
+                    sort_order,
+                    True,
+                    now,
+                    now,
+                )
+            )
+        )
+
+    async def update_modifier_option(
+        self,
+        context: TenantContext,
+        option_id: UUID,
+        *,
+        name: str | None,
+        base_price_delta_minor: int | None,
+        is_default: bool | None,
+        sort_order: int | None,
+    ) -> ModifierOption:
+        option = await self._editable_modifier_option(context.organization_id, option_id)
+        if not option.is_active:
+            raise InvalidMenuOperation("Archived modifier options cannot be updated")
+        group = await self._modifier_group(context.organization_id, option.modifier_group_id)
+        if not group.is_active:
+            raise InvalidMenuOperation("Archived modifier groups cannot be updated")
+        if base_price_delta_minor is not None:
+            _validate_minor(base_price_delta_minor)
+        next_default = is_default if is_default is not None else option.is_default
+        if next_default and not option.is_default:
+            if sum(value.is_default and value.is_active for value in group.options) >= (
+                group.max_selections
+            ):
+                raise MenuConflict("Default options exceed max selections")
+        updated = replace(
+            option,
+            name=normalized_name(name, 150) if name is not None else option.name,
+            base_price_delta_minor=(
+                base_price_delta_minor
+                if base_price_delta_minor is not None
+                else option.base_price_delta_minor
+            ),
+            is_default=next_default,
+            sort_order=sort_order if sort_order is not None else option.sort_order,
+            updated_at=datetime.now(UTC),
+        )
+        return await self._write(self.repository.update_modifier_option(updated))
+
+    async def archive_modifier_option(
+        self, context: TenantContext, option_id: UUID
+    ) -> ModifierOption:
+        option = await self._editable_modifier_option(context.organization_id, option_id)
+        if not option.is_active:
+            raise InvalidMenuOperation("Modifier option is already archived")
+        return await self._write(
+            self.repository.update_modifier_option(
+                replace(option, is_active=False, is_default=False, updated_at=datetime.now(UTC))
+            )
+        )
+
+    async def replace_modifier_components(
+        self,
+        context: TenantContext,
+        option_id: UUID,
+        inputs: tuple[ModifierComponentInput, ...],
+    ) -> ModifierOption:
+        option = await self._editable_modifier_option(context.organization_id, option_id)
+        if not option.is_active:
+            raise InvalidMenuOperation("Archived modifier options cannot be updated")
+        if any(
+            not value.quantity_delta.is_finite() or value.quantity_delta == 0 for value in inputs
+        ):
+            raise ValueError("Modifier component quantity_delta must be non-zero")
+        item_ids = tuple(value.inventory_item_id for value in inputs)
+        if len(item_ids) != len(set(item_ids)):
+            raise MenuConflict("Modifier ingredients must be unique")
+        items = await self.inventory.get_items(context.organization_id, item_ids)
+        if set(items) != set(item_ids):
+            raise MenuNotFound("Inventory item not found")
+        now = datetime.now(UTC)
+        updated = replace(
+            option,
+            components=tuple(
+                ModifierOptionComponent(
+                    uuid4(),
+                    option.id,
+                    value.inventory_item_id,
+                    to_base_quantity(
+                        value.quantity_delta,
+                        value.unit,
+                        items[value.inventory_item_id].base_unit,
+                    ),
+                    value.sort_order,
+                    now,
+                    now,
+                )
+                for value in inputs
+            ),
+            updated_at=now,
+        )
+        saved = await self._write(self.repository.replace_modifier_components(updated))
+        return (await self.list_modifier_groups_for_option(context, saved.id))[1]
+
+    async def list_modifier_groups_for_option(
+        self, context: TenantContext, option_id: UUID, location_id: UUID | None = None
+    ) -> tuple[ModifierGroup, ModifierOption]:
+        option = await self._modifier_option(context.organization_id, option_id)
+        group = await self._modifier_group(context.organization_id, option.modifier_group_id)
+        groups = await self.list_modifier_groups(context, group.product_variant_id, location_id)
+        projected_group = next(value for value in groups if value.id == group.id)
+        return projected_group, next(
+            value for value in projected_group.options if value.id == option_id
+        )
+
+    async def set_modifier_option_price(
+        self,
+        context: TenantContext,
+        option_id: UUID,
+        location_id: UUID,
+        price_delta_minor: int,
+    ) -> ModifierOptionPrice:
+        await self._editable_modifier_option(context.organization_id, option_id)
+        await self.organizations.ensure_location_access(context, location_id)
+        _validate_minor(price_delta_minor)
+        now = datetime.now(UTC)
+        return await self._write(
+            self.repository.set_modifier_option_price(
+                ModifierOptionPrice(
+                    uuid4(),
+                    context.organization_id,
+                    location_id,
+                    option_id,
+                    price_delta_minor,
+                    now,
+                    now,
+                )
+            )
+        )
+
+    async def delete_modifier_option_price(
+        self, context: TenantContext, option_id: UUID, location_id: UUID
+    ) -> None:
+        await self._editable_modifier_option(context.organization_id, option_id)
+        await self.organizations.ensure_location_access(context, location_id)
+        try:
+            await self.repository.delete_modifier_option_price(
+                context.organization_id, option_id, location_id
+            )
+            await self.repository.commit()
+        except Exception:
+            await self.repository.rollback()
+            raise
+
+    async def set_modifier_option_location(
+        self,
+        context: TenantContext,
+        option_id: UUID,
+        location_id: UUID,
+        is_available: bool,
+    ) -> ModifierOptionLocationSetting:
+        await self._editable_modifier_option(context.organization_id, option_id)
+        await self.organizations.ensure_location_access(context, location_id)
+        now = datetime.now(UTC)
+        return await self._write(
+            self.repository.set_modifier_option_location(
+                ModifierOptionLocationSetting(
+                    uuid4(),
+                    context.organization_id,
+                    location_id,
+                    option_id,
+                    is_available,
+                    now,
+                    now,
+                )
+            )
+        )
+
     async def get_menu(self, context: TenantContext, location_id: UUID) -> list[Product]:
         await self.organizations.ensure_location_access(context, location_id)
         products = await self.repository.list_products(
@@ -690,7 +1029,19 @@ class MenuService:
             projected = replace(
                 product,
                 variants=tuple(
-                    variant
+                    replace(
+                        variant,
+                        modifier_groups=tuple(
+                            replace(
+                                group,
+                                options=tuple(
+                                    option for option in group.options if option.is_active
+                                ),
+                            )
+                            for group in variant.modifier_groups
+                            if group.is_active
+                        ),
+                    )
                     for variant in product.variants
                     if variant.status == ProductStatus.ACTIVE
                 ),
@@ -751,6 +1102,27 @@ class MenuService:
             raise MenuNotFound("Variant not found")
         return value
 
+    async def _modifier_group(self, organization_id: UUID, group_id: UUID) -> ModifierGroup:
+        value = await self.repository.get_modifier_group(organization_id, group_id)
+        if value is None:
+            raise MenuNotFound("Modifier group not found")
+        return value
+
+    async def _modifier_option(self, organization_id: UUID, option_id: UUID) -> ModifierOption:
+        value = await self.repository.get_modifier_option(organization_id, option_id)
+        if value is None:
+            raise MenuNotFound("Modifier option not found")
+        return value
+
+    async def _editable_modifier_option(
+        self, organization_id: UUID, option_id: UUID
+    ) -> ModifierOption:
+        option = await self._modifier_option(organization_id, option_id)
+        group = await self._modifier_group(organization_id, option.modifier_group_id)
+        if not option.is_active or not group.is_active:
+            raise InvalidMenuOperation("Archived modifier options cannot be updated")
+        return option
+
     async def _write(self, operation, events: tuple[object, ...] = ()):
         try:
             result = await operation
@@ -801,6 +1173,20 @@ class MenuService:
 
 def _six(value: Decimal) -> Decimal:
     return value.quantize(_SIX, rounding=ROUND_HALF_UP)
+
+
+def _validate_group(
+    selection_type: ModifierSelectionType, min_selections: int, max_selections: int
+) -> None:
+    if min_selections < 0 or max_selections < 1 or min_selections > max_selections:
+        raise ValueError("Invalid modifier selection limits")
+    if selection_type == ModifierSelectionType.SINGLE and max_selections != 1:
+        raise ValueError("SINGLE modifier groups must have max_selections=1")
+
+
+def _validate_minor(value: int) -> None:
+    if not 0 <= value <= 9223372036854775807:
+        raise ValueError("Price delta must be non-negative")
 
 
 def _cost_result(

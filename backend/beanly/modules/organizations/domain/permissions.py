@@ -32,6 +32,7 @@ class Permission(StrEnum):
     MENU_RECIPE_READ = "menu.recipe.read"
     MENU_RECIPE_WRITE = "menu.recipe.write"
     MENU_PRICE_WRITE = "menu.price.write"
+    MENU_MODIFIER_WRITE = "menu.modifier.write"
     SALES_READ = "sales.read"
     SALES_READ_OWN = "sales.read_own"
     SALES_CREATE = "sales.create"
@@ -75,6 +76,7 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.MENU_RECIPE_READ,
             Permission.MENU_RECIPE_WRITE,
             Permission.MENU_PRICE_WRITE,
+            Permission.MENU_MODIFIER_WRITE,
             Permission.SALES_READ,
             Permission.SALES_CREATE,
             Permission.SALES_REFUND,
@@ -107,6 +109,7 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.MENU_RECIPE_READ,
             Permission.MENU_RECIPE_WRITE,
             Permission.MENU_PRICE_WRITE,
+            Permission.MENU_MODIFIER_WRITE,
             Permission.SALES_READ,
             Permission.ANALYTICS_READ,
         }

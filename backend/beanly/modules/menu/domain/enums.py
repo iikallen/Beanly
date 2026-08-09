@@ -10,3 +10,8 @@ class ProductStatus(StrEnum):
 class RecipeCostStatus(StrEnum):
     COMPLETE = "COMPLETE"
     INCOMPLETE = "INCOMPLETE"
+
+
+class ModifierSelectionType(StrEnum):
+    SINGLE = "SINGLE"
+    MULTIPLE = "MULTIPLE"

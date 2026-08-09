@@ -18,3 +18,11 @@ class RecipeComponentInput:
     quantity: Decimal
     unit: UnitCode
     sort_order: int
+
+
+@dataclass(frozen=True, slots=True)
+class ModifierComponentInput:
+    inventory_item_id: UUID
+    quantity_delta: Decimal
+    unit: UnitCode
+    sort_order: int

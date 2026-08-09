@@ -103,6 +103,9 @@ class ProductVariantModel(Base):
     recipe: Mapped["RecipeModel | None"] = relationship(
         back_populates="variant", cascade="all, delete-orphan", uselist=False
     )
+    modifier_groups: Mapped[list["ModifierGroupModel"]] = relationship(
+        back_populates="variant", cascade="all, delete-orphan"
+    )
 
 
 class VariantPriceModel(Base):
@@ -189,3 +192,133 @@ class RecipeComponentModel(Base):
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
     recipe: Mapped[RecipeModel] = relationship(back_populates="components")
+
+
+class ModifierGroupModel(Base):
+    __tablename__ = "modifier_groups"
+    __table_args__ = (
+        CheckConstraint(
+            "selection_type IN ('SINGLE', 'MULTIPLE')", name="ck_modifier_group_selection_type"
+        ),
+        CheckConstraint("min_selections >= 0", name="ck_modifier_group_min_nonnegative"),
+        CheckConstraint("max_selections >= 1", name="ck_modifier_group_max_positive"),
+        CheckConstraint("min_selections <= max_selections", name="ck_modifier_group_min_max"),
+        CheckConstraint(
+            "selection_type <> 'SINGLE' OR max_selections = 1",
+            name="ck_modifier_group_single_max",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    organization_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("organizations.id"), index=True)
+    product_variant_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("product_variants.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(150))
+    selection_type: Mapped[str] = mapped_column(String(16))
+    min_selections: Mapped[int] = mapped_column()
+    max_selections: Mapped[int] = mapped_column()
+    sort_order: Mapped[int] = mapped_column(default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+    variant: Mapped[ProductVariantModel] = relationship(back_populates="modifier_groups")
+    options: Mapped[list["ModifierOptionModel"]] = relationship(
+        back_populates="group", cascade="all, delete-orphan"
+    )
+
+
+class ModifierOptionModel(Base):
+    __tablename__ = "modifier_options"
+    __table_args__ = (
+        CheckConstraint("base_price_delta_minor >= 0", name="ck_modifier_option_price_nonnegative"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    organization_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("organizations.id"), index=True)
+    modifier_group_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("modifier_groups.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(150))
+    base_price_delta_minor: Mapped[int] = mapped_column(BigInteger)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    sort_order: Mapped[int] = mapped_column(default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+    group: Mapped[ModifierGroupModel] = relationship(back_populates="options")
+    components: Mapped[list["ModifierOptionComponentModel"]] = relationship(
+        back_populates="option", cascade="all, delete-orphan"
+    )
+    prices: Mapped[list["ModifierOptionPriceModel"]] = relationship(
+        back_populates="option", cascade="all, delete-orphan"
+    )
+    location_settings: Mapped[list["ModifierOptionLocationSettingModel"]] = relationship(
+        back_populates="option", cascade="all, delete-orphan"
+    )
+
+
+class ModifierOptionComponentModel(Base):
+    __tablename__ = "modifier_option_components"
+    __table_args__ = (
+        UniqueConstraint("modifier_option_id", "inventory_item_id"),
+        CheckConstraint("quantity_delta <> 0", name="ck_modifier_component_quantity_nonzero"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    modifier_option_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("modifier_options.id", ondelete="CASCADE"), index=True
+    )
+    inventory_item_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("inventory_items.id"), index=True
+    )
+    quantity_delta: Mapped[Decimal] = mapped_column(Numeric(20, 6))
+    sort_order: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+    option: Mapped[ModifierOptionModel] = relationship(back_populates="components")
+
+
+class ModifierOptionPriceModel(Base):
+    __tablename__ = "modifier_option_prices"
+    __table_args__ = (
+        UniqueConstraint("location_id", "modifier_option_id"),
+        CheckConstraint("price_delta_minor >= 0", name="ck_modifier_price_nonnegative"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    organization_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("organizations.id"), index=True)
+    location_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("locations.id"), index=True)
+    modifier_option_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("modifier_options.id", ondelete="CASCADE"), index=True
+    )
+    price_delta_minor: Mapped[int] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+    option: Mapped[ModifierOptionModel] = relationship(back_populates="prices")
+
+
+class ModifierOptionLocationSettingModel(Base):
+    __tablename__ = "modifier_option_location_settings"
+    __table_args__ = (UniqueConstraint("location_id", "modifier_option_id"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    organization_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("organizations.id"), index=True)
+    location_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("locations.id"), index=True)
+    modifier_option_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("modifier_options.id", ondelete="CASCADE"), index=True
+    )
+    is_available: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+    option: Mapped[ModifierOptionModel] = relationship(back_populates="location_settings")

@@ -6,6 +6,7 @@ from beanly.modules.identity.api.dependencies import SessionDep
 from beanly.modules.inventory.infrastructure.db.repositories import (
     SqlAlchemyInventoryRepository,
 )
+from beanly.modules.menu.application.customization_service import CustomizationService
 from beanly.modules.menu.application.services import MenuService
 from beanly.modules.menu.infrastructure.db.repositories import SqlAlchemyMenuRepository
 from beanly.modules.menu.infrastructure.inventory_gateway import InventoryApplicationGateway
@@ -30,6 +31,18 @@ def menu_service(session: SessionDep) -> MenuService:
 
 
 MenuServiceDep = Annotated[MenuService, Depends(menu_service)]
+
+
+def customization_service(session: SessionDep) -> CustomizationService:
+    inventory_repository = SqlAlchemyInventoryRepository(session)
+    return CustomizationService(
+        SqlAlchemyMenuRepository(session),
+        InventoryApplicationGateway(inventory_repository),
+        OrganizationService(SqlAlchemyOrganizationRepository(session)),
+    )
+
+
+CustomizationServiceDep = Annotated[CustomizationService, Depends(customization_service)]
 
 
 def _permission(*required: Permission):
@@ -65,4 +78,12 @@ MenuRecipeWriteDep = Annotated[
 MenuPriceWriteDep = Annotated[
     TenantContext,
     Depends(_permission(Permission.MENU_PRICE_WRITE, Permission.MENU_WRITE)),
+]
+MenuModifierWriteDep = Annotated[
+    TenantContext,
+    Depends(_permission(Permission.MENU_MODIFIER_WRITE)),
+]
+MenuModifierReadDep = Annotated[
+    TenantContext,
+    Depends(_permission(Permission.MENU_RECIPE_READ, Permission.MENU_MODIFIER_WRITE)),
 ]

@@ -34,8 +34,13 @@ from beanly.modules.inventory.domain.value_objects import UnitCode
 from beanly.modules.inventory.infrastructure.db.repositories import (
     SqlAlchemyInventoryRepository,
 )
-from beanly.modules.menu.application.commands import RecipeComponentInput, VariantInput
+from beanly.modules.menu.application.commands import (
+    ModifierComponentInput,
+    RecipeComponentInput,
+    VariantInput,
+)
 from beanly.modules.menu.application.services import MenuService
+from beanly.modules.menu.domain.enums import ModifierSelectionType
 from beanly.modules.menu.domain.exceptions import InvalidMenuOperation
 from beanly.modules.menu.infrastructure.db.repositories import SqlAlchemyMenuRepository
 from beanly.modules.menu.infrastructure.inventory_gateway import (
@@ -117,6 +122,14 @@ MENU_TABLES = {
     "recipes",
     "recipe_components",
 }
+MENU_MODIFIER_TABLES = {
+    "modifier_groups",
+    "modifier_options",
+    "modifier_option_components",
+    "modifier_option_prices",
+    "modifier_option_location_settings",
+}
+MENU_TABLES |= MENU_MODIFIER_TABLES
 APPLICATION_TABLES = (
     ORGANIZATION_TABLES
     | TEAM_TABLES
@@ -162,6 +175,10 @@ def _inspect_schema(sync) -> dict:
         }
         for table in APPLICATION_TABLES & tables
     }
+    check_constraints = {
+        table: {constraint["name"] for constraint in inspector.get_check_constraints(table)}
+        for table in APPLICATION_TABLES & tables
+    }
     primary_keys = {
         table: tuple(inspector.get_pk_constraint(table)["constrained_columns"])
         for table in APPLICATION_TABLES & tables
@@ -173,6 +190,7 @@ def _inspect_schema(sync) -> dict:
         "indexes": indexes,
         "foreign_keys": foreign_keys,
         "unique_constraints": unique_constraints,
+        "check_constraints": check_constraints,
         "primary_keys": primary_keys,
         "revision": revision,
     }
@@ -1087,6 +1105,84 @@ async def test_postgres_menu_recipe_and_default_variant_concurrency(
                 )
                 is False
             )
+
+        async with sessions() as session:
+            menu = service(session)
+            modifier_category = await menu.create_category(context, "Modifiers", 2)
+            modifier_product = await menu.create_product(
+                context,
+                modifier_category.id,
+                "Modifier concurrency",
+                None,
+                None,
+                VariantInput("Default", None, 10000),
+            )
+            modifier_variant_id = modifier_product.variants[0].id
+            modifier_group = await menu.create_modifier_group(
+                context,
+                modifier_variant_id,
+                "Extras",
+                ModifierSelectionType.MULTIPLE,
+                0,
+                2,
+                0,
+            )
+            modifier_option = await menu.create_modifier_option(
+                context, modifier_group.id, "Extra coffee", 5000, False, 0
+            )
+
+        async def replace_modifier(quantity: str):
+            async with sessions() as session:
+                return await service(session).replace_modifier_components(
+                    context,
+                    modifier_option.id,
+                    (
+                        ModifierComponentInput(
+                            item_id, Decimal(quantity), UnitCode.G, 0
+                        ),
+                    ),
+                )
+
+        await asyncio.gather(replace_modifier("18"), replace_modifier("20"))
+        async with engine.connect() as connection:
+            rows = (
+                await connection.execute(
+                    text(
+                        "SELECT quantity_delta FROM modifier_option_components "
+                        "WHERE modifier_option_id=:option_id"
+                    ),
+                    {"option_id": modifier_option.id},
+                )
+            ).scalars().all()
+            assert len(rows) == 1
+            assert rows[0] in {Decimal("18.000000"), Decimal("20.000000")}
+
+        async with engine.connect() as blocker:
+            transaction = await blocker.begin()
+            await blocker.execute(
+                text("SELECT id FROM modifier_groups WHERE id=:id FOR UPDATE"),
+                {"id": modifier_group.id},
+            )
+            pending_replacement = asyncio.create_task(replace_modifier("22"))
+            await asyncio.sleep(0.1)
+            await blocker.execute(
+                text("UPDATE modifier_groups SET is_active=false WHERE id=:id"),
+                {"id": modifier_group.id},
+            )
+            await transaction.commit()
+        with pytest.raises(InvalidMenuOperation, match="Archived modifier groups"):
+            await pending_replacement
+        async with engine.connect() as connection:
+            assert (
+                await connection.scalar(
+                    text(
+                        "SELECT count(*) FROM modifier_option_components "
+                        "WHERE modifier_option_id=:option_id"
+                    ),
+                    {"option_id": modifier_option.id},
+                )
+                == 1
+            )
     finally:
         await engine.dispose()
 
@@ -1330,7 +1426,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
             "alembic_version",
             *APPLICATION_TABLES,
         } <= upgraded["tables"]
-        assert upgraded["revision"] == "0008_menu"
+        assert upgraded["revision"] == "0009_modifiers"
         assert await membership_state(test_url, legacy_membership_id) == ("ACTIVE", "ALL")
         assert set(upgraded["columns"]["organizations"]) == {
             "id",
@@ -1614,6 +1710,48 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
             "locations",
         ) in upgraded["foreign_keys"]["variant_prices"]
         assert upgraded["columns"]["recipes"]["updated_at"]["type"].timezone
+        assert str(upgraded["columns"]["modifier_option_components"]["quantity_delta"]["type"]) == (
+            "NUMERIC(20, 6)"
+        )
+        assert str(upgraded["columns"]["modifier_options"]["base_price_delta_minor"]["type"]) == (
+            "BIGINT"
+        )
+        assert (
+            "modifier_option_id",
+            "inventory_item_id",
+        ) in upgraded["unique_constraints"]["modifier_option_components"]
+        assert (
+            "location_id",
+            "modifier_option_id",
+        ) in upgraded["unique_constraints"]["modifier_option_prices"]
+        assert (
+            "location_id",
+            "modifier_option_id",
+        ) in upgraded["unique_constraints"]["modifier_option_location_settings"]
+        assert (
+            ("product_variant_id",),
+            "product_variants",
+        ) in upgraded["foreign_keys"]["modifier_groups"]
+        assert (
+            ("inventory_item_id",),
+            "inventory_items",
+        ) in upgraded["foreign_keys"]["modifier_option_components"]
+        assert {
+            "ck_modifier_group_selection_type",
+            "ck_modifier_group_min_nonnegative",
+            "ck_modifier_group_max_positive",
+            "ck_modifier_group_min_max",
+            "ck_modifier_group_single_max",
+        } <= upgraded["check_constraints"]["modifier_groups"]
+        assert {"ck_modifier_option_price_nonnegative"} <= upgraded["check_constraints"][
+            "modifier_options"
+        ]
+        assert {"ck_modifier_component_quantity_nonzero"} <= upgraded[
+            "check_constraints"
+        ]["modifier_option_components"]
+        assert {"ck_modifier_price_nonnegative"} <= upgraded["check_constraints"][
+            "modifier_option_prices"
+        ]
 
         legacy_engine = create_async_engine(test_url)
         try:
@@ -1646,6 +1784,13 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
                 )
         finally:
             await legacy_engine.dispose()
+
+        await asyncio.to_thread(command.downgrade, config, "0008_menu")
+        modifiers_downgraded = await database_snapshot(test_url)
+        assert not MENU_MODIFIER_TABLES & modifiers_downgraded["tables"]
+        assert (MENU_TABLES - MENU_MODIFIER_TABLES) <= modifiers_downgraded["tables"]
+        assert modifiers_downgraded["revision"] == "0008_menu"
+        await asyncio.to_thread(command.upgrade, config, "head")
 
         await asyncio.to_thread(command.downgrade, config, "0007_inventory_valuation")
         menu_downgraded = await database_snapshot(test_url)
@@ -1777,7 +1922,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
         await asyncio.to_thread(command.upgrade, config, "head")
         reupgraded = await database_snapshot(test_url)
         assert APPLICATION_TABLES <= reupgraded["tables"]
-        assert reupgraded["revision"] == "0008_menu"
+        assert reupgraded["revision"] == "0009_modifiers"
         assert await membership_state(test_url, legacy_membership_id) == ("ACTIVE", "ALL")
     finally:
         await admin_engine.dispose()

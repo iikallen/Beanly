@@ -159,6 +159,84 @@ export type ProductVariant = {
   sort_order: number;
   created_at: string;
   updated_at: string;
+  modifier_groups?: ModifierGroupMenu[];
+};
+
+export type ModifierSelectionType = "SINGLE" | "MULTIPLE";
+
+export type ModifierOptionComponent = {
+  id?: string;
+  modifier_option_id?: string;
+  inventory_item_id: string;
+  quantity_delta: string;
+  sort_order: number;
+  item_name?: string;
+  base_unit?: InventoryUnitCode;
+};
+
+export type ModifierOptionMenu = {
+  id: string;
+  name: string;
+  base_price_delta_minor: string;
+  location_price_delta_minor: string | null;
+  effective_price_delta_minor: string;
+  is_default: boolean;
+  sort_order: number;
+  is_available: boolean;
+};
+
+export type ModifierOption = ModifierOptionMenu & {
+  organization_id: string;
+  modifier_group_id: string;
+  is_active: boolean;
+  component_count?: number;
+  components: ModifierOptionComponent[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type ModifierGroupMenu = {
+  id: string;
+  name: string;
+  selection_type: ModifierSelectionType;
+  min_selections: number;
+  max_selections: number;
+  sort_order: number;
+  is_active: boolean;
+  options: ModifierOptionMenu[];
+};
+
+export type ModifierGroup = Omit<ModifierGroupMenu, "options"> & {
+  organization_id: string;
+  product_variant_id: string;
+  is_active: boolean;
+  options: ModifierOption[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type CustomizationPreview = {
+  variant_id: string;
+  selected_option_ids: string[];
+  base_price_minor: string;
+  modifier_price_minor: string;
+  final_price_minor: string;
+  base_recipe_cost: string | null;
+  modifier_cost_delta: string | null;
+  final_cost: string | null;
+  food_cost_percent: string | null;
+  gross_profit: string | null;
+  gross_margin_percent: string | null;
+  status: RecipeCostStatus;
+  missing_cost_items: string[];
+  effective_components: Array<{
+    inventory_item_id: string;
+    name: string;
+    quantity: string;
+    base_unit: InventoryUnitCode;
+    unit_cost: string | null;
+    cost: string | null;
+  }>;
 };
 
 export type MenuProduct = {
@@ -839,6 +917,131 @@ export const api = {
     request<Recipe>(`/api/v1/menu/variants/${variantId}/recipe`, {
       headers: tenantAuthorization(organizationId, accessToken),
     }),
+  listModifierGroups: (
+    variantId: string,
+    organizationId: string,
+    accessToken: string,
+    locationId?: string,
+  ) =>
+    request<ModifierGroup[]>(
+      `/api/v1/menu/variants/${variantId}/modifier-groups${locationId ? `?${new URLSearchParams({ location_id: locationId })}` : ""}`,
+      { headers: tenantAuthorization(organizationId, accessToken) },
+    ),
+  createModifierGroup: (
+    variantId: string,
+    input: Pick<ModifierGroup, "name" | "selection_type" | "min_selections" | "max_selections" | "sort_order">,
+    organizationId: string,
+    accessToken: string,
+  ) =>
+    request<ModifierGroup>(`/api/v1/menu/variants/${variantId}/modifier-groups`, {
+      method: "POST",
+      body: JSON.stringify(input),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  updateModifierGroup: (
+    groupId: string,
+    input: Partial<Pick<ModifierGroup, "name" | "selection_type" | "min_selections" | "max_selections" | "sort_order">>,
+    organizationId: string,
+    accessToken: string,
+  ) =>
+    request<ModifierGroup>(`/api/v1/menu/modifier-groups/${groupId}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  archiveModifierGroup: (groupId: string, organizationId: string, accessToken: string) =>
+    request<ModifierGroup>(`/api/v1/menu/modifier-groups/${groupId}/archive`, {
+      method: "POST",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  createModifierOption: (
+    groupId: string,
+    input: Pick<ModifierOption, "name" | "base_price_delta_minor" | "is_default" | "sort_order">,
+    organizationId: string,
+    accessToken: string,
+  ) =>
+    request<ModifierOption>(`/api/v1/menu/modifier-groups/${groupId}/options`, {
+      method: "POST",
+      body: JSON.stringify(input),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  updateModifierOption: (
+    optionId: string,
+    input: Partial<Pick<ModifierOption, "name" | "base_price_delta_minor" | "is_default" | "sort_order">>,
+    organizationId: string,
+    accessToken: string,
+  ) =>
+    request<ModifierOption>(`/api/v1/menu/modifier-options/${optionId}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  archiveModifierOption: (optionId: string, organizationId: string, accessToken: string) =>
+    request<ModifierOption>(`/api/v1/menu/modifier-options/${optionId}/archive`, {
+      method: "POST",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  setModifierComponents: (
+    optionId: string,
+    components: Array<Pick<ModifierOptionComponent, "inventory_item_id" | "quantity_delta" | "sort_order"> & { unit: InventoryUnitCode }>,
+    organizationId: string,
+    accessToken: string,
+  ) =>
+    request<ModifierOption>(`/api/v1/menu/modifier-options/${optionId}/components`, {
+      method: "PUT",
+      body: JSON.stringify({ components }),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  setModifierLocationPrice: (
+    optionId: string,
+    locationId: string,
+    priceDeltaMinor: string,
+    organizationId: string,
+    accessToken: string,
+  ) =>
+    request<ModifierOption>(`/api/v1/menu/modifier-options/${optionId}/prices/${locationId}`, {
+      method: "PUT",
+      body: JSON.stringify({ price_delta_minor: priceDeltaMinor }),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  deleteModifierLocationPrice: (
+    optionId: string,
+    locationId: string,
+    organizationId: string,
+    accessToken: string,
+  ) =>
+    request<void>(`/api/v1/menu/modifier-options/${optionId}/prices/${locationId}`, {
+      method: "DELETE",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  setModifierLocationAvailability: (
+    optionId: string,
+    locationId: string,
+    isAvailable: boolean,
+    organizationId: string,
+    accessToken: string,
+  ) =>
+    request<ModifierOption>(`/api/v1/menu/modifier-options/${optionId}/locations/${locationId}`, {
+      method: "PUT",
+      body: JSON.stringify({ is_available: isAvailable }),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  previewCustomization: (
+    variantId: string,
+    selectedOptionIds: string[],
+    warehouseId: string,
+    locationId: string,
+    organizationId: string,
+    accessToken: string,
+  ) =>
+    request<CustomizationPreview>(
+      `/api/v1/menu/variants/${variantId}/customization-preview?${new URLSearchParams({ warehouse_id: warehouseId, location_id: locationId })}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ selected_option_ids: selectedOptionIds }),
+        headers: tenantAuthorization(organizationId, accessToken),
+      },
+    ),
   setVariantRecipe: (
     variantId: string,
     input: {
