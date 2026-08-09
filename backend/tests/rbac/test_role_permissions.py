@@ -73,6 +73,9 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.SALES_REGISTER_MANAGE,
                 Permission.SALES_SHIFT_MANAGE,
                 Permission.SALES_CANCEL,
+                Permission.PAYMENTS_READ,
+                Permission.PAYMENTS_CREATE,
+                Permission.PAYMENTS_REFUND,
                 Permission.ANALYTICS_READ,
             }
         ),

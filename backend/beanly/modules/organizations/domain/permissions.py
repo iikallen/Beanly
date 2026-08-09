@@ -120,6 +120,9 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.SALES_REGISTER_MANAGE,
             Permission.SALES_SHIFT_MANAGE,
             Permission.SALES_CANCEL,
+            Permission.PAYMENTS_READ,
+            Permission.PAYMENTS_CREATE,
+            Permission.PAYMENTS_REFUND,
             Permission.ANALYTICS_READ,
         }
     ),

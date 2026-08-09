@@ -20,6 +20,9 @@ import {
   api,
   type MenuProduct,
   type MenuReadModel,
+  type Payment,
+  type PaymentMethod,
+  type PaymentMethodChoice,
   type PosRegister,
   type PosWarehouseChoice,
   type ProductVariant,
@@ -28,7 +31,8 @@ import {
   type SalesOrderItem,
   type SalesOrderType,
 } from "@/lib/api";
-import { formatMenuPriceMinor } from "@/lib/menu";
+import { formatMenuPriceMinor, parseMenuPriceToMinor, priceMinorToInput } from "@/lib/menu";
+import { paymentRequest, type PaymentMode } from "@/lib/payment";
 
 type ConfigurationTarget = {
   product: MenuProduct;
@@ -57,10 +61,22 @@ export default function PosPage() {
   const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
   const [cancelReason, setCancelReason] = useState("");
   const [showCancelDialog, setShowCancelDialog] = useState(false);
+  const [paymentOrder, setPaymentOrder] = useState<SalesOrder | null>(null);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethodChoice[]>([]);
+  const [paymentMode, setPaymentMode] = useState<PaymentMode>(null);
+  const [paymentCashReceived, setPaymentCashReceived] = useState("");
+  const [splitCash, setSplitCash] = useState("");
+  const [splitCard, setSplitCard] = useState("");
+  const [splitOther, setSplitOther] = useState("");
+  const [paymentReference, setPaymentReference] = useState("");
+  const [completedPayment, setCompletedPayment] = useState<Payment | null>(null);
+  const [paymentBusy, setPaymentBusy] = useState(false);
+  const [paymentError, setPaymentError] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const pendingOrderId = useRef<string | null>(null);
+  const pendingPayment = useRef<{ id: string; payload: string } | null>(null);
 
   const organizationId = currentOrganization?.id;
   const locationId = currentLocation?.id;
@@ -69,6 +85,7 @@ export default function PosPage() {
   const canManageRegister = permissions.includes("sales.register.manage");
   const canManageShift = permissions.includes("sales.shift.manage");
   const canCancel = permissions.includes("sales.cancel");
+  const canPay = permissions.includes("payments.create");
   const currentOrder = orders.find((order) => order.id === currentOrderId) ?? null;
   const selectedRegister = registers.find((register) => register.id === selectedRegisterId);
 
@@ -99,6 +116,11 @@ export default function PosPage() {
             ? current
             : nextRegisters.find((register) => register.is_active)?.id ?? "",
         );
+        const nextPaymentMethods = context.permissions.includes("payments.create")
+          ? await api.listPaymentMethods(organizationId, accessToken)
+          : [];
+        if (cancelled) return;
+        setPaymentMethods(nextPaymentMethods);
         try {
           const nextWarehouses = await api.listPosWarehouses(locationId, organizationId, accessToken);
           if (!cancelled) {
@@ -183,6 +205,22 @@ export default function PosPage() {
       !normalized || product.name.toLocaleLowerCase().includes(normalized),
     );
   }, [categoryId, menu, search]);
+
+  const paymentDraft = useMemo(() => paymentRequest({
+    mode: paymentMode,
+    totalMinor: paymentOrder?.total_minor ?? "0",
+    cashMinor: paymentInputMinor(splitCash),
+    cashReceivedMinor: paymentCashReceived.trim()
+      ? parseMenuPriceToMinor(paymentCashReceived)
+      : null,
+    cardMinor: paymentInputMinor(splitCard),
+    otherMinor: paymentInputMinor(splitOther),
+    otherReference: paymentReference,
+  }), [paymentCashReceived, paymentMode, paymentOrder?.total_minor, paymentReference, splitCard, splitCash, splitOther]);
+  const paymentMethodNames = useMemo(
+    () => new Map(paymentMethods.map((method) => [method.code, method.name])),
+    [paymentMethods],
+  );
 
   async function run(action: () => Promise<void>) {
     setBusy(true);
@@ -386,6 +424,80 @@ export default function PosPage() {
     setCancelReason("");
   }
 
+  function openPayment() {
+    if (!currentOrder || !canPay || currentOrder.items.length === 0) return;
+    setPaymentOrder(currentOrder);
+    setPaymentMode(null);
+    setPaymentCashReceived(priceMinorToInput(currentOrder.total_minor));
+    setSplitCash("");
+    setSplitCard(priceMinorToInput(currentOrder.total_minor));
+    setSplitOther("");
+    setPaymentReference("");
+    setCompletedPayment(null);
+    setPaymentError("");
+    pendingPayment.current = null;
+  }
+
+  function closePayment() {
+    if (paymentBusy) return;
+    setPaymentOrder(null);
+    setCompletedPayment(null);
+    setPaymentError("");
+    pendingPayment.current = null;
+  }
+
+  function choosePaymentMode(mode: PaymentMethod | "SPLIT") {
+    setPaymentMode(mode);
+    setPaymentError("");
+    if (mode === "CASH" && paymentOrder) {
+      setPaymentCashReceived(priceMinorToInput(paymentOrder.total_minor));
+    }
+  }
+
+  function updateSplitCash(value: string) {
+    setSplitCash(value);
+    setPaymentCashReceived(value);
+    const cashMinor = paymentInputMinor(value);
+    if (paymentOrder && cashMinor !== null && !splitOther.trim()) {
+      const remaining = BigInt(paymentOrder.total_minor) - BigInt(cashMinor);
+      if (remaining >= BigInt(0)) setSplitCard(priceMinorToInput(String(remaining)));
+    }
+  }
+
+  async function completePayment() {
+    if (!accessToken || !organizationId || !paymentOrder || paymentDraft.error) return;
+    const payload = JSON.stringify(paymentDraft.lines);
+    if (!pendingPayment.current || pendingPayment.current.payload !== payload) {
+      pendingPayment.current = { id: crypto.randomUUID(), payload };
+    }
+    setPaymentBusy(true);
+    setPaymentError("");
+    try {
+      const payment = await api.completePayment(
+        paymentOrder.id,
+        { client_payment_id: pendingPayment.current.id, lines: paymentDraft.lines },
+        organizationId,
+        accessToken,
+      );
+      setCompletedPayment(payment);
+      setOrders((current) => {
+        const remaining = current.filter((order) => order.id !== paymentOrder.id);
+        setCurrentOrderId(remaining[0]?.id ?? "");
+        return remaining;
+      });
+      pendingPayment.current = null;
+    } catch (caught) {
+      setPaymentError(messageOf(caught));
+    } finally {
+      setPaymentBusy(false);
+    }
+  }
+
+  async function startNewOrderAfterPayment() {
+    closePayment();
+    await createOrder();
+  }
+
   function editItemConfiguration(item: SalesOrderItem) {
     if (!canCreate) return;
     const product = menu?.categories.flatMap((category) => category.products)
@@ -536,7 +648,7 @@ export default function PosPage() {
                 {currentOrder.items.length === 0 && <div className="pos-receipt-empty"><ShoppingBag aria-hidden="true" /><p>Add a product to start this order.</p></div>}
               </div>
               <div className="pos-receipt-total"><span>Total</span><strong>{formatMenuPriceMinor(currentOrder.total_minor, currentOrder.currency_code)}</strong></div>
-              <button className="primary-button pos-pay-button" disabled type="button">Pay · Stage 11</button>
+              <button className="primary-button pos-pay-button" disabled={busy || !canPay || currentOrder.items.length === 0} type="button" onClick={openPayment}>Pay · {formatMenuPriceMinor(currentOrder.total_minor, currentOrder.currency_code)}</button>
               {canCancel && <button className="pos-cancel-order" disabled={busy} type="button" onClick={openCancelDialog}>Cancel order</button>}
             </>
           ) : (
@@ -585,8 +697,76 @@ export default function PosPage() {
           </div>
         </div>
       )}
+      {paymentOrder && (
+        <div className="modal-backdrop" role="presentation">
+          <div className="modal-card pos-payment-modal" role="dialog" aria-busy={paymentBusy} aria-modal="true" aria-labelledby="pos-payment-title" onKeyDown={(event) => { if (event.key === "Escape") closePayment(); }}>
+            <button className="modal-close" disabled={paymentBusy} type="button" aria-label="Close payment" onClick={closePayment}><X /></button>
+            {completedPayment ? (
+              <div className="pos-payment-success" role="status">
+                <span className="pos-payment-check" aria-hidden="true">✓</span>
+                <span className="pos-eyebrow">Payment successful</span>
+                <h2 id="pos-payment-title">Order #{paymentOrder.number}</h2>
+                <strong>{formatMenuPriceMinor(completedPayment.amount_minor, completedPayment.currency_code)}</strong>
+                <p>{completedPayment.lines.length > 0 ? completedPayment.lines.map((line) => paymentMethodNames.get(line.method) ?? line.method).join(" + ") : "Complimentary"}</p>
+                {completedPayment.lines.some((line) => BigInt(line.change_minor) > BigInt(0)) && (
+                  <p>Change · {formatMenuPriceMinor(String(completedPayment.lines.reduce((sum, line) => sum + BigInt(line.change_minor), BigInt(0))), completedPayment.currency_code)}</p>
+                )}
+                <div className="modal-actions">
+                  <button className="secondary-button" type="button" onClick={closePayment}>Done</button>
+                  {canCreate && <button className="primary-button" disabled={busy} type="button" onClick={startNewOrderAfterPayment}>+ New order</button>}
+                </div>
+              </div>
+            ) : (
+              <>
+                <span className="pos-eyebrow">Order #{paymentOrder.number}</span>
+                <h2 id="pos-payment-title">Payment</h2>
+                <div className="pos-payment-total"><span>Total</span><strong>{formatMenuPriceMinor(paymentOrder.total_minor, paymentOrder.currency_code)}</strong></div>
+                {BigInt(paymentOrder.total_minor) === BigInt(0) ? (
+                  <p className="pos-payment-free">No payment method is needed for this complimentary order.</p>
+                ) : (
+                  <>
+                    <div className="pos-payment-methods" role="group" aria-label="Payment method">
+                      {paymentMethods.map((method) => (
+                        <button autoFocus={method.code === "CASH"} className={paymentMode === method.code ? "is-active" : ""} disabled={paymentBusy} key={method.code} type="button" onClick={() => choosePaymentMode(method.code)}>{method.name}</button>
+                      ))}
+                      <button className={paymentMode === "SPLIT" ? "is-active" : ""} disabled={paymentBusy} type="button" onClick={() => choosePaymentMode("SPLIT")}>Split payment</button>
+                    </div>
+                    {paymentMode === "CASH" && (
+                      <div className="pos-payment-fields">
+                        <label className="modal-field"><span>Cash received</span><input autoFocus inputMode="decimal" placeholder="0" value={paymentCashReceived} onChange={(event) => setPaymentCashReceived(event.target.value)} /></label>
+                        <PaymentBalance label="Change" amount={paymentDraft.changeMinor} currency={paymentOrder.currency_code} />
+                      </div>
+                    )}
+                    {paymentMode === "CARD" && <p className="pos-payment-note">The full total will be recorded as a card payment.</p>}
+                    {paymentMode === "OTHER" && (
+                      <div className="pos-payment-fields"><label className="modal-field"><span>Reference (optional)</span><input autoFocus maxLength={200} placeholder="Provider or note" value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} /></label></div>
+                    )}
+                    {paymentMode === "SPLIT" && (
+                      <div className="pos-split-fields">
+                        <label className="modal-field"><span>Cash</span><input autoFocus inputMode="decimal" placeholder="0" value={splitCash} onChange={(event) => updateSplitCash(event.target.value)} /></label>
+                        <label className="modal-field"><span>Cash received</span><input inputMode="decimal" placeholder="0" value={paymentCashReceived} onChange={(event) => setPaymentCashReceived(event.target.value)} /></label>
+                        <label className="modal-field"><span>Card</span><input inputMode="decimal" placeholder="0" value={splitCard} onChange={(event) => setSplitCard(event.target.value)} /></label>
+                        <label className="modal-field"><span>Other</span><input inputMode="decimal" placeholder="0" value={splitOther} onChange={(event) => setSplitOther(event.target.value)} /></label>
+                        {BigInt(paymentDraft.changeMinor) > BigInt(0) && <PaymentBalance label="Cash change" amount={paymentDraft.changeMinor} currency={paymentOrder.currency_code} />}
+                        <PaymentBalance label={paymentDraft.remainingMinor < BigInt(0) ? "Over" : "Remaining"} amount={paymentDraft.remainingMinor < BigInt(0) ? -paymentDraft.remainingMinor : paymentDraft.remainingMinor} currency={paymentOrder.currency_code} />
+                      </div>
+                    )}
+                  </>
+                )}
+                {paymentMode && paymentDraft.error && <p className="form-message error" role="alert">{paymentDraft.error}</p>}
+                {paymentError && <p className="form-message error" role="alert">{paymentError}</p>}
+                <div className="modal-actions"><button className="secondary-button" disabled={paymentBusy} type="button" onClick={closePayment}>Cancel</button><button className="primary-button" disabled={paymentBusy || Boolean(paymentDraft.error)} type="button" onClick={completePayment}>{paymentBusy ? "Completing…" : "Complete payment"}</button></div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </section>
   );
+}
+
+function PaymentBalance({ label, amount, currency }: { label: string; amount: bigint; currency: string }) {
+  return <div className="pos-payment-balance"><span>{label}</span><strong>{formatMenuPriceMinor(String(amount), currency)}</strong></div>;
 }
 
 function configurationPrice(variant: ProductVariant, selectedOptionIds: string[]) {
@@ -607,6 +787,10 @@ function prettyOrderType(value: SalesOrderType) {
   if (value === "DINE_IN") return "Dine-in";
   if (value === "DELIVERY") return "Delivery";
   return "Takeaway";
+}
+
+function paymentInputMinor(value: string) {
+  return value.trim() ? parseMenuPriceToMinor(value) : "0";
 }
 
 function formatTime(value: string) {

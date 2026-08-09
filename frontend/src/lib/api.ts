@@ -432,6 +432,48 @@ export type SalesOrder = {
   items: SalesOrderItem[];
 };
 
+export type PaymentMethod = "CASH" | "CARD" | "OTHER";
+
+export type PaymentMethodChoice = {
+  code: PaymentMethod;
+  name: string;
+};
+
+export type PaymentLineInput = {
+  method: PaymentMethod;
+  amount_minor: string;
+  cash_received_minor?: string;
+  reference?: string;
+};
+
+export type PaymentLine = {
+  id: string;
+  payment_id: string;
+  method: PaymentMethod;
+  amount_minor: string;
+  cash_received_minor: string | null;
+  change_minor: string;
+  reference: string | null;
+  sort_order: number;
+  created_at: string;
+};
+
+export type Payment = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  order_id: string;
+  shift_id: string;
+  client_payment_id: string;
+  currency_code: string;
+  amount_minor: string;
+  created_by_user_id: string;
+  completed_at: string;
+  created_at: string;
+  updated_at: string;
+  lines: PaymentLine[];
+};
+
 export type WarehouseResponse = {
   id: string;
   organization_id: string;
@@ -1353,6 +1395,20 @@ export const api = {
     method: "DELETE",
     headers: tenantAuthorization(organizationId, accessToken),
   }),
+  completePayment: (
+    orderId: string,
+    input: { client_payment_id: string; lines: PaymentLineInput[] },
+    organizationId: string,
+    accessToken: string,
+  ) => request<Payment>(`/api/v1/payments/orders/${orderId}/complete`, {
+    method: "POST",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  listPaymentMethods: (organizationId: string, accessToken: string) =>
+    request<PaymentMethodChoice[]>("/api/v1/payments/methods", {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
   listSuppliers: (
     organizationId: string,
     accessToken: string,

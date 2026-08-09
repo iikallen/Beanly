@@ -11,6 +11,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import func, inspect, select, text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from beanly.core.config.settings import Settings
@@ -75,6 +76,20 @@ from beanly.modules.organizations.infrastructure.db.invitation_repository import
 from beanly.modules.organizations.infrastructure.db.repositories import (
     SqlAlchemyOrganizationRepository,
 )
+from beanly.modules.payments.application.payment_service import (
+    CompletePaymentInput,
+    PaymentLineInput,
+    PaymentService,
+)
+from beanly.modules.payments.domain.enums import PaymentMethod
+from beanly.modules.payments.domain.exceptions import (
+    OrderAlreadyPaid,
+    PaymentIdempotencyConflict,
+)
+from beanly.modules.payments.infrastructure.db.repositories import (
+    SqlAlchemyPaymentRepository,
+)
+from beanly.modules.payments.infrastructure.sales_gateway import SalesSettlementGateway
 from beanly.modules.purchasing.application.commands import (
     CreateGoodsReceiptCommand,
     CreatePurchaseOrderCommand,
@@ -101,6 +116,7 @@ from beanly.modules.sales.application.ports import (
 from beanly.modules.sales.application.register_service import RegisterService
 from beanly.modules.sales.application.shift_service import ShiftService
 from beanly.modules.sales.domain.enums import OrderType
+from beanly.modules.sales.domain.exceptions import ShiftHasOpenOrders
 from beanly.modules.sales.infrastructure.db.repositories import SqlAlchemySalesRepository
 from beanly.modules.sales.infrastructure.inventory_gateway import InventorySalesGateway
 
@@ -149,6 +165,7 @@ SALES_TABLES = {
     "sales_order_item_modifiers",
     "sales_order_item_components",
 }
+PAYMENT_TABLES = {"payments", "payment_lines"}
 APPLICATION_TABLES = (
     ORGANIZATION_TABLES
     | TEAM_TABLES
@@ -157,6 +174,7 @@ APPLICATION_TABLES = (
     | PURCHASING_TABLES
     | MENU_TABLES
     | SALES_TABLES
+    | PAYMENT_TABLES
 )
 
 
@@ -1436,16 +1454,391 @@ async def test_postgres_sales_idempotency_totals_shift_races_and_no_posting(
                 )
                 == 0
             )
+            assert await connection.scalar(text("SELECT count(*) FROM payments")) == 0
             absent_tables = (
                 await connection.execute(
                     text(
                         "SELECT to_regclass(name) FROM unnest(ARRAY["
-                        "'payments','payment_transactions','finance_entries',"
+                        "'payment_transactions','finance_entries',"
                         "'revenues','cogs_entries']) AS name"
                     )
                 )
             ).scalars().all()
-            assert absent_tables == [None, None, None, None, None]
+            assert absent_tables == [None, None, None, None]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_postgres_payments_atomicity_concurrency_and_no_posting(
+    postgres_inventory_database,
+) -> None:
+    database_url = postgres_inventory_database
+    context, warehouse_id, item_id = await seed_inventory_context(database_url)
+    engine = create_async_engine(database_url)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.connect() as connection:
+        location_id = await connection.scalar(
+            text("SELECT location_id FROM warehouses WHERE id=:warehouse_id"),
+            {"warehouse_id": warehouse_id},
+        )
+
+    try:
+        async with sessions() as session:
+            inventory = SqlAlchemyInventoryRepository(session)
+            organizations = OrganizationService(SqlAlchemyOrganizationRepository(session))
+            menu = MenuService(
+                SqlAlchemyMenuRepository(session),
+                MenuInventoryGateway(inventory),
+                organizations,
+            )
+            category = await menu.create_category(context, "Payments", 0)
+            product = await menu.create_product(
+                context,
+                category.id,
+                "Settlement item",
+                None,
+                None,
+                VariantInput("Default", None, 670000),
+            )
+            variant_id = product.variants[0].id
+
+        class StaticMenu:
+            def __init__(self, total_minor: int) -> None:
+                self.total_minor = total_minor
+
+            async def resolve_order_item(self, *args, **kwargs):
+                return SellableItemSnapshot(
+                    product.id,
+                    "Settlement item",
+                    variant_id,
+                    "Default",
+                    self.total_minor,
+                    0,
+                    self.total_minor,
+                    (),
+                    (
+                        SellableComponentSnapshot(
+                            item_id, "Coffee", UnitCode.G, Decimal("18")
+                        ),
+                    ),
+                )
+
+        def sales_services(session):
+            repository = SqlAlchemySalesRepository(session)
+            organizations = OrganizationService(SqlAlchemyOrganizationRepository(session))
+            return (
+                RegisterService(repository, organizations),
+                ShiftService(
+                    repository,
+                    organizations,
+                    InventorySalesGateway(SqlAlchemyInventoryRepository(session)),
+                ),
+            )
+
+        async with sessions() as session:
+            register_service, shift_service = sales_services(session)
+            register = await register_service.create(context, location_id, "Payments")
+            shift = await shift_service.open(context, register.id, warehouse_id)
+
+        async def new_order(
+            total_minor: int = 670000, *, target_shift_id: UUID = shift.id
+        ):
+            async with sessions() as session:
+                repository = SqlAlchemySalesRepository(session)
+                service = OrderService(
+                    repository,
+                    OrganizationService(SqlAlchemyOrganizationRepository(session)),
+                    StaticMenu(total_minor),
+                )
+                created = await service.create(
+                    context,
+                    CreateOrderInput(
+                        uuid4(),
+                        target_shift_id,
+                        OrderType.TAKEAWAY,
+                        None,
+                        None,
+                        None,
+                    ),
+                )
+                return await service.add_item(
+                    context,
+                    created.id,
+                    AddOrderItemInput(uuid4(), variant_id, (), 1, None),
+                )
+
+        def payment_service(session, *, repository=None, gateway=None, publisher=None):
+            sales_repository = SqlAlchemySalesRepository(session)
+            organizations = OrganizationService(SqlAlchemyOrganizationRepository(session))
+            return PaymentService(
+                repository or SqlAlchemyPaymentRepository(session),
+                gateway or SalesSettlementGateway(sales_repository, organizations),
+                publisher,
+            )
+
+        payment_input = CompletePaymentInput(
+            uuid4(),
+            (
+                PaymentLineInput(PaymentMethod.CASH, 200000, 250000, "drawer"),
+                PaymentLineInput(PaymentMethod.CARD, 470000, None, "terminal"),
+            ),
+        )
+        concurrent_order = await new_order()
+
+        async def pay(order_id, value=payment_input):
+            async with sessions() as session:
+                return await payment_service(session).complete(context, order_id, value)
+
+        repeated = await asyncio.gather(
+            *(pay(concurrent_order.id) for _ in range(10))
+        )
+        assert len({payment.id for payment in repeated}) == 1
+        payment = repeated[0]
+        assert payment.amount_minor == 670000
+        assert [line.method for line in payment.lines] == [
+            PaymentMethod.CASH,
+            PaymentMethod.CARD,
+        ]
+        assert payment.lines[0].change_minor == 50000
+        async with engine.connect() as connection:
+            assert await connection.scalar(
+                text("SELECT count(*) FROM payments WHERE order_id=:order_id"),
+                {"order_id": concurrent_order.id},
+            ) == 1
+            paid = (
+                await connection.execute(
+                    text(
+                        "SELECT status, paid_by_user_id, paid_at FROM sales_orders "
+                        "WHERE id=:order_id"
+                    ),
+                    {"order_id": concurrent_order.id},
+                )
+            ).one()
+            assert paid.status == "PAID"
+            assert paid.paid_by_user_id == context.user_id
+            assert paid.paid_at is not None
+
+        cross_order = await new_order()
+        with pytest.raises(PaymentIdempotencyConflict):
+            await pay(cross_order.id)
+        async with engine.connect() as connection:
+            assert await connection.scalar(
+                text("SELECT status FROM sales_orders WHERE id=:order_id"),
+                {"order_id": cross_order.id},
+            ) == "OPEN"
+
+        double_order = await new_order()
+        different_keys = (
+            CompletePaymentInput(
+                uuid4(), (PaymentLineInput(PaymentMethod.CARD, 670000),)
+            ),
+            CompletePaymentInput(
+                uuid4(), (PaymentLineInput(PaymentMethod.OTHER, 670000),)
+            ),
+        )
+        doubled = await asyncio.gather(
+            *(pay(double_order.id, value) for value in different_keys),
+            return_exceptions=True,
+        )
+        assert sum(not isinstance(value, Exception) for value in doubled) == 1
+        assert sum(isinstance(value, OrderAlreadyPaid) for value in doubled) == 1
+
+        class FailingPaymentRepository(SqlAlchemyPaymentRepository):
+            async def add(self, value):
+                await super().add(value)
+                raise RuntimeError("forced payment failure")
+
+        payment_failure_order = await new_order()
+        async with sessions() as session:
+            with pytest.raises(RuntimeError, match="forced payment failure"):
+                await payment_service(
+                    session,
+                    repository=FailingPaymentRepository(session),
+                ).complete(
+                    context,
+                    payment_failure_order.id,
+                    CompletePaymentInput(
+                        uuid4(), (PaymentLineInput(PaymentMethod.CARD, 670000),)
+                    ),
+                )
+
+        class FailingSalesGateway(SalesSettlementGateway):
+            async def mark_order_paid(self, order_id, paid_by_user_id, paid_at):
+                await super().mark_order_paid(order_id, paid_by_user_id, paid_at)
+                raise RuntimeError("forced order failure")
+
+        order_failure_order = await new_order()
+        async with sessions() as session:
+            sales_repository = SqlAlchemySalesRepository(session)
+            failing_gateway = FailingSalesGateway(
+                sales_repository,
+                OrganizationService(SqlAlchemyOrganizationRepository(session)),
+            )
+            with pytest.raises(RuntimeError, match="forced order failure"):
+                await payment_service(session, gateway=failing_gateway).complete(
+                    context,
+                    order_failure_order.id,
+                    CompletePaymentInput(
+                        uuid4(), (PaymentLineInput(PaymentMethod.CARD, 670000),)
+                    ),
+                )
+        async with engine.connect() as connection:
+            for order_id in (payment_failure_order.id, order_failure_order.id):
+                status_value, payment_count = (
+                    await connection.execute(
+                        text(
+                            "SELECT orders.status, count(payments.id) "
+                            "FROM sales_orders orders LEFT JOIN payments "
+                            "ON payments.order_id=orders.id WHERE orders.id=:order_id "
+                            "GROUP BY orders.status"
+                        ),
+                        {"order_id": order_id},
+                    )
+                ).one()
+                assert (status_value, payment_count) == ("OPEN", 0)
+
+        class VisibilityPublisher:
+            def __init__(self) -> None:
+                self.observed = None
+
+            async def publish(self, event):
+                async with sessions() as check:
+                    self.observed = (
+                        await check.scalar(
+                            text("SELECT count(*) FROM payments WHERE id=:id"),
+                            {"id": event.payment_id},
+                        ),
+                        await check.scalar(
+                            text("SELECT status FROM sales_orders WHERE id=:id"),
+                            {"id": event.order_id},
+                        ),
+                    )
+
+        event_order = await new_order()
+        publisher = VisibilityPublisher()
+        async with sessions() as session:
+            event_payment = await payment_service(
+                session, publisher=publisher
+            ).complete(
+                context,
+                event_order.id,
+                CompletePaymentInput(
+                    uuid4(), (PaymentLineInput(PaymentMethod.OTHER, 670000),)
+                ),
+            )
+        assert publisher.observed == (1, "PAID")
+
+        cancel_race_order = await new_order()
+
+        async def cancel_order():
+            async with sessions() as session:
+                return await OrderService(
+                    SqlAlchemySalesRepository(session),
+                    OrganizationService(SqlAlchemyOrganizationRepository(session)),
+                    StaticMenu(670000),
+                ).cancel(context, cancel_race_order.id, "Race")
+
+        raced = await asyncio.gather(
+            pay(
+                cancel_race_order.id,
+                CompletePaymentInput(
+                    uuid4(), (PaymentLineInput(PaymentMethod.CARD, 670000),)
+                ),
+            ),
+            cancel_order(),
+            return_exceptions=True,
+        )
+        assert sum(not isinstance(value, Exception) for value in raced) == 1
+        async with engine.connect() as connection:
+            state = (
+                await connection.execute(
+                    text(
+                        "SELECT orders.status, count(payments.id) "
+                        "FROM sales_orders orders LEFT JOIN payments "
+                        "ON payments.order_id=orders.id WHERE orders.id=:order_id "
+                        "GROUP BY orders.status"
+                    ),
+                    {"order_id": cancel_race_order.id},
+                )
+            ).one()
+            assert state in {("PAID", 1), ("CANCELLED", 0)}
+
+        async with sessions() as session:
+            register_service, shift_service = sales_services(session)
+            close_register = await register_service.create(
+                context, location_id, "Payment close race"
+            )
+            close_shift = await shift_service.open(
+                context, close_register.id, warehouse_id
+            )
+        close_race_order = await new_order(target_shift_id=close_shift.id)
+
+        async def close_shift_once():
+            async with sessions() as session:
+                _, shift_service = sales_services(session)
+                return await shift_service.close(context, close_shift.id)
+
+        payment_result, close_result = await asyncio.gather(
+            pay(
+                close_race_order.id,
+                CompletePaymentInput(
+                    uuid4(), (PaymentLineInput(PaymentMethod.CARD, 670000),)
+                ),
+            ),
+            close_shift_once(),
+            return_exceptions=True,
+        )
+        assert not isinstance(payment_result, Exception)
+        assert not isinstance(close_result, Exception) or isinstance(
+            close_result, ShiftHasOpenOrders
+        )
+        if isinstance(close_result, Exception):
+            assert not isinstance(await close_shift_once(), Exception)
+
+        invalid_lines = (
+            ("CASH", 10, 9, 0),
+            ("CARD", 10, 10, 0),
+            ("OTHER", 10, None, 1),
+        )
+        for method, amount, received, change in invalid_lines:
+            async with engine.connect() as connection:
+                transaction = await connection.begin()
+                with pytest.raises(IntegrityError):
+                    await connection.execute(
+                        text(
+                            "INSERT INTO payment_lines "
+                            "(id, payment_id, method, amount_minor, "
+                            "cash_received_minor, change_minor, reference, "
+                            "sort_order, created_at) VALUES "
+                            "(:id, :payment_id, :method, :amount, :received, "
+                            ":change, NULL, 99, now())"
+                        ),
+                        {
+                            "id": uuid4(),
+                            "payment_id": event_payment.id,
+                            "method": method,
+                            "amount": amount,
+                            "received": received,
+                            "change": change,
+                        },
+                    )
+                await transaction.rollback()
+
+        async with engine.connect() as connection:
+            assert await connection.scalar(
+                text("SELECT count(*) FROM inventory_transactions WHERE type='SALE'")
+            ) == 0
+            finance_tables = (
+                await connection.execute(
+                    text(
+                        "SELECT to_regclass(name) FROM unnest(ARRAY["
+                        "'finance_entries','revenues','revenue_entries','cogs_entries']) "
+                        "AS name"
+                    )
+                )
+            ).scalars().all()
+            assert finance_tables == [None, None, None, None]
     finally:
         await engine.dispose()
 
@@ -1689,7 +2082,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
             "alembic_version",
             *APPLICATION_TABLES,
         } <= upgraded["tables"]
-        assert upgraded["revision"] == "0010_sales_pos"
+        assert upgraded["revision"] == "0011_payments"
         assert await membership_state(test_url, legacy_membership_id) == ("ACTIVE", "ALL")
         assert set(upgraded["columns"]["organizations"]) == {
             "id",
@@ -2072,6 +2465,76 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
             "ix_sales_orders_status",
             "ix_sales_orders_created_at",
         } <= upgraded["indexes"]["sales_orders"]
+        assert {"paid_by_user_id", "paid_at"} <= set(
+            upgraded["columns"]["sales_orders"]
+        )
+        assert upgraded["columns"]["sales_orders"]["paid_by_user_id"]["nullable"]
+        assert upgraded["columns"]["sales_orders"]["paid_at"]["nullable"]
+        assert upgraded["columns"]["sales_orders"]["paid_at"]["type"].timezone
+        assert (
+            ("paid_by_user_id",),
+            "users",
+        ) in upgraded["foreign_keys"]["sales_orders"]
+        assert set(upgraded["columns"]["payments"]) == {
+            "id",
+            "organization_id",
+            "location_id",
+            "order_id",
+            "shift_id",
+            "client_payment_id",
+            "currency_code",
+            "amount_minor",
+            "created_by_user_id",
+            "completed_at",
+            "created_at",
+            "updated_at",
+        }
+        assert set(upgraded["columns"]["payment_lines"]) == {
+            "id",
+            "payment_id",
+            "method",
+            "amount_minor",
+            "cash_received_minor",
+            "change_minor",
+            "reference",
+            "sort_order",
+            "created_at",
+        }
+        assert str(upgraded["columns"]["payments"]["amount_minor"]["type"]) == "BIGINT"
+        assert str(upgraded["columns"]["payment_lines"]["amount_minor"]["type"]) == (
+            "BIGINT"
+        )
+        assert upgraded["columns"]["payments"]["completed_at"]["type"].timezone
+        assert upgraded["columns"]["payment_lines"]["created_at"]["type"].timezone
+        assert {
+            "ix_payments_organization_id",
+            "ix_payments_location_id",
+            "ix_payments_shift_id",
+            "ix_payments_completed_at",
+        } <= upgraded["indexes"]["payments"]
+        assert {
+            "ix_payment_lines_payment_id",
+            "ix_payment_lines_method",
+        } <= upgraded["indexes"]["payment_lines"]
+        assert ("order_id",) in upgraded["unique_constraints"]["payments"]
+        assert (
+            "organization_id",
+            "client_payment_id",
+        ) in upgraded["unique_constraints"]["payments"]
+        assert {
+            "ck_payment_amount_nonnegative",
+        } <= upgraded["check_constraints"]["payments"]
+        assert {
+            "ck_payment_line_method",
+            "ck_payment_line_amount_nonnegative",
+            "ck_payment_line_change_nonnegative",
+            "ck_payment_line_sort_nonnegative",
+            "ck_payment_line_cash_values",
+        } <= upgraded["check_constraints"]["payment_lines"]
+        assert (("order_id",), "sales_orders") in upgraded["foreign_keys"]["payments"]
+        assert (("payment_id",), "payments") in upgraded["foreign_keys"][
+            "payment_lines"
+        ]
 
         legacy_engine = create_async_engine(test_url)
         try:
@@ -2105,10 +2568,22 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
         finally:
             await legacy_engine.dispose()
 
+        await asyncio.to_thread(command.downgrade, config, "0010_sales_pos")
+        payments_downgraded = await database_snapshot(test_url)
+        assert not PAYMENT_TABLES & payments_downgraded["tables"]
+        assert SALES_TABLES <= payments_downgraded["tables"]
+        assert {"paid_by_user_id", "paid_at"}.isdisjoint(
+            payments_downgraded["columns"]["sales_orders"]
+        )
+        assert payments_downgraded["revision"] == "0010_sales_pos"
+        await asyncio.to_thread(command.upgrade, config, "head")
+
         await asyncio.to_thread(command.downgrade, config, "0009_modifiers")
         sales_downgraded = await database_snapshot(test_url)
-        assert not SALES_TABLES & sales_downgraded["tables"]
-        assert APPLICATION_TABLES - SALES_TABLES <= sales_downgraded["tables"]
+        assert not (SALES_TABLES | PAYMENT_TABLES) & sales_downgraded["tables"]
+        assert APPLICATION_TABLES - (SALES_TABLES | PAYMENT_TABLES) <= sales_downgraded[
+            "tables"
+        ]
         assert "sales_order_number_seq" not in sales_downgraded["sequences"]
         assert sales_downgraded["revision"] == "0009_modifiers"
         await asyncio.to_thread(command.upgrade, config, "head")
@@ -2261,7 +2736,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
         await asyncio.to_thread(command.upgrade, config, "head")
         reupgraded = await database_snapshot(test_url)
         assert APPLICATION_TABLES <= reupgraded["tables"]
-        assert reupgraded["revision"] == "0010_sales_pos"
+        assert reupgraded["revision"] == "0011_payments"
         assert await membership_state(test_url, legacy_membership_id) == ("ACTIVE", "ALL")
     finally:
         await admin_engine.dispose()

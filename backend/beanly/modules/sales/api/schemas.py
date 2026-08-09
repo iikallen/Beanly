@@ -208,6 +208,8 @@ class OrderResponse(BaseModel):
     cancelled_by_user_id: UUID | None
     cancelled_at: datetime | None
     cancel_reason: str | None
+    paid_by_user_id: UUID | None
+    paid_at: datetime | None
     created_at: datetime
     updated_at: datetime
     items: list[OrderItemResponse]
@@ -234,6 +236,8 @@ class OrderResponse(BaseModel):
             cancelled_by_user_id=value.cancelled_by_user_id,
             cancelled_at=value.cancelled_at,
             cancel_reason=value.cancel_reason,
+            paid_by_user_id=value.paid_by_user_id,
+            paid_at=value.paid_at,
             created_at=value.created_at,
             updated_at=value.updated_at,
             items=[OrderItemResponse.from_entity(item) for item in value.items],

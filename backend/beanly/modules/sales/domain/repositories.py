@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
@@ -45,6 +46,9 @@ class SalesRepository(Protocol):
         created_by_user_id: UUID | None,
     ) -> list[SalesOrder]: ...
     async def update_order(self, value: SalesOrder) -> SalesOrder: ...
+    async def mark_order_paid(
+        self, order_id: UUID, paid_by_user_id: UUID, paid_at: datetime
+    ) -> None: ...
     async def get_item_by_client_id(
         self, order_id: UUID, client_item_id: UUID
     ) -> OrderItem | None: ...

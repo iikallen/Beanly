@@ -100,6 +100,8 @@ class SalesOrder:
     cancelled_by_user_id: UUID | None
     cancelled_at: datetime | None
     cancel_reason: str | None
+    paid_by_user_id: UUID | None
+    paid_at: datetime | None
     created_at: datetime
     updated_at: datetime
     items: tuple[OrderItem, ...] = ()

@@ -96,6 +96,27 @@
 .pos-config-modal { width: min(100%, 620px); max-height: min(88vh, 780px); overflow-y: auto; }
 .pos-cancel-modal { width: min(100%, 500px); }
 .pos-cancel-modal > p { margin: -10px 0 8px; color: var(--muted); line-height: 1.5; }
+.modal-card.pos-payment-modal { width: min(100%, 560px); }
+.pos-payment-total { display: flex; align-items: baseline; justify-content: space-between; margin: -7px 0 22px; padding: 18px 0; border-bottom: 1px solid var(--border); }
+.pos-payment-total span { color: var(--muted); font-weight: 700; }
+.pos-payment-total strong { font-family: Georgia, "Times New Roman", serif; font-size: 32px; }
+.pos-payment-methods { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.pos-payment-methods button { min-height: 48px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text); font-weight: 750; cursor: pointer; }
+.pos-payment-methods button:last-child { grid-column: 1 / -1; }
+.pos-payment-methods button.is-active { border-color: var(--primary); background: #edf4ee; color: var(--primary); }
+.pos-payment-methods button:disabled { opacity: .55; cursor: not-allowed; }
+.pos-payment-fields, .pos-split-fields { margin-top: 18px; }
+.pos-split-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+.pos-payment-note, .pos-payment-free { margin: 18px 0 0; padding: 14px; border-radius: 6px; background: #f5f7f5; color: var(--muted); line-height: 1.5; }
+.pos-payment-balance { grid-column: 1 / -1; display: flex; align-items: baseline; justify-content: space-between; margin-top: 15px; padding: 14px; border-radius: 6px; background: #f2f6f2; }
+.pos-payment-balance span { color: var(--muted); font-size: 13px; font-weight: 700; }
+.pos-payment-balance strong { font-size: 20px; }
+.pos-payment-success { display: grid; justify-items: center; padding-top: 7px; text-align: center; }
+.pos-payment-success h2 { margin: 10px 0 6px; }
+.pos-payment-success > strong { font-family: Georgia, "Times New Roman", serif; font-size: 34px; }
+.pos-payment-success > p { margin: 7px 0 0; color: var(--muted); }
+.pos-payment-success .modal-actions { width: 100%; }
+.pos-payment-check { width: 56px; height: 56px; display: grid; place-items: center; margin-bottom: 15px; border-radius: 50%; background: #e7f3e9; color: var(--primary); font-size: 28px; font-weight: 800; }
 .danger-button { min-height: 48px; border: 1px solid #9f3d34; border-radius: 6px; background: #a64539; color: #fff; font-weight: 700; cursor: pointer; }
 .danger-button:disabled { opacity: .55; cursor: not-allowed; }
 .pos-config-modal > h2 { margin-top: 7px; }
@@ -129,6 +150,8 @@
   .pos-product-grid > button { min-height: 135px; }
   .pos-orders-drawer { position: fixed; top: 0; bottom: 0; left: 0; border-radius: 0; }
   .pos-config-modal { max-height: 92vh; }
+  .modal-card.pos-payment-modal { max-height: calc(100vh - 24px); }
+  .pos-split-fields { grid-template-columns: 1fr; }
 }
 
 * { box-sizing: border-box; }

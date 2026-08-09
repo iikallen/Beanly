@@ -272,6 +272,26 @@ class SqlAlchemySalesRepository:
             raise LookupError("Order disappeared while updating")
         return saved
 
+    async def mark_order_paid(
+        self, order_id: UUID, paid_by_user_id: UUID, paid_at: datetime
+    ) -> None:
+        result = await self.session.execute(
+            update(SalesOrderModel)
+            .where(
+                SalesOrderModel.id == order_id,
+                SalesOrderModel.status == OrderStatus.OPEN.value,
+            )
+            .values(
+                status=OrderStatus.PAID.value,
+                paid_by_user_id=paid_by_user_id,
+                paid_at=paid_at,
+                updated_at=paid_at,
+            )
+        )
+        if result.rowcount != 1:
+            raise OrderImmutable("Only OPEN orders can be paid")
+        await self.session.flush()
+
     async def get_item_by_client_id(
         self, order_id: UUID, client_item_id: UUID
     ) -> OrderItem | None:
@@ -457,6 +477,8 @@ def _order_values(value: SalesOrder) -> dict[str, object]:
         "cancelled_by_user_id": value.cancelled_by_user_id,
         "cancelled_at": value.cancelled_at,
         "cancel_reason": value.cancel_reason,
+        "paid_by_user_id": value.paid_by_user_id,
+        "paid_at": value.paid_at,
         "created_at": value.created_at,
         "updated_at": value.updated_at,
     }

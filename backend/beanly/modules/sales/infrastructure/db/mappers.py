@@ -127,6 +127,8 @@ def to_order(model: SalesOrderModel) -> SalesOrder:
         model.cancelled_by_user_id,
         model.cancelled_at,
         model.cancel_reason,
+        model.paid_by_user_id,
+        model.paid_at,
         model.created_at,
         model.updated_at,
         tuple(
