@@ -68,6 +68,14 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  integration-worker:
+    build: ./backend
+    env_file: .env
+    command: python -m beanly.modules.integrations.worker
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   frontend:
     build:
       context: ./frontend

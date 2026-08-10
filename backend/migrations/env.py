@@ -12,6 +12,9 @@ from beanly.modules.analytics.infrastructure.db import models as analytics_model
 from beanly.modules.employees.infrastructure.db import models as employee_models  # noqa: F401
 from beanly.modules.finance.infrastructure.db import models as finance_models  # noqa: F401
 from beanly.modules.identity.infrastructure.db import models  # noqa: F401
+from beanly.modules.integrations.infrastructure.db import (
+    models as integration_models,  # noqa: F401
+)
 from beanly.modules.inventory.infrastructure.db import models as inventory_models  # noqa: F401
 from beanly.modules.menu.infrastructure.db import models as menu_models  # noqa: F401
 from beanly.modules.organizations.infrastructure.db import (

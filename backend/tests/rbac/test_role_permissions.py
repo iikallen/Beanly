@@ -50,6 +50,8 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.FINANCE_READ,
                 Permission.FINANCE_WRITE,
                 Permission.ANALYTICS_READ,
+                Permission.INTEGRATIONS_READ,
+                Permission.INTEGRATIONS_WRITE,
             }
         ),
         MembershipRole.MANAGER: frozenset(
@@ -87,6 +89,7 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.PAYMENTS_CREATE,
                 Permission.PAYMENTS_REFUND,
                 Permission.ANALYTICS_READ,
+                Permission.INTEGRATIONS_READ,
             }
         ),
         MembershipRole.ACCOUNTANT: frozenset(
@@ -101,6 +104,7 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.FINANCE_READ,
                 Permission.FINANCE_WRITE,
                 Permission.ANALYTICS_READ,
+                Permission.INTEGRATIONS_READ,
             }
         ),
         MembershipRole.CASHIER: frozenset(

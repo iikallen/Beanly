@@ -25,10 +25,12 @@ export function AppSidebar({
   active,
   teamView,
   onTeamView,
+  settingsCanReadIntegrations,
 }: {
   active: "dashboard" | "analytics" | "pos" | "inventory" | "menu" | "purchasing" | "finance" | "team" | "settings";
   teamView?: "employees" | "invitations";
   onTeamView?: (view: "employees" | "invitations") => void;
+  settingsCanReadIntegrations?: boolean;
 }) {
   const {
     organizations,
@@ -253,6 +255,21 @@ export function AppSidebar({
           <SettingsIcon aria-hidden="true" />
           Settings
         </button>
+        {active === "settings" && (
+          <div className="app-subnav settings-subnav" aria-label="Settings navigation">
+            <Link className={pathname === "/app/settings" ? "is-active" : ""} href="/app/settings">
+              General
+            </Link>
+            {settingsCanReadIntegrations && (
+              <Link
+                className={pathname.startsWith("/app/settings/integrations") ? "is-active" : ""}
+                href="/app/settings/integrations"
+              >
+                Integrations
+              </Link>
+            )}
+          </div>
+        )}
       </nav>
 
       <label className="location-switcher">

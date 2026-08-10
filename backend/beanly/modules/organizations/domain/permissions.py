@@ -51,6 +51,8 @@ class Permission(StrEnum):
     FINANCE_READ = "finance.read"
     FINANCE_WRITE = "finance.write"
     ANALYTICS_READ = "analytics.read"
+    INTEGRATIONS_READ = "integrations.read"
+    INTEGRATIONS_WRITE = "integrations.write"
 
 
 _ALL = frozenset(Permission)
@@ -102,6 +104,8 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.FINANCE_READ,
             Permission.FINANCE_WRITE,
             Permission.ANALYTICS_READ,
+            Permission.INTEGRATIONS_READ,
+            Permission.INTEGRATIONS_WRITE,
         }
     ),
     MembershipRole.MANAGER: frozenset(
@@ -139,6 +143,7 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.PAYMENTS_CREATE,
             Permission.PAYMENTS_REFUND,
             Permission.ANALYTICS_READ,
+            Permission.INTEGRATIONS_READ,
         }
     ),
     MembershipRole.ACCOUNTANT: frozenset(
@@ -153,6 +158,7 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.FINANCE_READ,
             Permission.FINANCE_WRITE,
             Permission.ANALYTICS_READ,
+            Permission.INTEGRATIONS_READ,
         }
     ),
     MembershipRole.CASHIER: frozenset(

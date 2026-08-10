@@ -1,40 +1,35 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { PlugZap } from "lucide-react";
+import Link from "next/link";
 
-import { AppSidebar } from "@/components/app-sidebar";
-import { useAuth } from "@/components/auth-provider";
-import { useWorkspace } from "@/components/workspace-provider";
+import { useIntegrationPermissions } from "@/hooks/use-integration-permissions";
 
 export default function SettingsPage() {
-  const { user, loading: authLoading } = useAuth();
-  const { loading, error, organizations, currentOrganization, currentLocation } =
-    useWorkspace();
-  const router = useRouter();
-
-  useEffect(() => {
-    if (!authLoading && !user) router.replace("/login");
-    if (!authLoading && user && !loading && !error && organizations.length === 0) {
-      router.replace("/onboarding");
-    }
-  }, [authLoading, error, loading, organizations.length, router, user]);
-
-  if (authLoading || loading || !user) {
-    return <main className="loading-state">Loading…</main>;
-  }
-  if (error) return <main className="loading-state error-state">{error}</main>;
-  if (!currentOrganization || !currentLocation) {
-    return <main className="loading-state">Preparing workspace…</main>;
-  }
+  const integrations = useIntegrationPermissions();
 
   return (
-    <main className="app-shell">
-      <AppSidebar active="settings" />
-      <section className="dashboard-content">
+    <>
+      <header className="settings-header">
         <h1>Settings</h1>
-        <p>Organization settings will be added in a later stage.</p>
-      </section>
-    </main>
+        <p>Manage organization-level configuration and connected services.</p>
+      </header>
+
+      <div className="settings-card-grid">
+        {!integrations.loading && integrations.canRead && (
+          <Link className="settings-entry-card" href="/app/settings/integrations">
+            <span className="settings-entry-icon" aria-hidden="true"><PlugZap /></span>
+            <span><strong>Integrations</strong><small>Providers, locations and delivery activity</small></span>
+            <span aria-hidden="true">→</span>
+          </Link>
+        )}
+        {!integrations.loading && !integrations.canRead && (
+          <div className="settings-empty-card">
+            <strong>No organization settings available</strong>
+            <span>Your current role does not manage organization settings.</span>
+          </div>
+        )}
+      </div>
+    </>
   );
 }
