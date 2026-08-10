@@ -1,0 +1,1 @@
+"""Management finance bounded context."""

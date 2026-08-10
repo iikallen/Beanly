@@ -10,6 +10,13 @@ from beanly.core.events.serializer import (
     EventSerializationError,
     serialize_event_payload,
 )
+from beanly.modules.finance.domain.events import (
+    CashMovementPosted,
+    CashMovementReversed,
+    ExpenseCreated,
+    ExpensePosted,
+    ExpenseReversed,
+)
 from beanly.modules.inventory.domain.events import (
     InventoryCostUpdated,
     InventoryCountCancelled,
@@ -57,7 +64,39 @@ def _event_contracts() -> tuple[tuple[object, str, str, UUID], ...]:
     transfer_id = uuid4()
     in_transaction_id = uuid4()
     supplier_return_id = uuid4()
+    expense_id = uuid4()
+    cash_movement_id = uuid4()
     return (
+        (
+            ExpenseCreated(organization_id, expense_id),
+            "finance.expense_created",
+            "expense",
+            expense_id,
+        ),
+        (
+            ExpensePosted(organization_id, expense_id),
+            "finance.expense_posted",
+            "expense",
+            expense_id,
+        ),
+        (
+            ExpenseReversed(organization_id, expense_id),
+            "finance.expense_reversed",
+            "expense",
+            expense_id,
+        ),
+        (
+            CashMovementPosted(organization_id, cash_movement_id),
+            "finance.cash_movement_posted",
+            "cash_movement",
+            cash_movement_id,
+        ),
+        (
+            CashMovementReversed(organization_id, cash_movement_id),
+            "finance.cash_movement_reversed",
+            "cash_movement",
+            cash_movement_id,
+        ),
         (
             PaymentCompleted(
                 payment_id, order_id, organization_id, location_id, 260000
@@ -249,12 +288,15 @@ def test_all_domain_events_have_exact_stable_v1_contracts() -> None:
         assert envelope.payload == serialize_event_payload(event)
         assert f"{envelope.event_name}.v{envelope.event_version}" == f"{name}.v1"
 
-    payment = to_envelope(contracts[0][0], occurred_at=occurred_at)
+    payment_event = next(
+        event for event, name, *_ in contracts if name == "payment.completed"
+    )
+    payment = to_envelope(payment_event, occurred_at=occurred_at)
     assert payment.payload == {
-        "payment_id": str(contracts[0][3]),
-        "order_id": str(contracts[0][0].order_id),
-        "organization_id": str(contracts[0][0].organization_id),
-        "location_id": str(contracts[0][0].location_id),
+        "payment_id": str(payment_event.payment_id),
+        "order_id": str(payment_event.order_id),
+        "organization_id": str(payment_event.organization_id),
+        "location_id": str(payment_event.location_id),
         "amount_minor": 260000,
     }
 

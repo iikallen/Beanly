@@ -6,9 +6,11 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import func, select, update
 
+from beanly.core.events.outbox.models import OutboxEventModel
+from beanly.core.money import MAX_NUMERIC_20_6_MINOR
 from beanly.modules.inventory.infrastructure.db.models import InventoryTransactionModel
 from beanly.modules.payments.infrastructure.db.models import PaymentModel
-from beanly.modules.sales.infrastructure.db.models import RegisterShiftModel
+from beanly.modules.sales.infrastructure.db.models import RegisterShiftModel, SalesOrderModel
 
 
 async def _user(client: AsyncClient, email: str) -> dict[str, str]:
@@ -194,6 +196,67 @@ async def test_full_single_method_payment(app_client, method: str) -> None:
     assert response.json()["lines"][0]["change_minor"] == (
         "180000" if method == "CASH" else "0"
     )
+
+
+@pytest.mark.anyio
+async def test_payment_finance_numeric_limit_is_atomic(app_client) -> None:
+    client, sessions = app_client
+    headers, _, location_id, warehouse_id = await _workspace(
+        client, "payments-finance-limit@example.com", "Payment finance limit"
+    )
+    shift = await _register_shift(client, headers, location_id, warehouse_id)
+
+    maximum_variant = await _variant(
+        client, headers, "Maximum finance amount", MAX_NUMERIC_20_6_MINOR
+    )
+    maximum_order = await _order(client, headers, shift["id"], maximum_variant)
+    maximum = await client.post(
+        f"/api/v1/payments/orders/{maximum_order['id']}/complete",
+        headers=headers,
+        json={
+            "client_payment_id": str(uuid4()),
+            "lines": [
+                {"method": "CARD", "amount_minor": MAX_NUMERIC_20_6_MINOR}
+            ],
+        },
+    )
+    assert maximum.status_code == 201, maximum.text
+    assert maximum.json()["amount_minor"] == str(MAX_NUMERIC_20_6_MINOR)
+
+    overflow_variant = await _variant(
+        client, headers, "Finance amount overflow", MAX_NUMERIC_20_6_MINOR + 1
+    )
+    overflow_order = await _order(client, headers, shift["id"], overflow_variant)
+    rejected = await client.post(
+        f"/api/v1/payments/orders/{overflow_order['id']}/complete",
+        headers=headers,
+        json={
+            "client_payment_id": str(uuid4()),
+            "lines": [
+                {
+                    "method": "CARD",
+                    "amount_minor": MAX_NUMERIC_20_6_MINOR + 1,
+                }
+            ],
+        },
+    )
+    assert rejected.status_code == 422, rejected.text
+    async with sessions() as session:
+        persisted = await session.get(SalesOrderModel, UUID(overflow_order["id"]))
+        assert persisted is not None
+        assert persisted.status == "OPEN"
+        assert persisted.paid_at is None
+        assert persisted.inventory_transaction_id is None
+        assert await session.scalar(
+            select(func.count(PaymentModel.id)).where(
+                PaymentModel.order_id == UUID(overflow_order["id"])
+            )
+        ) == 0
+        assert await session.scalar(
+            select(func.count(OutboxEventModel.id)).where(
+                OutboxEventModel.event_name == "payment.completed"
+            )
+        ) == 1
 
 
 @pytest.mark.anyio

@@ -874,6 +874,146 @@ export type SupplierReturn = {
   lines: SupplierReturnLine[];
 };
 
+export type FinancePnl = {
+  currency_code: string;
+  revenue: string;
+  cogs: string;
+  gross_profit: string;
+  inventory_losses: string;
+  inventory_gains: string;
+  operating_expenses: string;
+  other_income: string;
+  other_expenses: string;
+  operating_profit: string;
+  gross_margin_percent: string | null;
+  data_quality: { cogs_complete: boolean; incomplete_cogs_sales: number };
+};
+
+export type FinancePnlBreakdown = {
+  currency_code: string;
+  operating_expenses: Array<{ category_id: string | null; name: string; amount: string }>;
+};
+
+export type CashFlowSection = {
+  inflows_minor: string;
+  outflows_minor: string;
+  net_minor: string;
+};
+
+export type FinanceCashFlow = {
+  currency_code: string;
+  opening_cash_minor: string;
+  operating: CashFlowSection;
+  investing: CashFlowSection;
+  financing: CashFlowSection;
+  net_cash_movement_minor: string;
+  closing_cash_minor: string;
+};
+
+export type ExpenseStatus = "DRAFT" | "POSTED" | "REVERSED";
+
+export type ExpenseCategory = {
+  id: string;
+  organization_id: string;
+  name: string;
+  sort_order: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CashAccountType = "CASH" | "CARD_CLEARING" | "BANK" | "OTHER";
+
+export type CashAccount = {
+  id: string;
+  organization_id: string;
+  location_id: string | null;
+  name: string;
+  type: CashAccountType;
+  currency_code: string;
+  system_key: string | null;
+  opening_balance_minor: string;
+  balance_minor: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Expense = {
+  id: string;
+  organization_id: string;
+  location_id: string | null;
+  number: string;
+  category_id: string;
+  status: ExpenseStatus;
+  amount_minor: string;
+  currency_code: string;
+  cash_account_id: string | null;
+  vendor: string | null;
+  occurred_at: string;
+  description: string | null;
+  created_by: string;
+  posted_by: string | null;
+  posted_at: string | null;
+  reversed_by: string | null;
+  reversed_at: string | null;
+  finance_entry_id: string | null;
+  cash_entry_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ExpenseInput = {
+  location_id?: string | null;
+  category_id: string;
+  amount_minor: string;
+  cash_account_id?: string | null;
+  vendor?: string | null;
+  occurred_at: string;
+  description?: string | null;
+};
+
+export type CashMovementType =
+  | "SUPPLIER_PAYMENT"
+  | "OWNER_CONTRIBUTION"
+  | "OWNER_WITHDRAWAL"
+  | "OTHER_INFLOW"
+  | "OTHER_OUTFLOW"
+  | "TRANSFER";
+
+export type CashFlowActivity = "OPERATING" | "INVESTING" | "FINANCING";
+
+export type CashMovement = {
+  id: string;
+  organization_id: string;
+  location_id: string | null;
+  type: CashMovementType;
+  amount_minor: string;
+  currency_code: string;
+  from_account_id: string | null;
+  to_account_id: string | null;
+  cash_flow_activity: CashFlowActivity;
+  occurred_at: string;
+  description: string | null;
+  created_by: string;
+  reversed_by: string | null;
+  reversed_at: string | null;
+  out_entry_id: string | null;
+  in_entry_id: string | null;
+  created_at: string;
+};
+
+export type CashMovementInput = {
+  location_id?: string | null;
+  type: CashMovementType;
+  amount_minor: string;
+  from_account_id?: string | null;
+  to_account_id?: string | null;
+  cash_flow_activity: CashFlowActivity;
+  occurred_at: string;
+  description?: string | null;
+};
+
 type ApiErrorDetail = { code?: string; message?: string; msg?: string };
 type ApiErrorBody = {
   detail?: string | ApiErrorDetail | Array<{ msg?: string }>;
@@ -1808,6 +1948,128 @@ export const api = {
     request<SupplierReturn>(`/api/v1/purchasing/returns/${id}/post`, { method: "POST", headers: tenantAuthorization(organizationId, accessToken) }),
   reverseSupplierReturn: (id: string, organizationId: string, accessToken: string) =>
     request<SupplierReturn>(`/api/v1/purchasing/returns/${id}/reverse`, { method: "POST", headers: tenantAuthorization(organizationId, accessToken) }),
+  getFinancePnl: (
+    organizationId: string,
+    accessToken: string,
+    filters: { dateFrom: string; dateTo: string; locationId?: string },
+  ) => request<FinancePnl>(`/api/v1/finance/pnl?${operationFilters(filters)}`, {
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  getFinancePnlBreakdown: (
+    organizationId: string,
+    accessToken: string,
+    filters: { dateFrom: string; dateTo: string; locationId?: string },
+  ) => request<FinancePnlBreakdown>(`/api/v1/finance/pnl/breakdown?${operationFilters(filters)}`, {
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  getFinanceCashFlow: (
+    organizationId: string,
+    accessToken: string,
+    filters: { dateFrom: string; dateTo: string; locationId?: string },
+  ) => request<FinanceCashFlow>(`/api/v1/finance/cash-flow?${operationFilters(filters)}`, {
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  listExpenseCategories: (organizationId: string, accessToken: string) =>
+    request<ExpenseCategory[]>("/api/v1/finance/expense-categories", {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  createExpenseCategory: (
+    input: { name: string; sort_order?: number },
+    organizationId: string,
+    accessToken: string,
+  ) => request<ExpenseCategory>("/api/v1/finance/expense-categories", {
+    method: "POST",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  updateExpenseCategory: (
+    id: string,
+    input: { name?: string; sort_order?: number },
+    organizationId: string,
+    accessToken: string,
+  ) => request<ExpenseCategory>(`/api/v1/finance/expense-categories/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  deactivateExpenseCategory: (id: string, organizationId: string, accessToken: string) =>
+    request<ExpenseCategory>(`/api/v1/finance/expense-categories/${id}/deactivate`, {
+      method: "POST",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  listExpenses: (organizationId: string, accessToken: string) =>
+    request<Expense[]>("/api/v1/finance/expenses", {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  getExpense: (id: string, organizationId: string, accessToken: string) =>
+    request<Expense>(`/api/v1/finance/expenses/${id}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  createExpense: (input: ExpenseInput, organizationId: string, accessToken: string) =>
+    request<Expense>("/api/v1/finance/expenses", {
+      method: "POST",
+      body: JSON.stringify(input),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  updateExpense: (id: string, input: Partial<ExpenseInput>, organizationId: string, accessToken: string) =>
+    request<Expense>(`/api/v1/finance/expenses/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  postExpense: (id: string, organizationId: string, accessToken: string) =>
+    request<Expense>(`/api/v1/finance/expenses/${id}/post`, {
+      method: "POST",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  reverseExpense: (id: string, organizationId: string, accessToken: string) =>
+    request<Expense>(`/api/v1/finance/expenses/${id}/reverse`, {
+      method: "POST",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  listCashAccounts: (organizationId: string, accessToken: string) =>
+    request<CashAccount[]>("/api/v1/finance/accounts", {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  createCashAccount: (
+    input: { location_id?: string | null; name: string; type: CashAccountType; opening_balance_minor?: string },
+    organizationId: string,
+    accessToken: string,
+  ) => request<CashAccount>("/api/v1/finance/accounts", {
+    method: "POST",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  updateCashAccount: (
+    id: string,
+    input: { name?: string; type?: CashAccountType },
+    organizationId: string,
+    accessToken: string,
+  ) => request<CashAccount>(`/api/v1/finance/accounts/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  deactivateCashAccount: (id: string, organizationId: string, accessToken: string) =>
+    request<CashAccount>(`/api/v1/finance/accounts/${id}/deactivate`, {
+      method: "POST",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  listCashMovements: (organizationId: string, accessToken: string) =>
+    request<CashMovement[]>("/api/v1/finance/cash-movements", {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  createCashMovement: (input: CashMovementInput, organizationId: string, accessToken: string) =>
+    request<CashMovement>("/api/v1/finance/cash-movements", {
+      method: "POST",
+      body: JSON.stringify(input),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  reverseCashMovement: (id: string, organizationId: string, accessToken: string) =>
+    request<CashMovement>(`/api/v1/finance/cash-movements/${id}/reverse`, {
+      method: "POST",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
 };
 
 function authorization(accessToken: string) {

@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from beanly.modules.employees.api.router import router as employees_router
+from beanly.modules.finance.api.router import router as finance_router
 from beanly.modules.identity.api.router import router as auth_router
 from beanly.modules.inventory.api.router import router as inventory_router
 from beanly.modules.menu.api.router import router as menu_router
@@ -20,3 +21,4 @@ api_v1_router.include_router(team_router)
 api_v1_router.include_router(purchasing_router)
 api_v1_router.include_router(sales_router)
 api_v1_router.include_router(payments_router)
+api_v1_router.include_router(finance_router)

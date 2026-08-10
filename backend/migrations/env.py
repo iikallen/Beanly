@@ -9,6 +9,7 @@ from beanly.core.config.settings import get_settings
 from beanly.core.database.base import Base
 from beanly.core.events.outbox import models as outbox_models  # noqa: F401
 from beanly.modules.employees.infrastructure.db import models as employee_models  # noqa: F401
+from beanly.modules.finance.infrastructure.db import models as finance_models  # noqa: F401
 from beanly.modules.identity.infrastructure.db import models  # noqa: F401
 from beanly.modules.inventory.infrastructure.db import models as inventory_models  # noqa: F401
 from beanly.modules.menu.infrastructure.db import models as menu_models  # noqa: F401

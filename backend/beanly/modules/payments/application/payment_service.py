@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from beanly.core.events import DomainEventSink, NullDomainEventSink
+from beanly.core.money import MAX_BIGINT, MAX_NUMERIC_20_6_MINOR
 from beanly.modules.organizations.domain.entities import TenantContext
 from beanly.modules.payments.application.ports import (
     InventorySalePort,
@@ -24,8 +25,6 @@ from beanly.modules.payments.domain.exceptions import (
 )
 from beanly.modules.payments.domain.repositories import PaymentRepository
 from beanly.modules.sales.domain.enums import OrderStatus
-
-_MAX_BIGINT = 9223372036854775807
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,8 +77,8 @@ class PaymentService:
             if not order.has_items:
                 raise OrderNotPayable("Order must contain at least one item")
             amount_minor = sum(line.amount_minor for line in lines)
-            if amount_minor > _MAX_BIGINT:
-                raise InvalidPayment("Payment total is outside BIGINT")
+            if amount_minor > MAX_NUMERIC_20_6_MINOR:
+                raise InvalidPayment("Payment total exceeds the finance ledger limit")
             if amount_minor != order.total_minor:
                 raise PaymentAmountMismatch("Payment lines must equal the order total")
             staged_sale = await self.inventory.stage_sale(
@@ -253,13 +252,13 @@ def _normalize_lines(values: tuple[PaymentLineInput, ...]) -> tuple[_NormalizedL
         raise InvalidPayment("A payment cannot contain more than 100 lines")
     normalized: list[_NormalizedLine] = []
     for value in values:
-        if not 0 <= value.amount_minor <= _MAX_BIGINT:
-            raise InvalidPayment("Payment line amount must fit a non-negative BIGINT")
+        if not 0 <= value.amount_minor <= MAX_NUMERIC_20_6_MINOR:
+            raise InvalidPayment("Payment line amount exceeds the finance ledger limit")
         reference = _reference(value.reference)
         if value.method == PaymentMethod.CASH:
             if value.cash_received_minor is None:
                 raise InvalidPayment("Cash received is required for CASH")
-            if not 0 <= value.cash_received_minor <= _MAX_BIGINT:
+            if not 0 <= value.cash_received_minor <= MAX_BIGINT:
                 raise InvalidPayment("Cash received must fit a non-negative BIGINT")
             if value.cash_received_minor < value.amount_minor:
                 raise InvalidPayment("Cash received cannot be below the applied amount")

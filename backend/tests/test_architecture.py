@@ -79,9 +79,35 @@ def test_openapi_contains_current_contract() -> None:
         "/api/v1/menu/variants/{variant_id}/cost",
         "/api/v1/menu/variants/{variant_id}/prices/{location_id}",
         "/api/v1/menu/costs",
+        "/api/v1/finance/pnl",
+        "/api/v1/finance/pnl/breakdown",
+        "/api/v1/finance/pnl/locations",
+        "/api/v1/finance/cash-flow",
+        "/api/v1/finance/expense-categories",
+        "/api/v1/finance/expense-categories/{category_id}",
+        "/api/v1/finance/expense-categories/{category_id}/deactivate",
+        "/api/v1/finance/expenses",
+        "/api/v1/finance/expenses/{expense_id}",
+        "/api/v1/finance/expenses/{expense_id}/post",
+        "/api/v1/finance/expenses/{expense_id}/reverse",
+        "/api/v1/finance/accounts",
+        "/api/v1/finance/accounts/{account_id}",
+        "/api/v1/finance/accounts/{account_id}/deactivate",
+        "/api/v1/finance/cash-movements",
+        "/api/v1/finance/cash-movements/{movement_id}/reverse",
+        "/api/v1/finance/entries",
     } <= paths.keys()
     assert "delete" not in paths["/api/v1/organizations/{organization_id}"]
     assert "delete" not in paths["/api/v1/suppliers/{supplier_id}"]
+    schemas = app.openapi()["components"]["schemas"]
+    assert schemas["ExpenseRequest"]["properties"]["amount_minor"]["type"] == "string"
+    assert (
+        schemas["CashAccountRequest"]["properties"]["opening_balance_minor"]["type"]
+        == "string"
+    )
+    assert schemas["CashMovementRequest"]["properties"]["amount_minor"]["type"] == (
+        "string"
+    )
 
 
 def test_domain_has_no_framework_or_infrastructure_imports() -> None:
@@ -200,3 +226,34 @@ def test_inventory_operations_use_ledger_application_boundary() -> None:
     assert "self.inventory.repository" not in source
     assert "create_and_post_staged" in source
     assert "reverse_staged" in source
+
+
+def test_finance_layers_and_source_dependencies_stay_one_way() -> None:
+    finance = Path("beanly/modules/finance")
+    for layer in (finance / "domain", finance / "application"):
+        for path in layer.rglob("*.py"):
+            source = path.read_text(encoding="utf-8").casefold()
+            assert "fastapi" not in source, path
+            assert "sqlalchemy" not in source, path
+            assert "infrastructure" not in source, path
+
+    source_reader = finance / "infrastructure/source_reader.py"
+    source_model_imports = (
+        "modules.payments.infrastructure.db.models",
+        "modules.sales.infrastructure.db.models",
+        "modules.inventory.infrastructure.db.models",
+        "modules.purchasing.infrastructure.db.models",
+    )
+    for path in finance.rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        if path == source_reader:
+            assert any(value in source for value in source_model_imports)
+        else:
+            assert not any(value in source for value in source_model_imports), path
+
+    for module in ("payments", "sales", "inventory", "purchasing"):
+        root = Path(f"beanly/modules/{module}")
+        for layer in (root / "domain", root / "application"):
+            for path in layer.rglob("*.py"):
+                source = path.read_text(encoding="utf-8")
+                assert "modules.finance" not in source, path

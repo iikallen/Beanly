@@ -158,6 +158,29 @@ async def test_owner_admin_manager_and_barista_api_permissions(app_client, monke
     cashier_headers = {**cashier, "X-Organization-ID": organization_id}
 
     for headers, role in (
+        (owner_headers, "Owner"),
+        (admin_headers, "Admin"),
+        (accountant_headers, "Accountant"),
+    ):
+        assert (await client.get("/api/v1/finance/accounts", headers=headers)).status_code == 200
+        assert (
+            await client.post(
+                "/api/v1/finance/expense-categories",
+                headers=headers,
+                json={"name": f"{role} finance"},
+            )
+        ).status_code == 201
+    for headers in (manager_headers, cashier_headers, barista_headers):
+        assert (await client.get("/api/v1/finance/accounts", headers=headers)).status_code == 403
+        assert (
+            await client.post(
+                "/api/v1/finance/expense-categories",
+                headers=headers,
+                json={"name": "Forbidden finance"},
+            )
+        ).status_code == 403
+
+    for headers, role in (
         (accountant_headers, "ACCOUNTANT"),
         (cashier_headers, "CASHIER"),
         (barista_headers, "BARISTA"),

@@ -4,6 +4,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 from beanly.core.events import DomainEventSink
+from beanly.core.money import MAX_NUMERIC_20_6
 from beanly.modules.inventory.application.commands import CreateAndPostCommand, QuantityInput
 from beanly.modules.inventory.application.operation_ports import InventoryOperationsRepository
 from beanly.modules.inventory.application.services import InventoryService
@@ -549,6 +550,18 @@ class InventoryOperationsService:
                 )
                 for line in value.lines
             }
+            loss = sum(
+                (-snapshot[2] for snapshot in snapshots.values() if snapshot[2] < 0),
+                Decimal(0),
+            )
+            gain = sum(
+                (snapshot[2] for snapshot in snapshots.values() if snapshot[2] > 0),
+                Decimal(0),
+            )
+            if max(loss, gain) > MAX_NUMERIC_20_6:
+                raise InvalidInventoryOperation(
+                    "Inventory count variance exceeds the finance ledger limit"
+                )
             transaction_id = staged.detail.transaction.id if staged else None
             now = datetime.now(UTC)
             await self.repository.post_count(

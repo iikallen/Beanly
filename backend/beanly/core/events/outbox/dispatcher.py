@@ -50,6 +50,8 @@ class OutboxDispatcher:
                     envelope.event_name,
                 )
                 try:
+                    # Handler writes and failure bookkeeping must never share a commit.
+                    await self.repository.rollback()
                     await self.repository.mark_failed(
                         envelope.id,
                         self.worker_id,

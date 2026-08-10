@@ -416,3 +416,65 @@ async def test_writeoff_count_transfer_and_movement_workflows(app_client) -> Non
         "inventory.transfer_posted",
         "inventory.transfer_reversed",
     } <= event_names
+
+
+@pytest.mark.anyio
+async def test_count_finance_aggregate_overflow_rolls_back_atomically(app_client) -> None:
+    client, sessions = app_client
+    headers, organization_id, location_id = await _owner(client)
+    warehouse_id = await _warehouse(client, headers, location_id, "Overflow")
+    item_ids = [
+        await _item(client, headers, "Overflow A"),
+        await _item(client, headers, "Overflow B"),
+    ]
+    count = await client.post(
+        "/api/v1/inventory/counts",
+        headers=headers,
+        json={
+            "warehouse_id": str(warehouse_id),
+            "type": "PARTIAL",
+            "inventory_item_ids": [str(value) for value in item_ids],
+        },
+    )
+    assert count.status_code == 201, count.text
+    count_id = count.json()["id"]
+    updated = await client.put(
+        f"/api/v1/inventory/counts/{count_id}/lines",
+        headers=headers,
+        json={
+            "lines": [
+                {
+                    "inventory_item_id": str(item_id),
+                    "counted_quantity": "1",
+                    "unit": "g",
+                    "unit_cost_amount": "60000000000000",
+                }
+                for item_id in item_ids
+            ]
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    rejected = await client.post(
+        f"/api/v1/inventory/counts/{count_id}/post",
+        headers=headers,
+        json={"confirm_stock_changes": False},
+    )
+    assert rejected.status_code == 409, rejected.text
+    current = await client.get(
+        f"/api/v1/inventory/counts/{count_id}", headers=headers
+    )
+    assert current.status_code == 200, current.text
+    assert current.json()["status"] == "COUNTING"
+    assert current.json()["inventory_transaction_id"] is None
+    for item_id in item_ids:
+        assert (await _stock(client, headers, warehouse_id, item_id))["quantity"] == "0"
+    async with sessions() as session:
+        assert (
+            await session.execute(
+                select(OutboxEventModel.id).where(
+                    OutboxEventModel.organization_id == organization_id,
+                    OutboxEventModel.event_name == "inventory.count_posted",
+                    OutboxEventModel.aggregate_id == UUID(count_id),
+                )
+            )
+        ).scalars().all() == []

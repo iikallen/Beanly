@@ -10,6 +10,14 @@ from beanly.core.events.handlers.registry import EventHandlerRegistry
 from beanly.core.events.outbox.dispatcher import OutboxDispatcher
 from beanly.core.events.outbox.repositories import OutboxRepository
 from beanly.core.logging.config import configure_logging
+from beanly.modules.finance.application.projection_service import FinanceProjectionService
+from beanly.modules.finance.infrastructure.db.repositories import (
+    SqlAlchemyFinanceRepository,
+)
+from beanly.modules.finance.infrastructure.handlers import register_finance_handlers
+from beanly.modules.finance.infrastructure.source_reader import (
+    SqlAlchemyFinanceSourceReader,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -17,10 +25,17 @@ logger = logging.getLogger(__name__)
 async def run_worker() -> None:
     settings = get_settings()
     worker_id = f"{socket.gethostname()[:83]}-{uuid4()}"
-    handlers = EventHandlerRegistry()
     last_stats_at = 0.0
     logger.info("Outbox worker started: worker_id=%s", worker_id)
     async with session_factory() as session:
+        handlers = EventHandlerRegistry()
+        register_finance_handlers(
+            handlers,
+            FinanceProjectionService(
+                SqlAlchemyFinanceRepository(session),
+                SqlAlchemyFinanceSourceReader(session),
+            ),
+        )
         repository = OutboxRepository(session)
         dispatcher = OutboxDispatcher(
             repository,

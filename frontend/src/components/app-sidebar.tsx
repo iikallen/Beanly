@@ -3,6 +3,7 @@
 import {
   Building2,
   Coffee,
+  Landmark,
   Package,
   LayoutDashboard,
   LogOut,
@@ -24,7 +25,7 @@ export function AppSidebar({
   teamView,
   onTeamView,
 }: {
-  active: "dashboard" | "pos" | "inventory" | "menu" | "purchasing" | "team" | "settings";
+  active: "dashboard" | "pos" | "inventory" | "menu" | "purchasing" | "finance" | "team" | "settings";
   teamView?: "employees" | "invitations";
   onTeamView?: (view: "employees" | "invitations") => void;
 }) {
@@ -171,6 +172,33 @@ export function AppSidebar({
               href="/app/purchasing/suppliers"
             >
               Suppliers
+            </Link>
+          </div>
+        )}
+        <button
+          className={active === "finance" ? "app-nav-item is-active" : "app-nav-item"}
+          type="button"
+          onClick={() => router.push("/app/finance")}
+        >
+          <Landmark aria-hidden="true" />
+          Finance
+        </button>
+        {active === "finance" && (
+          <div className="app-subnav finance-subnav" aria-label="Finance navigation">
+            <Link className={pathname === "/app/finance" ? "is-active" : ""} href="/app/finance">
+              Overview
+            </Link>
+            <Link className={pathname.startsWith("/app/finance/pnl") ? "is-active" : ""} href="/app/finance/pnl">
+              P&amp;L
+            </Link>
+            <Link className={pathname.startsWith("/app/finance/expenses") ? "is-active" : ""} href="/app/finance/expenses">
+              Expenses
+            </Link>
+            <Link className={pathname.startsWith("/app/finance/cash-flow") ? "is-active" : ""} href="/app/finance/cash-flow">
+              Cash Flow
+            </Link>
+            <Link className={pathname.startsWith("/app/finance/accounts") ? "is-active" : ""} href="/app/finance/accounts">
+              Accounts
             </Link>
           </div>
         )}

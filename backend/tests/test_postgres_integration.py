@@ -200,6 +200,14 @@ INVENTORY_OPERATION_TABLES = {
     "supplier_returns",
     "supplier_return_lines",
 }
+FINANCE_TABLES = {
+    "expense_categories",
+    "expenses",
+    "finance_entries",
+    "cash_accounts",
+    "cash_entries",
+    "cash_movements",
+}
 APPLICATION_TABLES = (
     ORGANIZATION_TABLES
     | TEAM_TABLES
@@ -211,6 +219,7 @@ APPLICATION_TABLES = (
     | PAYMENT_TABLES
     | OUTBOX_TABLES
     | INVENTORY_OPERATION_TABLES
+    | FINANCE_TABLES
 )
 
 
@@ -2023,12 +2032,12 @@ async def test_postgres_sales_idempotency_totals_shift_races_and_no_posting(
                 await connection.execute(
                     text(
                         "SELECT to_regclass(name) FROM unnest(ARRAY["
-                        "'payment_transactions','finance_entries',"
-                        "'revenues','cogs_entries']) AS name"
+                        "'payment_transactions','revenues','cogs_entries']) AS name"
                     )
                 )
             ).scalars().all()
-            assert absent_tables == [None, None, None, None]
+            assert absent_tables == [None, None, None]
+            assert await connection.scalar(text("SELECT count(*) FROM finance_entries")) == 0
     finally:
         await engine.dispose()
 
@@ -2642,12 +2651,13 @@ async def test_postgres_payments_atomicity_concurrency_and_sale_posting(
                 await connection.execute(
                     text(
                         "SELECT to_regclass(name) FROM unnest(ARRAY["
-                        "'finance_entries','revenues','revenue_entries','cogs_entries']) "
+                        "'revenues','revenue_entries','cogs_entries']) "
                         "AS name"
                     )
                 )
             ).scalars().all()
-            assert finance_tables == [None, None, None, None]
+            assert finance_tables == [None, None, None]
+            assert await connection.scalar(text("SELECT count(*) FROM finance_entries")) == 0
     finally:
         await engine.dispose()
 
@@ -3410,7 +3420,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
             "alembic_version",
             *APPLICATION_TABLES,
         } <= upgraded["tables"]
-        assert upgraded["revision"] == "0014_inventory_operations"
+        assert upgraded["revision"] == "0015_finance"
         assert INVENTORY_OPERATION_TABLES <= upgraded["tables"]
         assert {
             "inventory_writeoff_number_seq",
@@ -3473,7 +3483,9 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
             command.downgrade, config, "0013_transactional_outbox"
         )
         inventory_operations_downgraded = await database_snapshot(test_url)
-        assert not INVENTORY_OPERATION_TABLES & inventory_operations_downgraded["tables"]
+        assert not (
+            INVENTORY_OPERATION_TABLES | FINANCE_TABLES
+        ) & inventory_operations_downgraded["tables"]
         assert inventory_operations_downgraded["revision"] == "0013_transactional_outbox"
         await asyncio.to_thread(command.upgrade, config, "head")
         await asyncio.to_thread(command.check, config)
@@ -4077,6 +4089,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
             | PAYMENT_TABLES
             | OUTBOX_TABLES
             | INVENTORY_OPERATION_TABLES
+            | FINANCE_TABLES
         ) <= sales_downgraded["tables"]
         assert "sales_order_number_seq" not in sales_downgraded["sequences"]
         assert sales_downgraded["revision"] == "0009_modifiers"
@@ -4240,7 +4253,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
         await asyncio.to_thread(command.upgrade, config, "head")
         reupgraded = await database_snapshot(test_url)
         assert APPLICATION_TABLES <= reupgraded["tables"]
-        assert reupgraded["revision"] == "0014_inventory_operations"
+        assert reupgraded["revision"] == "0015_finance"
         assert await membership_state(test_url, legacy_membership_id) == ("ACTIVE", "ALL")
     finally:
         await admin_engine.dispose()

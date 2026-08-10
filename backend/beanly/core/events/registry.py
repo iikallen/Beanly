@@ -4,6 +4,13 @@ from uuid import UUID, uuid4
 
 from beanly.core.events.envelope import EventEnvelope
 from beanly.core.events.serializer import serialize_event_payload
+from beanly.modules.finance.domain.events import (
+    CashMovementPosted,
+    CashMovementReversed,
+    ExpenseCreated,
+    ExpensePosted,
+    ExpenseReversed,
+)
 from beanly.modules.inventory.domain.events import (
     InventoryCostUpdated,
     InventoryCountCancelled,
@@ -43,6 +50,15 @@ class EventSpec:
 
 
 EVENT_REGISTRY: dict[type[object], EventSpec] = {
+    ExpenseCreated: EventSpec("finance.expense_created", 1, "expense", "expense_id"),
+    ExpensePosted: EventSpec("finance.expense_posted", 1, "expense", "expense_id"),
+    ExpenseReversed: EventSpec("finance.expense_reversed", 1, "expense", "expense_id"),
+    CashMovementPosted: EventSpec(
+        "finance.cash_movement_posted", 1, "cash_movement", "cash_movement_id"
+    ),
+    CashMovementReversed: EventSpec(
+        "finance.cash_movement_reversed", 1, "cash_movement", "cash_movement_id"
+    ),
     PaymentCompleted: EventSpec("payment.completed", 1, "payment", "payment_id"),
     InventoryTransactionPosted: EventSpec(
         "inventory.transaction_posted", 1, "inventory_transaction", "transaction_id"

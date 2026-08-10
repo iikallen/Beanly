@@ -1,0 +1,1 @@
+"""Finance database adapters."""
