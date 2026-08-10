@@ -15,6 +15,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from beanly.core.config.settings import Settings
+from beanly.core.events.handlers.registry import EventHandlerRegistry
+from beanly.core.events.outbox.dispatcher import OutboxDispatcher
+from beanly.core.events.outbox.models import OutboxEventModel
+from beanly.core.events.outbox.repositories import (
+    OutboxLeaseLost,
+    OutboxRepository,
+)
+from beanly.core.events.outbox.writer import OutboxEventSink
+from beanly.core.events.registry import to_envelope
 from beanly.core.security.tokens import hash_invitation_token
 from beanly.modules.employees.infrastructure.db.models import EmployeeModel
 from beanly.modules.employees.infrastructure.db.repositories import (
@@ -82,6 +91,7 @@ from beanly.modules.payments.application.payment_service import (
     PaymentService,
 )
 from beanly.modules.payments.domain.enums import PaymentMethod
+from beanly.modules.payments.domain.events import PaymentCompleted
 from beanly.modules.payments.domain.exceptions import (
     OrderAlreadyPaid,
     PaymentIdempotencyConflict,
@@ -170,6 +180,7 @@ SALES_TABLES = {
     "sales_order_item_components",
 }
 PAYMENT_TABLES = {"payments", "payment_lines"}
+OUTBOX_TABLES = {"outbox_events"}
 APPLICATION_TABLES = (
     ORGANIZATION_TABLES
     | TEAM_TABLES
@@ -179,7 +190,14 @@ APPLICATION_TABLES = (
     | MENU_TABLES
     | SALES_TABLES
     | PAYMENT_TABLES
+    | OUTBOX_TABLES
 )
+
+
+class FailingOutboxRepository(OutboxRepository):
+    async def add_many(self, envelopes):
+        await super().add_many(envelopes)
+        raise RuntimeError("forced outbox failure")
 
 
 async def database_snapshot(database_url: str) -> dict:
@@ -550,7 +568,6 @@ async def assert_postgres_invitation_parent_is_flushed_first(database_url: str) 
                 )
                 == 1
             )
-
         class NoopEmailSender:
             async def send_invitation(self, email, organization_name, role, invite_url):
                 raise AssertionError("Acceptance must not send invitation email")
@@ -769,6 +786,189 @@ async def postgres_inventory_database():
 
 
 @pytest.mark.anyio
+async def test_postgres_outbox_delivery_retry_lease_and_concurrent_claims(
+    postgres_inventory_database,
+) -> None:
+    database_url = postgres_inventory_database
+    context, _, _ = await seed_inventory_context(database_url)
+    engine = create_async_engine(database_url)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def add_events(count: int) -> tuple[UUID, ...]:
+        envelopes = tuple(
+            to_envelope(
+                PaymentCompleted(
+                    uuid4(),
+                    uuid4(),
+                    context.organization_id,
+                    uuid4(),
+                    1000 + index,
+                )
+            )
+            for index in range(count)
+        )
+        async with sessions() as session:
+            await OutboxRepository(session).add_many(envelopes)
+            await session.commit()
+        return tuple(envelope.id for envelope in envelopes)
+
+    try:
+        event_ids = await add_events(100)
+        deliveries: dict[UUID, int] = {}
+
+        async def record(envelope) -> None:
+            deliveries[envelope.id] = deliveries.get(envelope.id, 0) + 1
+            await asyncio.sleep(0)
+
+        handlers = EventHandlerRegistry()
+        handlers.register("payment.completed", 1, record)
+        async with sessions() as first, sessions() as second:
+            results = await asyncio.gather(
+                OutboxDispatcher(
+                    OutboxRepository(first), handlers, "worker-a", batch_size=50
+                ).run_once(),
+                OutboxDispatcher(
+                    OutboxRepository(second), handlers, "worker-b", batch_size=50
+                ).run_once(),
+            )
+        assert sorted(results) == [50, 50]
+        assert set(deliveries) == set(event_ids)
+        assert set(deliveries.values()) == {1}
+        async with sessions() as session:
+            assert await session.scalar(
+                select(func.count(OutboxEventModel.id)).where(
+                    OutboxEventModel.id.in_(event_ids),
+                    OutboxEventModel.processed_at.is_not(None),
+                    OutboxEventModel.attempts == 0,
+                )
+            ) == 100
+
+        no_handler_id = (await add_events(1))[0]
+        async with sessions() as session:
+            assert await OutboxDispatcher(
+                OutboxRepository(session), EventHandlerRegistry(), "worker-empty"
+            ).run_once() == 1
+        async with sessions() as session:
+            no_handler = await session.get(OutboxEventModel, no_handler_id)
+            assert no_handler is not None and no_handler.processed_at is not None
+
+        flaky_id = (await add_events(1))[0]
+        flaky_calls = 0
+
+        async def flaky(_envelope) -> None:
+            nonlocal flaky_calls
+            flaky_calls += 1
+            if flaky_calls < 3:
+                raise RuntimeError("temporary handler failure")
+
+        flaky_handlers = EventHandlerRegistry()
+        flaky_handlers.register("payment.completed", 1, flaky)
+        async with sessions() as session:
+            dispatcher = OutboxDispatcher(
+                OutboxRepository(session), flaky_handlers, "worker-flaky"
+            )
+            for attempt in range(3):
+                assert await dispatcher.run_once() == 1
+                if attempt < 2:
+                    failed = await session.get(OutboxEventModel, flaky_id)
+                    assert failed is not None
+                    assert failed.attempts == attempt + 1
+                    assert failed.processed_at is None
+                    assert failed.last_error == (
+                        "RuntimeError: temporary handler failure"
+                    )
+                    assert failed.available_at > failed.occurred_at
+                    assert failed.locked_by is None
+                    assert failed.locked_until is None
+                    await session.execute(
+                        text(
+                            "UPDATE outbox_events SET available_at=now()-interval '1 second' "
+                            "WHERE id=:event_id"
+                        ),
+                        {"event_id": flaky_id},
+                    )
+                    await session.commit()
+            flaky_model = await session.get(OutboxEventModel, flaky_id)
+            assert flaky_model is not None
+            assert flaky_model.attempts == 2
+            assert flaky_model.processed_at is not None
+            assert flaky_model.dead_lettered_at is None
+            assert flaky_model.last_error is None
+
+        dead_id = (await add_events(1))[0]
+
+        async def poison(_envelope) -> None:
+            raise RuntimeError("x" * 5000)
+
+        poison_handlers = EventHandlerRegistry()
+        poison_handlers.register("payment.completed", 1, poison)
+        async with sessions() as session:
+            dispatcher = OutboxDispatcher(
+                OutboxRepository(session),
+                poison_handlers,
+                "worker-poison",
+                max_attempts=12,
+            )
+            for attempt in range(12):
+                assert await dispatcher.run_once() == 1
+                if attempt < 11:
+                    await session.execute(
+                        text(
+                            "UPDATE outbox_events SET available_at=now()-interval '1 second' "
+                            "WHERE id=:event_id"
+                        ),
+                        {"event_id": dead_id},
+                    )
+                    await session.commit()
+            dead_model = await session.get(OutboxEventModel, dead_id)
+            assert dead_model is not None
+            assert dead_model.attempts == 12
+            assert dead_model.processed_at is None
+            assert dead_model.dead_lettered_at is not None
+            assert dead_model.locked_by is None
+            assert dead_model.locked_until is None
+            assert dead_model.last_error is not None
+            assert len(dead_model.last_error) == 4000
+            assert await dispatcher.run_once() == 0
+
+        lease_id = (await add_events(1))[0]
+        claimed_at = datetime.now(UTC) + timedelta(seconds=1)
+        async with sessions() as first, sessions() as second:
+            first_repository = OutboxRepository(first)
+            second_repository = OutboxRepository(second)
+            assert len(
+                await first_repository.claim_batch(
+                    "worker-lease-a", 1, 30, now=claimed_at
+                )
+            ) == 1
+            await first.commit()
+            assert await second_repository.claim_batch(
+                "worker-lease-b", 1, 30, now=claimed_at + timedelta(seconds=29)
+            ) == ()
+            await second.commit()
+            reclaimed = await second_repository.claim_batch(
+                "worker-lease-b", 1, 30, now=claimed_at + timedelta(seconds=31)
+            )
+            assert tuple(value.id for value in reclaimed) == (lease_id,)
+            await second.commit()
+            with pytest.raises(OutboxLeaseLost):
+                await first_repository.mark_processed(
+                    lease_id,
+                    "worker-lease-a",
+                    now=claimed_at + timedelta(seconds=32),
+                )
+            await first.rollback()
+            await second_repository.mark_processed(
+                lease_id,
+                "worker-lease-b",
+                now=claimed_at + timedelta(seconds=32),
+            )
+            await second.commit()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.anyio
 async def test_postgres_inventory_concurrency_idempotency_and_reconciliation(
     postgres_inventory_database,
 ) -> None:
@@ -799,6 +999,7 @@ async def test_postgres_inventory_concurrency_idempotency_and_reconciliation(
             return await InventoryService(
                 SqlAlchemyInventoryRepository(session),
                 OrganizationService(SqlAlchemyOrganizationRepository(session)),
+                OutboxEventSink(OutboxRepository(session)),
             ).create_and_post(context, command_)
 
     async def balance() -> Decimal:
@@ -813,7 +1014,7 @@ async def test_postgres_inventory_concurrency_idempotency_and_reconciliation(
             return value or Decimal(0)
 
     try:
-        await execute(
+        opening = await execute(
             command_for(
                 "1000",
                 "pg:opening",
@@ -827,6 +1028,7 @@ async def test_postgres_inventory_concurrency_idempotency_and_reconciliation(
             service = InventoryService(
                 SqlAlchemyInventoryRepository(session),
                 OrganizationService(SqlAlchemyOrganizationRepository(session)),
+                OutboxEventSink(OutboxRepository(session)),
             )
             draft = await service.create_draft(
                 context,
@@ -866,6 +1068,7 @@ async def test_postgres_inventory_concurrency_idempotency_and_reconciliation(
                 return await InventoryService(
                     SqlAlchemyInventoryRepository(session),
                     OrganizationService(SqlAlchemyOrganizationRepository(session)),
+                    OutboxEventSink(OutboxRepository(session)),
                 ).reverse(context, original_id, "pg:reverse")
 
         reversals = await asyncio.gather(reverse_once(), reverse_once())
@@ -897,6 +1100,21 @@ async def test_postgres_inventory_concurrency_idempotency_and_reconciliation(
         assert await balance() == Decimal("795.300003")
 
         async with sessions() as session:
+            assert (
+                await session.execute(
+                    select(OutboxEventModel.event_name)
+                    .where(OutboxEventModel.aggregate_id == opening.transaction.id)
+                    .order_by(OutboxEventModel.event_name)
+                )
+            ).scalars().all() == [
+                "inventory.transaction_posted",
+                "inventory.valuation_changed",
+            ]
+            assert await session.scalar(
+                select(func.count(OutboxEventModel.id)).where(
+                    OutboxEventModel.event_name == "inventory.cost_updated"
+                )
+            ) > 0
             ledger = await session.scalar(
                 text(
                     """
@@ -1573,7 +1791,7 @@ async def test_postgres_payments_atomicity_concurrency_and_sale_posting(
                 )
 
         def payment_service(
-            session, *, repository=None, gateway=None, inventory=None, publisher=None
+            session, *, repository=None, gateway=None, inventory=None, sink=None
         ):
             sales_repository = SqlAlchemySalesRepository(session)
             organizations = OrganizationService(SqlAlchemyOrganizationRepository(session))
@@ -1586,7 +1804,7 @@ async def test_postgres_payments_atomicity_concurrency_and_sale_posting(
                 repository or SqlAlchemyPaymentRepository(session),
                 gateway or SalesSettlementGateway(sales_repository, organizations),
                 inventory or InventorySaleGateway(inventory_service),
-                publisher,
+                sink or OutboxEventSink(OutboxRepository(session)),
             )
 
         async with sessions() as session:
@@ -1684,6 +1902,48 @@ async def test_postgres_payments_atomicity_concurrency_and_sale_posting(
                 ),
                 {"warehouse_id": warehouse_id, "item_id": item_id},
             ) == Decimal("982.000000")
+            outbox = (
+                await connection.execute(
+                    text(
+                        "SELECT event_name, event_version, aggregate_id, payload, "
+                        "processed_at FROM outbox_events "
+                        "WHERE organization_id=:organization_id "
+                        "ORDER BY event_name"
+                    ),
+                    {
+                        "organization_id": context.organization_id,
+                    },
+                )
+            ).all()
+            assert [(row.event_name, row.event_version) for row in outbox] == [
+                ("inventory.cost_updated", 1),
+                ("inventory.transaction_posted", 1),
+                ("inventory.valuation_changed", 1),
+                ("payment.completed", 1),
+            ]
+            assert all(row.processed_at is None for row in outbox)
+            assert next(
+                row for row in outbox if row.event_name == "payment.completed"
+            ).aggregate_id == payment.id
+            assert {
+                row.aggregate_id
+                for row in outbox
+                if row.event_name
+                in {
+                    "inventory.transaction_posted",
+                    "inventory.valuation_changed",
+                }
+            } == {paid.inventory_transaction_id}
+            payment_event = next(
+                row for row in outbox if row.event_name == "payment.completed"
+            )
+            assert payment_event.payload == {
+                "payment_id": str(payment.id),
+                "order_id": str(concurrent_order.id),
+                "organization_id": str(context.organization_id),
+                "location_id": str(location_id),
+                "amount_minor": 670000,
+            }
 
         cross_order = await new_order()
         with pytest.raises(PaymentIdempotencyConflict):
@@ -1709,6 +1969,54 @@ async def test_postgres_payments_atomicity_concurrency_and_sale_posting(
         )
         assert sum(not isinstance(value, Exception) for value in doubled) == 1
         assert sum(isinstance(value, OrderAlreadyPaid) for value in doubled) == 1
+
+        outbox_failure_order = await new_order()
+        async with sessions() as session:
+            with pytest.raises(RuntimeError, match="forced outbox failure"):
+                await payment_service(
+                    session,
+                    sink=OutboxEventSink(FailingOutboxRepository(session)),
+                ).complete(
+                    context,
+                    outbox_failure_order.id,
+                    CompletePaymentInput(
+                        uuid4(),
+                        (PaymentLineInput(PaymentMethod.CARD, 670000),),
+                    ),
+                )
+        async with engine.connect() as connection:
+            assert (
+                await connection.execute(
+                    text(
+                        "SELECT orders.status, count(payments.id) "
+                        "FROM sales_orders orders LEFT JOIN payments "
+                        "ON payments.order_id=orders.id WHERE orders.id=:order_id "
+                        "GROUP BY orders.status"
+                    ),
+                    {"order_id": outbox_failure_order.id},
+                )
+            ).one() == ("OPEN", 0)
+            assert await connection.scalar(
+                text(
+                    "SELECT count(*) FROM inventory_transactions "
+                    "WHERE type='SALE' AND reference_id=:order_id"
+                ),
+                {"order_id": outbox_failure_order.id},
+            ) == 0
+            assert await connection.scalar(
+                text(
+                    "SELECT count(*) FROM outbox_events "
+                    "WHERE payload->>'order_id'=:order_id"
+                ),
+                {"order_id": str(outbox_failure_order.id)},
+            ) == 0
+            assert await connection.scalar(
+                text(
+                    "SELECT quantity FROM stock_balances "
+                    "WHERE warehouse_id=:warehouse_id AND inventory_item_id=:item_id"
+                ),
+                {"warehouse_id": warehouse_id, "item_id": item_id},
+            ) == Decimal("964.000000")
 
         class FailingInventoryGateway(InventorySaleGateway):
             async def stage_sale(self, *args, **kwargs):
@@ -1856,129 +2164,6 @@ async def test_postgres_payments_atomicity_concurrency_and_sale_posting(
                 {"warehouse_id": warehouse_id, "item_id": item_id},
             ) == Decimal("964.000000")
 
-        timeline: list[str] = []
-
-        class VisibilityInventoryGateway(InventorySaleGateway):
-            def __init__(self, inventory) -> None:
-                super().__init__(inventory)
-                self.observed = None
-
-            async def publish(self, events):
-                transaction_id = next(
-                    event.transaction_id
-                    for event in events
-                    if hasattr(event, "transaction_id")
-                )
-                async with sessions() as check:
-                    self.observed = await check.scalar(
-                        text(
-                            "SELECT count(*) FROM inventory_transactions "
-                            "WHERE id=:id AND status='POSTED'"
-                        ),
-                        {"id": transaction_id},
-                    )
-                timeline.append("inventory")
-
-        class VisibilityPublisher:
-            def __init__(self) -> None:
-                self.observed = None
-
-            async def publish(self, event):
-                async with sessions() as check:
-                    self.observed = (
-                        await check.scalar(
-                            text("SELECT count(*) FROM payments WHERE id=:id"),
-                            {"id": event.payment_id},
-                        ),
-                        await check.scalar(
-                            text("SELECT status FROM sales_orders WHERE id=:id"),
-                            {"id": event.order_id},
-                        ),
-                        await check.scalar(
-                            text(
-                                "SELECT count(*) FROM sales_orders "
-                                "WHERE id=:id AND inventory_transaction_id IS NOT NULL"
-                            ),
-                            {"id": event.order_id},
-                        ),
-                    )
-                timeline.append("payment")
-
-        event_order = await new_order()
-        publisher = VisibilityPublisher()
-        async with sessions() as session:
-            sales_repository = SqlAlchemySalesRepository(session)
-            organizations = OrganizationService(
-                SqlAlchemyOrganizationRepository(session)
-            )
-            visibility_inventory = VisibilityInventoryGateway(
-                InventoryService(
-                    SqlAlchemyInventoryRepository(session),
-                    organizations,
-                    reference_validator=SalesOrderReferenceValidator(
-                        sales_repository
-                    ),
-                )
-            )
-            event_payment = await payment_service(
-                session, inventory=visibility_inventory, publisher=publisher
-            ).complete(
-                context,
-                event_order.id,
-                CompletePaymentInput(
-                    uuid4(), (PaymentLineInput(PaymentMethod.OTHER, 670000),)
-                ),
-            )
-        assert visibility_inventory.observed == 1
-        assert publisher.observed == (1, "PAID", 1)
-        assert timeline == ["inventory", "payment"]
-
-        class FailingPublisherInventoryGateway(InventorySaleGateway):
-            async def publish(self, events):
-                assert events
-                raise RuntimeError("forced event failure")
-
-        event_failure_order = await new_order()
-        async with sessions() as session:
-            sales_repository = SqlAlchemySalesRepository(session)
-            organizations = OrganizationService(
-                SqlAlchemyOrganizationRepository(session)
-            )
-            failing_publisher_inventory = FailingPublisherInventoryGateway(
-                InventoryService(
-                    SqlAlchemyInventoryRepository(session),
-                    organizations,
-                    reference_validator=SalesOrderReferenceValidator(
-                        sales_repository
-                    ),
-                )
-            )
-            published_failure_payment = await payment_service(
-                session, inventory=failing_publisher_inventory
-            ).complete(
-                context,
-                event_failure_order.id,
-                CompletePaymentInput(
-                    uuid4(), (PaymentLineInput(PaymentMethod.OTHER, 670000),)
-                ),
-            )
-        async with engine.connect() as connection:
-            assert await connection.scalar(
-                text("SELECT status FROM sales_orders WHERE id=:id"),
-                {"id": event_failure_order.id},
-            ) == "PAID"
-            assert await connection.scalar(
-                text("SELECT count(*) FROM payments WHERE id=:id"),
-                {"id": published_failure_payment.id},
-            ) == 1
-            assert await connection.scalar(
-                text(
-                    "SELECT count(*) FROM inventory_transactions "
-                    "WHERE type='SALE' AND reference_id=:id"
-                ),
-                {"id": event_failure_order.id},
-            ) == 1
-
         cancel_race_order = await new_order()
 
         async def cancel_order():
@@ -2066,7 +2251,7 @@ async def test_postgres_payments_atomicity_concurrency_and_sale_posting(
                         ),
                         {
                             "id": uuid4(),
-                            "payment_id": event_payment.id,
+                            "payment_id": payment.id,
                             "method": method,
                             "amount": amount,
                             "received": received,
@@ -2100,6 +2285,15 @@ async def test_postgres_payments_atomicity_concurrency_and_sale_posting(
                     "SELECT count(*) FROM (SELECT reference_id FROM "
                     "inventory_transactions WHERE type='SALE' "
                     "GROUP BY reference_id HAVING count(*) <> 1) duplicates"
+                )
+            ) == 0
+            assert await connection.scalar(
+                text("SELECT count(*) FROM outbox_events")
+            ) == sale_count * 4
+            assert await connection.scalar(
+                text(
+                    "SELECT count(*) FROM outbox_events "
+                    "WHERE processed_at IS NOT NULL OR dead_lettered_at IS NOT NULL"
                 )
             ) == 0
             finance_tables = (
@@ -2547,7 +2741,7 @@ async def test_postgres_purchasing_atomic_posting_and_concurrency(
     engine = create_async_engine(database_url)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
 
-    async def service_for(session) -> PurchasingService:
+    async def service_for(session, *, sink=None) -> PurchasingService:
         repository = SqlAlchemyPurchasingRepository(session)
         organizations = OrganizationService(SqlAlchemyOrganizationRepository(session))
         inventory = InventoryService(
@@ -2559,6 +2753,7 @@ async def test_postgres_purchasing_atomic_posting_and_concurrency(
             repository,
             organizations,
             InventoryApplicationGateway(inventory),
+            sink or OutboxEventSink(OutboxRepository(session)),
         )
 
     try:
@@ -2633,6 +2828,44 @@ async def test_postgres_purchasing_atomic_posting_and_concurrency(
                 )
                 == 1
             )
+            posted_transaction_id = posted[0].receipt.inventory_transaction_id
+            assert posted_transaction_id is not None
+            assert (
+                await session.execute(
+                    text(
+                        "SELECT event_name, event_version FROM outbox_events "
+                        "WHERE aggregate_id=:transaction_id ORDER BY event_name"
+                    ),
+                    {"transaction_id": posted_transaction_id},
+                )
+            ).all() == [
+                ("inventory.transaction_posted", 1),
+                ("inventory.valuation_changed", 1),
+            ]
+            assert await session.scalar(
+                text(
+                    "SELECT count(*) FROM outbox_events "
+                    "WHERE event_name='inventory.cost_updated' "
+                    "AND payload->>'inventory_item_id'=:item_id"
+                ),
+                {"item_id": str(item_id)},
+            ) == 1
+            assert await session.scalar(
+                text(
+                    "SELECT count(*) FROM outbox_events "
+                    "WHERE event_name='purchasing.goods_receipt_posted' "
+                    "AND aggregate_id=:receipt_id"
+                ),
+                {"receipt_id": receipt.receipt.id},
+            ) == 1
+            assert await session.scalar(
+                text(
+                    "SELECT count(*) FROM outbox_events "
+                    "WHERE event_name='purchasing.order_partially_received' "
+                    "AND aggregate_id=:order_id"
+                ),
+                {"order_id": order.order.id},
+            ) == 1
 
         async with sessions() as session:
             service = await service_for(session)
@@ -2734,6 +2967,64 @@ async def test_postgres_purchasing_atomic_posting_and_concurrency(
                 )
                 == PurchaseOrderStatus.ORDERED.value
             )
+
+        async with sessions() as session:
+            failing_receipt = await (await service_for(session)).create_receipt(
+                context,
+                CreateGoodsReceiptCommand(
+                    supplier.id,
+                    location_id,
+                    warehouse_id,
+                    None,
+                    "INV-PG-OUTBOX-FAIL",
+                    datetime.now(UTC),
+                    None,
+                    (
+                        ReceiptLineInput(
+                            item_id,
+                            Decimal("1"),
+                            "kg",
+                            None,
+                            Decimal("11000"),
+                            None,
+                        ),
+                    ),
+                ),
+            )
+        async with sessions() as session:
+            with pytest.raises(RuntimeError, match="forced outbox failure"):
+                await (
+                    await service_for(
+                        session,
+                        sink=OutboxEventSink(FailingOutboxRepository(session)),
+                    )
+                ).post_receipt(context, failing_receipt.receipt.id, False)
+        async with sessions() as session:
+            assert await session.scalar(
+                text("SELECT status FROM goods_receipts WHERE id=:receipt_id"),
+                {"receipt_id": failing_receipt.receipt.id},
+            ) == GoodsReceiptStatus.DRAFT.value
+            assert await session.scalar(
+                text(
+                    "SELECT count(*) FROM inventory_transactions "
+                    "WHERE reference_type='GOODS_RECEIPT' AND reference_id=:receipt_id"
+                ),
+                {"receipt_id": failing_receipt.receipt.id},
+            ) == 0
+            assert await session.scalar(
+                text(
+                    "SELECT quantity FROM stock_balances "
+                    "WHERE warehouse_id=:warehouse_id AND inventory_item_id=:item_id"
+                ),
+                {"warehouse_id": warehouse_id, "item_id": item_id},
+            ) == Decimal("2000")
+            assert (
+                await session.execute(
+                    select(OutboxEventModel.event_name).where(
+                        OutboxEventModel.aggregate_id == failing_receipt.receipt.id
+                    )
+                )
+            ).scalars().all() == ["purchasing.goods_receipt_created"]
     finally:
         await engine.dispose()
 
@@ -2777,7 +3068,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
             "alembic_version",
             *APPLICATION_TABLES,
         } <= upgraded["tables"]
-        assert upgraded["revision"] == "0012_sale_posting"
+        assert upgraded["revision"] == "0013_transactional_outbox"
         assert await membership_state(test_url, legacy_membership_id) == ("ACTIVE", "ALL")
         assert set(upgraded["columns"]["organizations"]) == {
             "id",
@@ -3255,6 +3546,50 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
         assert (("payment_id",), "payments") in upgraded["foreign_keys"][
             "payment_lines"
         ]
+        assert set(upgraded["columns"]["outbox_events"]) == {
+            "id",
+            "organization_id",
+            "event_name",
+            "event_version",
+            "aggregate_type",
+            "aggregate_id",
+            "payload",
+            "occurred_at",
+            "available_at",
+            "attempts",
+            "locked_by",
+            "locked_until",
+            "processed_at",
+            "dead_lettered_at",
+            "last_error",
+            "created_at",
+        }
+        assert {
+            "ix_outbox_pending",
+            "ix_outbox_events_organization_id",
+            "ix_outbox_event_name",
+            "ix_outbox_aggregate",
+        } <= upgraded["indexes"]["outbox_events"]
+        assert {
+            "ck_outbox_event_version_positive",
+            "ck_outbox_attempts_nonnegative",
+            "ck_outbox_lock_pair",
+            "ck_outbox_terminal_state",
+        } <= upgraded["check_constraints"]["outbox_events"]
+        assert (("organization_id",), "organizations") in upgraded["foreign_keys"][
+            "outbox_events"
+        ]
+        assert upgraded["primary_keys"]["outbox_events"] == ("id",)
+        assert str(upgraded["columns"]["outbox_events"]["payload"]["type"]) == "JSONB"
+        for column in ("occurred_at", "available_at", "created_at"):
+            assert not upgraded["columns"]["outbox_events"][column]["nullable"]
+            assert upgraded["columns"]["outbox_events"][column]["type"].timezone
+        for column in (
+            "locked_until",
+            "processed_at",
+            "dead_lettered_at",
+        ):
+            assert upgraded["columns"]["outbox_events"][column]["type"].timezone
 
         legacy_engine = create_async_engine(test_url)
         try:
@@ -3288,9 +3623,19 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
         finally:
             await legacy_engine.dispose()
 
+        await asyncio.to_thread(command.downgrade, config, "0012_sale_posting")
+        outbox_downgraded = await database_snapshot(test_url)
+        assert not OUTBOX_TABLES & outbox_downgraded["tables"]
+        assert outbox_downgraded["revision"] == "0012_sale_posting"
+        await asyncio.to_thread(command.upgrade, config, "0013_transactional_outbox")
+        outbox_reupgraded = await database_snapshot(test_url)
+        assert OUTBOX_TABLES <= outbox_reupgraded["tables"]
+        assert outbox_reupgraded["revision"] == "0013_transactional_outbox"
+
         await asyncio.to_thread(command.downgrade, config, "0011_payments")
         sale_posting_downgraded = await database_snapshot(test_url)
         assert PAYMENT_TABLES <= sale_posting_downgraded["tables"]
+        assert not OUTBOX_TABLES & sale_posting_downgraded["tables"]
         assert {
             "inventory_transaction_id",
             "cogs_amount",
@@ -3319,9 +3664,9 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
         await asyncio.to_thread(command.downgrade, config, "0009_modifiers")
         sales_downgraded = await database_snapshot(test_url)
         assert not (SALES_TABLES | PAYMENT_TABLES) & sales_downgraded["tables"]
-        assert APPLICATION_TABLES - (SALES_TABLES | PAYMENT_TABLES) <= sales_downgraded[
-            "tables"
-        ]
+        assert APPLICATION_TABLES - (
+            SALES_TABLES | PAYMENT_TABLES | OUTBOX_TABLES
+        ) <= sales_downgraded["tables"]
         assert "sales_order_number_seq" not in sales_downgraded["sequences"]
         assert sales_downgraded["revision"] == "0009_modifiers"
         await asyncio.to_thread(command.upgrade, config, "head")
@@ -3362,6 +3707,12 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
                         "WHERE indexname='uq_register_shifts_open_register'"
                     )
                 )
+                outbox_pending_index = await connection.scalar(
+                    text(
+                        "SELECT indexdef FROM pg_indexes "
+                        "WHERE indexname='ix_outbox_pending'"
+                    )
+                )
         finally:
             await index_engine.dispose()
         assert index_definition is not None
@@ -3372,6 +3723,10 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
         assert "WHERE" in open_shift_index
         assert "status" in open_shift_index
         assert "OPEN" in open_shift_index
+        assert outbox_pending_index is not None
+        assert "available_at, occurred_at" in outbox_pending_index
+        assert "processed_at IS NULL" in outbox_pending_index
+        assert "dead_lettered_at IS NULL" in outbox_pending_index
 
         inventory_context, inventory_warehouse_id, inventory_item_id = await seed_inventory_context(
             test_url
@@ -3474,7 +3829,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
         await asyncio.to_thread(command.upgrade, config, "head")
         reupgraded = await database_snapshot(test_url)
         assert APPLICATION_TABLES <= reupgraded["tables"]
-        assert reupgraded["revision"] == "0012_sale_posting"
+        assert reupgraded["revision"] == "0013_transactional_outbox"
         assert await membership_state(test_url, legacy_membership_id) == ("ACTIVE", "ALL")
     finally:
         await admin_engine.dispose()

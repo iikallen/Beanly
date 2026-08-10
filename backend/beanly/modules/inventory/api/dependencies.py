@@ -2,6 +2,8 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 
+from beanly.core.events.outbox.repositories import OutboxRepository
+from beanly.core.events.outbox.writer import OutboxEventSink
 from beanly.modules.identity.api.dependencies import SessionDep
 from beanly.modules.inventory.application.services import InventoryService
 from beanly.modules.inventory.infrastructure.db.repositories import (
@@ -22,6 +24,7 @@ def inventory_service(session: SessionDep) -> InventoryService:
     return InventoryService(
         SqlAlchemyInventoryRepository(session),
         OrganizationService(SqlAlchemyOrganizationRepository(session)),
+        OutboxEventSink(OutboxRepository(session)),
     )
 
 

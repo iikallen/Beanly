@@ -5,12 +5,12 @@ from uuid import UUID, uuid4
 import pytest
 from httpx import AsyncClient
 
+from beanly.core.events import CollectingDomainEventSink
 from beanly.modules.inventory.application.commands import (
     CreateAndPostCommand,
     CreateDraftCommand,
     QuantityInput,
 )
-from beanly.modules.inventory.application.events import CollectingEventPublisher
 from beanly.modules.inventory.application.services import InventoryService
 from beanly.modules.inventory.domain.enums import InventoryTransactionType
 from beanly.modules.inventory.domain.events import StockAdjusted, StockWentNegative
@@ -444,10 +444,10 @@ async def test_negative_stock_events_and_request_validation(app_client) -> None:
     )
     assert negative_opening.status_code == 422, negative_opening.text
 
-    publisher = CollectingEventPublisher()
+    sink = CollectingDomainEventSink()
     async with sessions() as session:
         organizations = OrganizationService(SqlAlchemyOrganizationRepository(session))
-        service = InventoryService(SqlAlchemyInventoryRepository(session), organizations, publisher)
+        service = InventoryService(SqlAlchemyInventoryRepository(session), organizations, sink)
         context = await organizations.tenant_context(user_id, organization_id)
         await service.create_and_post(
             context,
@@ -460,8 +460,8 @@ async def test_negative_stock_events_and_request_validation(app_client) -> None:
                 (QuantityInput(item_id, Decimal("-5"), UnitCode.G),),
             ),
         )
-    assert any(isinstance(event, StockWentNegative) for event in publisher.events)
-    assert any(isinstance(event, StockAdjusted) for event in publisher.events)
+    assert any(isinstance(event, StockWentNegative) for event in sink.events)
+    assert any(isinstance(event, StockAdjusted) for event in sink.events)
 
 
 @pytest.mark.anyio
@@ -552,8 +552,8 @@ async def test_tenant_and_selected_location_isolation(app_client) -> None:
 
 
 @pytest.mark.anyio
-async def test_movements_use_posting_order_and_post_commit_events_are_best_effort(
-    app_client, caplog
+async def test_movements_use_posting_order_and_sink_failure_rolls_back(
+    app_client,
 ) -> None:
     client, sessions = app_client
     auth, user_id = await authenticated_user(client, "order-owner@example.com")
@@ -561,19 +561,10 @@ async def test_movements_use_posting_order_and_post_commit_events_are_best_effor
     warehouse_id = await create_warehouse(client, headers, location_id)
     item_id = await create_item(client, headers, "Ordered Beans", "g")
 
-    class FailingPublisher:
-        async def publish(self, event: object) -> None:
-            del event
-            raise RuntimeError("publisher unavailable")
-
     async with sessions() as session:
         organizations = OrganizationService(SqlAlchemyOrganizationRepository(session))
         context = await organizations.tenant_context(user_id, organization_id)
-        service = InventoryService(
-            SqlAlchemyInventoryRepository(session),
-            organizations,
-            FailingPublisher(),
-        )
+        service = InventoryService(SqlAlchemyInventoryRepository(session), organizations)
         delayed = await service.create_draft(
             context,
             CreateDraftCommand(
@@ -615,6 +606,33 @@ async def test_movements_use_posting_order_and_post_commit_events_are_best_effor
                 ),
             )
 
+    class FailingSink:
+        async def stage(self, event: object) -> None:
+            del event
+            raise RuntimeError("outbox unavailable")
+
+        async def stage_many(self, events: tuple[object, ...]) -> None:
+            assert events
+            raise RuntimeError("outbox unavailable")
+
+    async with sessions() as session:
+        organizations = OrganizationService(SqlAlchemyOrganizationRepository(session))
+        context = await organizations.tenant_context(user_id, organization_id)
+        with pytest.raises(RuntimeError, match="outbox unavailable"):
+            await InventoryService(
+                SqlAlchemyInventoryRepository(session), organizations, FailingSink()
+            ).create_and_post(
+                context,
+                CreateAndPostCommand(
+                    organization_id,
+                    user_id,
+                    warehouse_id,
+                    InventoryTransactionType.ADJUSTMENT,
+                    "Must roll back with outbox",
+                    (QuantityInput(item_id, Decimal("10"), UnitCode.G),),
+                ),
+            )
+
     movements = await client.get(f"/api/v1/inventory/items/{item_id}/movements", headers=headers)
     assert movements.status_code == 200
     assert [row["transaction_id"] for row in movements.json()] == [
@@ -627,4 +645,3 @@ async def test_movements_use_posting_order_and_post_commit_events_are_best_effor
         headers=headers,
     )
     assert stock.json()["quantity"] == "3"
-    assert "Inventory domain event publication failed after commit" in caplog.text

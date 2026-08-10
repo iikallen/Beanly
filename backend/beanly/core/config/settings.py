@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:3000"
     cors_origins: list[str] = ["http://localhost:3000"]
     cookie_secure: bool = False
+    outbox_batch_size: int = Field(default=50, ge=1, le=1000)
+    outbox_poll_interval_seconds: float = Field(default=1, gt=0, le=60)
+    outbox_lease_seconds: int = Field(default=30, ge=1, le=3600)
+    outbox_max_attempts: int = Field(default=12, ge=1, le=1000)
 
     @model_validator(mode="after")
     def reject_development_secret_in_production(self) -> "Settings":

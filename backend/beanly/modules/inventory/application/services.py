@@ -1,4 +1,3 @@
-import logging
 from collections import defaultdict
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -7,6 +6,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.exc import IntegrityError
 
+from beanly.core.events import DomainEventSink, NullDomainEventSink
 from beanly.modules.inventory.application.commands import (
     CreateAndPostCommand,
     CreateDraftCommand,
@@ -14,7 +14,6 @@ from beanly.modules.inventory.application.commands import (
     CreateWarehouseCommand,
     QuantityInput,
 )
-from beanly.modules.inventory.application.events import EventPublisher, NullEventPublisher
 from beanly.modules.inventory.application.ports import (
     InventoryReferenceValidator,
     InventoryRepository,
@@ -61,8 +60,6 @@ from beanly.modules.organizations.domain.entities import TenantContext
 from beanly.modules.organizations.domain.exceptions import OrganizationAccessDenied
 from beanly.modules.organizations.domain.permissions import Permission
 
-logger = logging.getLogger(__name__)
-
 
 @dataclass(frozen=True, slots=True)
 class StagedInventoryTransaction:
@@ -93,12 +90,12 @@ class InventoryService:
         self,
         repository: InventoryRepository,
         organizations: OrganizationService,
-        publisher: EventPublisher | None = None,
+        sink: DomainEventSink | None = None,
         reference_validator: InventoryReferenceValidator | None = None,
     ) -> None:
         self.repository = repository
         self.organizations = organizations
-        self.publisher = publisher or NullEventPublisher()
+        self.sink = sink or NullDomainEventSink()
         self.reference_validator = reference_validator or RejectingInventoryReferenceValidator()
         self.costing = WeightedAverageCostCalculator()
 
@@ -247,6 +244,7 @@ class InventoryService:
     ) -> TransactionDetail:
         try:
             staged = await self.create_and_post_staged(context, command)
+            await self.sink.stage_many(staged.events)
             await self.repository.commit()
         except IntegrityError as exc:
             await self.repository.rollback()
@@ -254,7 +252,6 @@ class InventoryService:
         except Exception:
             await self.repository.rollback()
             raise
-        await self.publish_events(staged.events)
         return staged.detail
 
     async def create_and_post_staged(
@@ -459,11 +456,11 @@ class InventoryService:
     ) -> TransactionDetail:
         try:
             events = await self._post_in_transaction(context, transaction_id)
+            await self.sink.stage_many(tuple(events))
             await self.repository.commit()
         except Exception:
             await self.repository.rollback()
             raise
-        await self.publish_events(events)
         return await self.get_transaction(context, transaction_id)
 
     async def reverse(
@@ -474,11 +471,11 @@ class InventoryService:
     ) -> TransactionDetail:
         try:
             staged = await self.reverse_staged(context, transaction_id, idempotency_key)
+            await self.sink.stage_many(staged.events)
             await self.repository.commit()
         except Exception:
             await self.repository.rollback()
             raise
-        await self.publish_events(staged.events)
         return staged.detail
 
     async def reverse_staged(
@@ -850,17 +847,6 @@ class InventoryService:
             await self.organizations.ensure_location_access(context, location_id)
         except OrganizationAccessDenied as exc:
             raise InventoryNotFound from exc
-
-    async def publish_events(self, events: tuple[object, ...] | list[object]) -> None:
-        for event in events:
-            try:
-                await self.publisher.publish(event)
-            except Exception:
-                logger.exception(
-                    "Inventory domain event publication failed after commit",
-                    extra={"event_type": type(event).__name__},
-                )
-
 
 def _name(value: str) -> str:
     normalized = value.strip()

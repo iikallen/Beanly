@@ -92,6 +92,3 @@ class InventoryApplicationGateway:
             context, transaction_id, f"goods-receipt:{receipt_id}:reverse"
         )
         return StagedInventoryResult(staged.detail.transaction.id, staged.events)
-
-    async def publish(self, events: tuple[object, ...]) -> None:
-        await self.inventory.publish_events(events)

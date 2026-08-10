@@ -1,4 +1,3 @@
-import logging
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
@@ -6,6 +5,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.exc import IntegrityError
 
+from beanly.core.events import DomainEventSink, NullDomainEventSink
 from beanly.modules.organizations.application.queries.get_organization import (
     GetOrganizationQuery,
 )
@@ -32,10 +32,8 @@ from beanly.modules.purchasing.application.dto import (
     ReceiptListRow,
 )
 from beanly.modules.purchasing.application.ports import (
-    EventPublisher,
     InventoryGateway,
     InventoryResources,
-    NullEventPublisher,
     PurchaseStockLine,
 )
 from beanly.modules.purchasing.domain.entities import (
@@ -65,7 +63,6 @@ from beanly.modules.purchasing.domain.exceptions import (
 )
 from beanly.modules.purchasing.domain.repositories import PurchasingRepository
 
-logger = logging.getLogger(__name__)
 _SIX_PLACES = Decimal("0.000001")
 _MONEY_MINOR = Decimal("100")
 _KNOWN_MULTIPLIERS = {
@@ -83,12 +80,12 @@ class PurchasingService:
         repository: PurchasingRepository,
         organizations: OrganizationService,
         inventory: InventoryGateway,
-        publisher: EventPublisher | None = None,
+        sink: DomainEventSink | None = None,
     ) -> None:
         self.repository = repository
         self.organizations = organizations
         self.inventory = inventory
-        self.publisher = publisher or NullEventPublisher()
+        self.sink = sink or NullDomainEventSink()
 
     async def create_supplier(self, context: TenantContext, value: SupplierInput) -> Supplier:
         now = datetime.now(UTC)
@@ -108,6 +105,7 @@ class PurchasingService:
         )
         try:
             created = await self.repository.add_supplier(supplier)
+            await self.sink.stage(SupplierCreated(context.organization_id, created.id))
             await self.repository.commit()
         except IntegrityError as exc:
             await self.repository.rollback()
@@ -115,7 +113,6 @@ class PurchasingService:
         except Exception:
             await self.repository.rollback()
             raise
-        await self._publish((SupplierCreated(context.organization_id, created.id),))
         return created
 
     async def list_suppliers(
@@ -199,6 +196,7 @@ class PurchasingService:
         try:
             await self.repository.add_order(order)
             await self.repository.add_order_lines(lines)
+            await self.sink.stage(PurchaseOrderCreated(context.organization_id, order.id))
             await self.repository.commit()
         except IntegrityError as exc:
             await self.repository.rollback()
@@ -206,7 +204,6 @@ class PurchasingService:
         except Exception:
             await self.repository.rollback()
             raise
-        await self._publish((PurchaseOrderCreated(context.organization_id, order.id),))
         return PurchaseOrderDetail(order, lines, {}, supplier.name)
 
     async def list_orders(
@@ -318,11 +315,13 @@ class PurchasingService:
         )
         try:
             await self.repository.update_order(updated)
+            await self.sink.stage(
+                PurchaseOrderSubmitted(context.organization_id, order.id)
+            )
             await self.repository.commit()
         except Exception:
             await self.repository.rollback()
             raise
-        await self._publish((PurchaseOrderSubmitted(context.organization_id, order.id),))
         return await self.get_order(context, order.id)
 
     async def cancel_order(self, context: TenantContext, order_id: UUID) -> PurchaseOrderDetail:
@@ -401,6 +400,9 @@ class PurchasingService:
         try:
             await self.repository.add_receipt(receipt)
             await self.repository.add_receipt_lines(lines)
+            await self.sink.stage(
+                GoodsReceiptCreated(context.organization_id, receipt.id)
+            )
             await self.repository.commit()
         except IntegrityError as exc:
             await self.repository.rollback()
@@ -408,7 +410,6 @@ class PurchasingService:
         except Exception:
             await self.repository.rollback()
             raise
-        await self._publish((GoodsReceiptCreated(context.organization_id, receipt.id),))
         return GoodsReceiptDetail(receipt, lines, supplier.name, order.number if order else None)
 
     async def create_order_receipt(
@@ -619,12 +620,11 @@ class PurchasingService:
                 event = await self._recalculate_order(context, order)
                 if event is not None:
                     purchasing_events.append(event)
+            await self.sink.stage_many((*inventory_events, *purchasing_events))
             await self.repository.commit()
         except Exception:
             await self.repository.rollback()
             raise
-        await self.inventory.publish(inventory_events)
-        await self._publish(tuple(purchasing_events))
         return await self.get_receipt(context, receipt_id)
 
     async def reverse_receipt(self, context: TenantContext, receipt_id: UUID) -> GoodsReceiptDetail:
@@ -657,12 +657,11 @@ class PurchasingService:
                 event = await self._recalculate_order(context, order)
                 if event is not None:
                     purchasing_events.append(event)
+            await self.sink.stage_many((*inventory_events, *purchasing_events))
             await self.repository.commit()
         except Exception:
             await self.repository.rollback()
             raise
-        await self.inventory.publish(inventory_events)
-        await self._publish(tuple(purchasing_events))
         return await self.get_receipt(context, receipt_id)
 
     async def _recalculate_order(
@@ -824,17 +823,6 @@ class PurchasingService:
     async def _ensure_location(self, context: TenantContext, location_id: UUID) -> None:
         if location_id not in await self._location_ids(context):
             raise PurchasingNotFound
-
-    async def _publish(self, events: tuple[object, ...]) -> None:
-        for event in events:
-            try:
-                await self.publisher.publish(event)
-            except Exception:
-                logger.exception(
-                    "Purchasing domain event publication failed after commit",
-                    extra={"event_type": type(event).__name__},
-                )
-
 
 def _line_values(
     quantity: Decimal,

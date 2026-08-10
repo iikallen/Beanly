@@ -56,14 +56,3 @@ class InventoryGateway(Protocol):
         transaction_id: UUID,
         receipt_id: UUID,
     ) -> StagedInventoryResult: ...
-
-    async def publish(self, events: tuple[object, ...]) -> None: ...
-
-
-class EventPublisher(Protocol):
-    async def publish(self, event: object) -> None: ...
-
-
-class NullEventPublisher:
-    async def publish(self, event: object) -> None:
-        del event

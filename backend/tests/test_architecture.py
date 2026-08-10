@@ -145,3 +145,28 @@ def test_payments_settlement_uses_ports_and_never_reads_menu_or_finance() -> Non
         assert "RecipeModel" not in source, path
         assert "FinanceModel" not in source, path
         assert "RevenueModel" not in source, path
+
+
+def test_transactional_outbox_replaces_post_commit_domain_publication() -> None:
+    service_paths = (
+        Path("beanly/modules/inventory/application/services.py"),
+        Path("beanly/modules/payments/application/payment_service.py"),
+        Path("beanly/modules/purchasing/application/services.py"),
+    )
+    for path in service_paths:
+        source = path.read_text(encoding="utf-8")
+        assert ".publish(" not in source, path
+        assert "publish_events" not in source, path
+        assert "stage_many" in source or ".stage(" in source, path
+
+    writer = Path("beanly/core/events/outbox/writer.py").read_text(
+        encoding="utf-8"
+    )
+    assert ".commit(" not in writer
+    for path in (
+        Path("beanly/modules/inventory/api/dependencies.py"),
+        Path("beanly/modules/payments/api/dependencies.py"),
+        Path("beanly/modules/purchasing/api/dependencies.py"),
+    ):
+        source = path.read_text(encoding="utf-8")
+        assert "OutboxEventSink(OutboxRepository(session))" in source, path

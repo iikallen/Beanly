@@ -87,14 +87,3 @@ class InventorySalePort(Protocol):
         warehouse_id: UUID,
         lines: tuple[SaleStockLine, ...],
     ) -> StagedSaleResult: ...
-
-    async def publish(self, events: tuple[object, ...]) -> None: ...
-
-
-class PaymentEventPublisher(Protocol):
-    async def publish(self, event: object) -> None: ...
-
-
-class NullPaymentEventPublisher:
-    async def publish(self, event: object) -> None:
-        pass

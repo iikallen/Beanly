@@ -2,6 +2,8 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 
+from beanly.core.events.outbox.repositories import OutboxRepository
+from beanly.core.events.outbox.writer import OutboxEventSink
 from beanly.modules.identity.api.dependencies import SessionDep
 from beanly.modules.inventory.application.services import InventoryService
 from beanly.modules.inventory.infrastructure.db.repositories import (
@@ -34,7 +36,12 @@ def purchasing_service(session: SessionDep) -> PurchasingService:
         organizations,
         reference_validator=PurchasingReferenceValidator(repository),
     )
-    return PurchasingService(repository, organizations, InventoryApplicationGateway(inventory))
+    return PurchasingService(
+        repository,
+        organizations,
+        InventoryApplicationGateway(inventory),
+        OutboxEventSink(OutboxRepository(session)),
+    )
 
 
 PurchasingServiceDep = Annotated[PurchasingService, Depends(purchasing_service)]

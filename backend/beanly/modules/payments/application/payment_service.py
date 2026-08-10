@@ -1,13 +1,11 @@
-import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
+from beanly.core.events import DomainEventSink, NullDomainEventSink
 from beanly.modules.organizations.domain.entities import TenantContext
 from beanly.modules.payments.application.ports import (
     InventorySalePort,
-    NullPaymentEventPublisher,
-    PaymentEventPublisher,
     SalesSettlementPort,
     SaleStockLine,
 )
@@ -27,7 +25,6 @@ from beanly.modules.payments.domain.exceptions import (
 from beanly.modules.payments.domain.repositories import PaymentRepository
 from beanly.modules.sales.domain.enums import OrderStatus
 
-logger = logging.getLogger(__name__)
 _MAX_BIGINT = 9223372036854775807
 
 
@@ -51,12 +48,12 @@ class PaymentService:
         repository: PaymentRepository,
         sales: SalesSettlementPort,
         inventory: InventorySalePort,
-        publisher: PaymentEventPublisher | None = None,
+        sink: DomainEventSink | None = None,
     ) -> None:
         self.repository = repository
         self.sales = sales
         self.inventory = inventory
-        self.publisher = publisher or NullPaymentEventPublisher()
+        self.sink = sink or NullDomainEventSink()
 
     async def complete(
         self,
@@ -138,6 +135,18 @@ class PaymentService:
                 staged_sale.cogs_amount,
                 staged_sale.cogs_status,
             )
+            await self.sink.stage_many(
+                (
+                    *staged_sale.events,
+                    PaymentCompleted(
+                        saved.id,
+                        saved.order_id,
+                        saved.organization_id,
+                        saved.location_id,
+                        saved.amount_minor,
+                    ),
+                )
+            )
             await self.repository.commit()
         except PaymentConflict as exc:
             await self.repository.rollback()
@@ -151,16 +160,6 @@ class PaymentService:
         except Exception:
             await self.repository.rollback()
             raise
-        await self._publish_inventory(staged_sale.events)
-        await self._publish(
-            PaymentCompleted(
-                saved.id,
-                saved.order_id,
-                saved.organization_id,
-                saved.location_id,
-                saved.amount_minor,
-            )
-        )
         return saved
 
     async def get(
@@ -239,19 +238,6 @@ class PaymentService:
             raise PaymentNotFound("Payment not found")
         await self.sales.ensure_location_access(context, value.location_id)
         return value
-
-    async def _publish(self, event: PaymentCompleted) -> None:
-        try:
-            await self.publisher.publish(event)
-        except Exception:
-            logger.exception("Payment event publish failed")
-
-    async def _publish_inventory(self, events: tuple[object, ...]) -> None:
-        try:
-            await self.inventory.publish(events)
-        except Exception:
-            logger.exception("Inventory event publish failed after payment commit")
-
 
 @dataclass(frozen=True, slots=True)
 class _NormalizedLine:

@@ -60,6 +60,14 @@ services:
       redis:
         condition: service_healthy
 
+  outbox-worker:
+    build: ./backend
+    env_file: .env
+    command: python -m beanly.core.events.worker
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   frontend:
     build:
       context: ./frontend

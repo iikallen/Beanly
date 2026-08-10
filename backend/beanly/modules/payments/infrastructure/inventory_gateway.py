@@ -98,6 +98,3 @@ class InventorySaleGateway:
             missing,
             staged.events,
         )
-
-    async def publish(self, events: tuple[object, ...]) -> None:
-        await self.inventory.publish_events(events)
