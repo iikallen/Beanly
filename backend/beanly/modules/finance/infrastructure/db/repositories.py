@@ -579,6 +579,16 @@ class SqlAlchemyFinanceRepository:
             key: (int(inflows), int(outflows)) for key, inflows, outflows in rows
         }
 
+    async def data_as_of(
+        self, organization_id: UUID, location_id: UUID | None
+    ) -> datetime | None:
+        statement = select(func.max(FinanceEntryModel.created_at)).where(
+            FinanceEntryModel.organization_id == organization_id
+        )
+        if location_id is not None:
+            statement = statement.where(FinanceEntryModel.location_id == location_id)
+        return await self.session.scalar(statement)
+
     async def commit(self) -> None:
         await self.session.commit()
 

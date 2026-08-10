@@ -136,6 +136,16 @@ class FinanceQueryService:
         net = sum(inflows - outflows for inflows, outflows in values.values())
         return await self.repository.currency(context.organization_id), opening, values, net
 
+    async def data_as_of(
+        self, context: TenantContext, location_id: UUID | None
+    ) -> datetime | None:
+        await require_report_location(self.organizations, context, location_id)
+        values = [
+            await self.repository.data_as_of(context.organization_id, scoped_location)
+            for scoped_location in await self._report_locations(context, location_id)
+        ]
+        return max((value for value in values if value is not None), default=None)
+
     async def entries(
         self,
         context: TenantContext,

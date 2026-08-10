@@ -28,6 +28,32 @@ class PaymentRepository(Protocol):
     async def shift_summary(
         self, organization_id: UUID, shift_id: UUID
     ) -> ShiftPaymentSummary: ...
+    async def dashboard_summary(
+        self,
+        organization_id: UUID,
+        location_ids: tuple[UUID, ...],
+        date_from: datetime,
+        date_to: datetime,
+    ) -> tuple[int, int]: ...
+    async def dashboard_trend(
+        self,
+        organization_id: UUID,
+        location_ids: tuple[UUID, ...],
+        buckets: tuple[tuple[datetime, datetime], ...],
+    ) -> tuple[tuple[int, int], ...]: ...
+    async def dashboard_locations(
+        self,
+        organization_id: UUID,
+        location_ids: tuple[UUID, ...],
+        date_from: datetime,
+        date_to: datetime,
+    ) -> tuple[tuple[UUID, int, int], ...]: ...
+    async def dashboard_mix(
+        self,
+        organization_id: UUID,
+        location_ids: tuple[UUID, ...],
+        date_from: datetime,
+        date_to: datetime,
+    ) -> tuple[tuple[str, int], ...]: ...
     async def commit(self) -> None: ...
     async def rollback(self) -> None: ...
-

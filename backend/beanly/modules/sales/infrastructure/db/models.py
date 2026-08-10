@@ -102,6 +102,14 @@ class SalesOrderModel(Base):
         ),
         UniqueConstraint("inventory_transaction_id"),
         Index("ix_sales_orders_organization_created", "organization_id", "created_at"),
+        Index(
+            "ix_sales_orders_dashboard_paid",
+            "organization_id",
+            "location_id",
+            "paid_at",
+            postgresql_where=text("status = 'PAID'"),
+            sqlite_where=text("status = 'PAID'"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)

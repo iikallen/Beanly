@@ -910,6 +910,98 @@ export type FinanceCashFlow = {
   closing_cash_minor: string;
 };
 
+export type DashboardPeriod =
+  | "TODAY"
+  | "YESTERDAY"
+  | "LAST_7_DAYS"
+  | "THIS_MONTH"
+  | "CUSTOM";
+
+export type DashboardDirection = "UP" | "DOWN" | "FLAT";
+
+export type DashboardMetric<T extends string | number> = {
+  current: T;
+  previous: T;
+  absolute_change: T;
+  percent_change: string | null;
+  direction: DashboardDirection;
+};
+
+export type DashboardAlert = {
+  code: string;
+  severity: "INFO" | "WARNING" | "CRITICAL";
+  title: string;
+  message: string;
+  location_id: string | null;
+  entity_type: string | null;
+  entity_id: string | null;
+  action_href: string;
+};
+
+export type DashboardOverview = {
+  scope: {
+    organization_id: string;
+    location_id: string | null;
+    location_name: string;
+    timezone: string;
+    period: DashboardPeriod;
+    current: { from: string; to: string };
+    previous: { from: string; to: string };
+  };
+  sales: {
+    revenue: DashboardMetric<string>;
+    paid_orders: DashboardMetric<number>;
+    average_check: DashboardMetric<string>;
+    open_orders: number;
+    open_shifts: number;
+  };
+  finance: null | {
+    currency_code: string;
+    cogs: string;
+    gross_profit: string;
+    gross_margin_percent: string | null;
+    operating_expenses: string;
+    inventory_losses: string;
+    inventory_gains: string;
+    operating_profit: string;
+    operating_profit_comparison: DashboardMetric<string>;
+    net_cash_movement_minor: string;
+    incomplete_cogs_sales: number;
+    data_as_of: string | null;
+  };
+  inventory: {
+    total_value: string;
+    negative_stock_count: number;
+    active_count_count: number;
+    negative_items: Array<{
+      item_id: string;
+      location_id: string;
+      name: string;
+      quantity: string;
+      unit_code: string;
+    }>;
+  };
+  payment_mix: Array<{
+    method: string;
+    amount: string;
+    share_percent: string;
+  }>;
+  trend: Array<{
+    bucket_start: string;
+    revenue: string;
+    orders: number;
+  }>;
+  locations: Array<{
+    location_id: string;
+    location_name: string;
+    revenue: string;
+    paid_orders: number;
+    average_check: string;
+    operating_profit: string | null;
+  }>;
+  alerts: DashboardAlert[];
+};
+
 export type ExpenseStatus = "DRAFT" | "POSTED" | "REVERSED";
 
 export type ExpenseCategory = {
@@ -1948,6 +2040,18 @@ export const api = {
     request<SupplierReturn>(`/api/v1/purchasing/returns/${id}/post`, { method: "POST", headers: tenantAuthorization(organizationId, accessToken) }),
   reverseSupplierReturn: (id: string, organizationId: string, accessToken: string) =>
     request<SupplierReturn>(`/api/v1/purchasing/returns/${id}/reverse`, { method: "POST", headers: tenantAuthorization(organizationId, accessToken) }),
+  getDashboardOverview: (
+    organizationId: string,
+    accessToken: string,
+    filters: {
+      period: DashboardPeriod;
+      locationId?: string;
+      dateFrom?: string;
+      dateTo?: string;
+    },
+  ) => request<DashboardOverview>(`/api/v1/dashboard/overview?${operationFilters(filters)}`, {
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
   getFinancePnl: (
     organizationId: string,
     accessToken: string,

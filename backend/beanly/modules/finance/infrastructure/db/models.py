@@ -100,6 +100,12 @@ class FinanceEntryModel(Base):
             "effective_at",
         ),
         Index("ix_finance_entries_source", "source_type", "source_id"),
+        Index(
+            "ix_finance_entries_dashboard_scope",
+            "organization_id",
+            "location_id",
+            "effective_at",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)

@@ -190,6 +190,33 @@ class SqlAlchemySalesRepository:
         )
         return int(value or 0)
 
+    async def dashboard_open_counts(
+        self, organization_id: UUID, location_ids: tuple[UUID, ...]
+    ) -> tuple[int, int]:
+        if not location_ids:
+            return 0, 0
+        open_orders = int(
+            await self.session.scalar(
+                select(func.count(SalesOrderModel.id)).where(
+                    SalesOrderModel.organization_id == organization_id,
+                    SalesOrderModel.location_id.in_(location_ids),
+                    SalesOrderModel.status == OrderStatus.OPEN.value,
+                )
+            )
+            or 0
+        )
+        open_shifts = int(
+            await self.session.scalar(
+                select(func.count(RegisterShiftModel.id)).where(
+                    RegisterShiftModel.organization_id == organization_id,
+                    RegisterShiftModel.location_id.in_(location_ids),
+                    RegisterShiftModel.status == RegisterShiftStatus.OPEN.value,
+                )
+            )
+            or 0
+        )
+        return open_orders, open_shifts
+
     async def next_order_number(self) -> int:
         if self.session.get_bind().dialect.name == "postgresql":
             value = await self.session.scalar(select(func.nextval("sales_order_number_seq")))

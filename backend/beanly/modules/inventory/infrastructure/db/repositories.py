@@ -1,7 +1,7 @@
 from decimal import Decimal
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, tuple_, update
+from sqlalchemy import func, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +30,7 @@ from beanly.modules.inventory.infrastructure.db.mappers import (
     to_warehouse,
 )
 from beanly.modules.inventory.infrastructure.db.models import (
+    InventoryCountModel,
     InventoryItemModel,
     InventoryTransactionLineModel,
     InventoryTransactionModel,
@@ -684,6 +685,117 @@ class SqlAlchemyInventoryRepository:
             )
         )
         return await self._detail(model) if model else None
+
+    async def dashboard_inventory_health(
+        self, organization_id: UUID, location_ids: tuple[UUID, ...]
+    ) -> tuple[Decimal, int, int]:
+        if not location_ids:
+            return Decimal(0), 0, 0
+        stock_filter = (
+            StockBalanceModel.organization_id == organization_id,
+            StockBalanceModel.location_id.in_(location_ids),
+        )
+        negative_items = (
+            select(
+                StockBalanceModel.location_id,
+                StockBalanceModel.inventory_item_id,
+                func.sum(StockBalanceModel.quantity).label("quantity"),
+            )
+            .where(*stock_filter)
+            .group_by(
+                StockBalanceModel.location_id,
+                StockBalanceModel.inventory_item_id,
+            )
+            .having(func.sum(StockBalanceModel.quantity) < 0)
+            .subquery()
+        )
+        total_value, negative = (
+            await self.session.execute(
+                select(
+                    select(
+                        func.coalesce(
+                            func.sum(
+                                StockBalanceModel.quantity
+                                * StockBalanceModel.average_unit_cost
+                            ),
+                            Decimal(0),
+                        )
+                    )
+                    .where(*stock_filter)
+                    .scalar_subquery(),
+                    select(func.count()).select_from(negative_items).scalar_subquery(),
+                )
+            )
+        ).one()
+        active_counts = int(
+            await self.session.scalar(
+                select(func.count(InventoryCountModel.id)).where(
+                    InventoryCountModel.organization_id == organization_id,
+                    InventoryCountModel.location_id.in_(location_ids),
+                    InventoryCountModel.status == "COUNTING",
+                )
+            )
+            or 0
+        )
+        return Decimal(total_value), int(negative or 0), active_counts
+
+    async def dashboard_negative_items(
+        self, organization_id: UUID, location_ids: tuple[UUID, ...], limit: int
+    ) -> tuple[tuple[UUID, UUID, str, Decimal, str], ...]:
+        if not location_ids:
+            return ()
+        quantity = func.sum(StockBalanceModel.quantity)
+        rows = await self.session.execute(
+            select(
+                InventoryItemModel.id,
+                StockBalanceModel.location_id,
+                InventoryItemModel.name,
+                quantity,
+                InventoryItemModel.base_unit,
+            )
+            .join(
+                InventoryItemModel,
+                InventoryItemModel.id == StockBalanceModel.inventory_item_id,
+            )
+            .where(
+                StockBalanceModel.organization_id == organization_id,
+                StockBalanceModel.location_id.in_(location_ids),
+            )
+            .group_by(
+                InventoryItemModel.id,
+                StockBalanceModel.location_id,
+                InventoryItemModel.name,
+                InventoryItemModel.base_unit,
+            )
+            .having(quantity < 0)
+            .order_by(quantity, InventoryItemModel.name)
+            .limit(limit)
+        )
+        return tuple(
+            (item_id, location_id, name, Decimal(quantity), unit_code)
+            for item_id, location_id, name, quantity, unit_code in rows
+        )
+
+    async def dashboard_active_counts(
+        self, organization_id: UUID, location_ids: tuple[UUID, ...]
+    ) -> tuple[tuple[UUID, UUID, str], ...]:
+        if not location_ids:
+            return ()
+        rows = await self.session.execute(
+            select(
+                InventoryCountModel.id,
+                InventoryCountModel.location_id,
+                InventoryCountModel.number,
+            )
+            .where(
+                InventoryCountModel.organization_id == organization_id,
+                InventoryCountModel.location_id.in_(location_ids),
+                InventoryCountModel.status == "COUNTING",
+            )
+            .order_by(InventoryCountModel.snapshot_at, InventoryCountModel.id)
+            .limit(5)
+        )
+        return tuple(rows)
 
     async def _detail(self, model: InventoryTransactionModel) -> TransactionDetail:
         return TransactionDetail(

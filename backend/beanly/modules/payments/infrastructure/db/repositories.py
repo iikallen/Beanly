@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -129,6 +129,122 @@ class SqlAlchemyPaymentRepository:
                 if method in by_method
             ),
         )
+
+    async def dashboard_summary(
+        self,
+        organization_id: UUID,
+        location_ids: tuple[UUID, ...],
+        date_from: datetime,
+        date_to: datetime,
+    ) -> tuple[int, int]:
+        if not location_ids:
+            return 0, 0
+        amount, orders = (
+            await self.session.execute(
+                select(
+                    func.coalesce(func.sum(PaymentModel.amount_minor), 0),
+                    func.count(PaymentModel.id),
+                ).where(
+                    PaymentModel.organization_id == organization_id,
+                    PaymentModel.location_id.in_(location_ids),
+                    PaymentModel.completed_at >= date_from,
+                    PaymentModel.completed_at < date_to,
+                )
+            )
+        ).one()
+        return int(amount), int(orders)
+
+    async def dashboard_trend(
+        self,
+        organization_id: UUID,
+        location_ids: tuple[UUID, ...],
+        buckets: tuple[tuple[datetime, datetime], ...],
+    ) -> tuple[tuple[int, int], ...]:
+        if not location_ids or not buckets:
+            return tuple((0, 0) for _ in buckets)
+        columns = []
+        for date_from, date_to in buckets:
+            condition = (
+                (PaymentModel.completed_at >= date_from)
+                & (PaymentModel.completed_at < date_to)
+            )
+            columns.extend(
+                (
+                    func.coalesce(
+                        func.sum(case((condition, PaymentModel.amount_minor), else_=0)),
+                        0,
+                    ),
+                    func.coalesce(func.sum(case((condition, 1), else_=0)), 0),
+                )
+            )
+        row = (
+            await self.session.execute(
+                select(*columns).where(
+                    PaymentModel.organization_id == organization_id,
+                    PaymentModel.location_id.in_(location_ids),
+                    PaymentModel.completed_at >= buckets[0][0],
+                    PaymentModel.completed_at < buckets[-1][1],
+                )
+            )
+        ).one()
+        return tuple(
+            (int(row[index]), int(row[index + 1]))
+            for index in range(0, len(row), 2)
+        )
+
+    async def dashboard_locations(
+        self,
+        organization_id: UUID,
+        location_ids: tuple[UUID, ...],
+        date_from: datetime,
+        date_to: datetime,
+    ) -> tuple[tuple[UUID, int, int], ...]:
+        if not location_ids:
+            return ()
+        rows = await self.session.execute(
+            select(
+                PaymentModel.location_id,
+                func.coalesce(func.sum(PaymentModel.amount_minor), 0),
+                func.count(PaymentModel.id),
+            )
+            .where(
+                PaymentModel.organization_id == organization_id,
+                PaymentModel.location_id.in_(location_ids),
+                PaymentModel.completed_at >= date_from,
+                PaymentModel.completed_at < date_to,
+            )
+            .group_by(PaymentModel.location_id)
+        )
+        return tuple(
+            (location_id, int(amount), int(orders))
+            for location_id, amount, orders in rows
+        )
+
+    async def dashboard_mix(
+        self,
+        organization_id: UUID,
+        location_ids: tuple[UUID, ...],
+        date_from: datetime,
+        date_to: datetime,
+    ) -> tuple[tuple[str, int], ...]:
+        if not location_ids:
+            return ()
+        rows = await self.session.execute(
+            select(
+                PaymentLineModel.method,
+                func.coalesce(func.sum(PaymentLineModel.amount_minor), 0),
+            )
+            .join(PaymentModel, PaymentModel.id == PaymentLineModel.payment_id)
+            .where(
+                PaymentModel.organization_id == organization_id,
+                PaymentModel.location_id.in_(location_ids),
+                PaymentModel.completed_at >= date_from,
+                PaymentModel.completed_at < date_to,
+            )
+            .group_by(PaymentLineModel.method)
+            .order_by(PaymentLineModel.method)
+        )
+        return tuple((method, int(amount)) for method, amount in rows)
 
     async def commit(self) -> None:
         await self.session.commit()

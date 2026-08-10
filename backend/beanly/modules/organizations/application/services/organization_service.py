@@ -159,6 +159,14 @@ class OrganizationService:
         membership = await self._membership(query.user_id, query.organization_id)
         return await self.repository.list_accessible_locations(membership)
 
+    async def primary_location(self, context: TenantContext) -> Location:
+        await self._membership(context.user_id, context.organization_id)
+        locations = await self.repository.list_locations(context.organization_id)
+        primary = next((value for value in locations if value.is_primary), None)
+        if primary is None:
+            raise LocationNotFound
+        return primary
+
     async def get_location(
         self, user_id: UUID, organization_id: UUID, location_id: UUID
     ) -> Location:

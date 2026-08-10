@@ -27,6 +27,12 @@ class PaymentModel(Base):
         UniqueConstraint("order_id"),
         UniqueConstraint("organization_id", "client_payment_id"),
         Index("ix_payments_completed_at", "completed_at"),
+        Index(
+            "ix_payments_dashboard_completed",
+            "organization_id",
+            "location_id",
+            "completed_at",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
@@ -83,4 +89,3 @@ class PaymentLineModel(Base):
     sort_order: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     payment: Mapped[PaymentModel] = relationship(back_populates="lines")
-
