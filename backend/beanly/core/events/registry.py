@@ -11,6 +11,15 @@ from beanly.modules.finance.domain.events import (
     ExpensePosted,
     ExpenseReversed,
 )
+from beanly.modules.integrations.domain.events import (
+    IntegrationConnectionActivated,
+    IntegrationConnectionCreated,
+    IntegrationConnectionDegraded,
+    IntegrationConnectionRevoked,
+    IntegrationJobDeadLettered,
+    IntegrationJobSucceeded,
+    IntegrationWebhookProcessed,
+)
 from beanly.modules.inventory.domain.events import (
     InventoryCostUpdated,
     InventoryCountCancelled,
@@ -50,6 +59,27 @@ class EventSpec:
 
 
 EVENT_REGISTRY: dict[type[object], EventSpec] = {
+    IntegrationConnectionCreated: EventSpec(
+        "integration.connection_created", 1, "integration_connection", "connection_id"
+    ),
+    IntegrationConnectionActivated: EventSpec(
+        "integration.connection_activated", 1, "integration_connection", "connection_id"
+    ),
+    IntegrationConnectionDegraded: EventSpec(
+        "integration.connection_degraded", 1, "integration_connection", "connection_id"
+    ),
+    IntegrationConnectionRevoked: EventSpec(
+        "integration.connection_revoked", 1, "integration_connection", "connection_id"
+    ),
+    IntegrationJobSucceeded: EventSpec(
+        "integration.job_succeeded", 1, "integration_job", "job_id"
+    ),
+    IntegrationJobDeadLettered: EventSpec(
+        "integration.job_dead_lettered", 1, "integration_job", "job_id"
+    ),
+    IntegrationWebhookProcessed: EventSpec(
+        "integration.webhook_processed", 1, "integration_inbox", "inbox_event_id"
+    ),
     ExpenseCreated: EventSpec("finance.expense_created", 1, "expense", "expense_id"),
     ExpensePosted: EventSpec("finance.expense_posted", 1, "expense", "expense_id"),
     ExpenseReversed: EventSpec("finance.expense_reversed", 1, "expense", "expense_id"),

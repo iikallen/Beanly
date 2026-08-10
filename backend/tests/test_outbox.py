@@ -17,6 +17,15 @@ from beanly.modules.finance.domain.events import (
     ExpensePosted,
     ExpenseReversed,
 )
+from beanly.modules.integrations.domain.events import (
+    IntegrationConnectionActivated,
+    IntegrationConnectionCreated,
+    IntegrationConnectionDegraded,
+    IntegrationConnectionRevoked,
+    IntegrationJobDeadLettered,
+    IntegrationJobSucceeded,
+    IntegrationWebhookProcessed,
+)
 from beanly.modules.inventory.domain.events import (
     InventoryCostUpdated,
     InventoryCountCancelled,
@@ -66,7 +75,52 @@ def _event_contracts() -> tuple[tuple[object, str, str, UUID], ...]:
     supplier_return_id = uuid4()
     expense_id = uuid4()
     cash_movement_id = uuid4()
+    connection_id = uuid4()
+    integration_job_id = uuid4()
+    inbox_event_id = uuid4()
     return (
+        (
+            IntegrationConnectionCreated(connection_id, organization_id),
+            "integration.connection_created",
+            "integration_connection",
+            connection_id,
+        ),
+        (
+            IntegrationConnectionActivated(connection_id, organization_id),
+            "integration.connection_activated",
+            "integration_connection",
+            connection_id,
+        ),
+        (
+            IntegrationConnectionDegraded(connection_id, organization_id),
+            "integration.connection_degraded",
+            "integration_connection",
+            connection_id,
+        ),
+        (
+            IntegrationConnectionRevoked(connection_id, organization_id),
+            "integration.connection_revoked",
+            "integration_connection",
+            connection_id,
+        ),
+        (
+            IntegrationJobSucceeded(integration_job_id, organization_id),
+            "integration.job_succeeded",
+            "integration_job",
+            integration_job_id,
+        ),
+        (
+            IntegrationJobDeadLettered(integration_job_id, organization_id),
+            "integration.job_dead_lettered",
+            "integration_job",
+            integration_job_id,
+        ),
+        (
+            IntegrationWebhookProcessed(inbox_event_id, organization_id),
+            "integration.webhook_processed",
+            "integration_inbox",
+            inbox_event_id,
+        ),
         (
             ExpenseCreated(organization_id, expense_id),
             "finance.expense_created",

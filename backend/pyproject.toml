@@ -12,6 +12,8 @@ dependencies = [
   "celery[redis]>=5.5,<6",
   "email-validator>=2.2,<3",
   "fastapi>=0.115,<1",
+  "cryptography>=45,<47",
+  "httpx>=0.28,<1",
   "pwdlib[argon2]>=0.2,<1",
   "pydantic-settings>=2.8,<3",
   "PyJWT>=2.10,<3",
@@ -23,7 +25,6 @@ dependencies = [
 [project.optional-dependencies]
 test = [
   "aiosqlite>=0.21,<1",
-  "httpx>=0.28,<1",
   "pytest>=8.3,<9",
   "pytest-asyncio>=0.26,<2",
   "ruff>=0.11,<1",

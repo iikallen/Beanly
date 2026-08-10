@@ -1123,6 +1123,104 @@ export type AnalyticsLocations = {
   data_as_of: string | null;
 };
 
+export type IntegrationCapability =
+  | "PAYMENT"
+  | "FISCAL"
+  | "DELIVERY"
+  | "NOTIFICATION";
+export type IntegrationAuthType = "NONE" | "API_KEY" | "OAUTH2";
+export type IntegrationConnectionStatus = "PENDING" | "ACTIVE" | "DEGRADED" | "REVOKED";
+export type IntegrationJobStatus = "PENDING" | "PROCESSING" | "RETRYING" | "SUCCESS" | "DEAD";
+
+export type IntegrationProvider = {
+  code: string;
+  name: string;
+  capabilities: IntegrationCapability[];
+  auth_type: IntegrationAuthType;
+  supports_webhooks: boolean;
+  supports_health_check: boolean;
+  location_scoped: boolean;
+};
+
+export type IntegrationLocationBinding = {
+  id: string;
+  location_id: string;
+  capability: IntegrationCapability;
+  external_location_id: string | null;
+  settings: Record<string, unknown>;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type IntegrationConnection = {
+  id: string;
+  provider_code: string;
+  display_name: string;
+  status: IntegrationConnectionStatus;
+  auth_type: IntegrationAuthType;
+  config: Record<string, unknown>;
+  has_credentials: boolean;
+  external_account_id: string | null;
+  connected_at: string | null;
+  last_health_check_at: string | null;
+  last_success_at: string | null;
+  last_error_code: string | null;
+  last_error_message: string | null;
+  created_at: string;
+  updated_at: string;
+  can_manage: boolean;
+  bindings: IntegrationLocationBinding[];
+};
+
+export type IntegrationJobAttempt = {
+  attempt_number: number;
+  started_at: string;
+  finished_at: string;
+  outcome: "SUCCESS" | "TEMPORARY_FAILURE" | "PERMANENT_FAILURE";
+  http_status: number | null;
+  provider_request_id: string | null;
+  duration_ms: number | null;
+  error_code: string | null;
+  error_message: string | null;
+};
+
+export type IntegrationJob = {
+  id: string;
+  connection_id: string;
+  location_id: string | null;
+  capability: IntegrationCapability;
+  job_type: string;
+  source_type: string;
+  source_id: string;
+  idempotency_key: string;
+  status: IntegrationJobStatus;
+  available_at: string;
+  attempts: number;
+  external_id: string | null;
+  completed_at: string | null;
+  dead_lettered_at: string | null;
+  last_error_code: string | null;
+  last_error_message: string | null;
+  created_at: string;
+  updated_at: string;
+  attempt_history: IntegrationJobAttempt[];
+};
+
+export type IntegrationJobList = {
+  items: IntegrationJob[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type IntegrationConnectionInput = {
+  provider_code: string;
+  display_name: string;
+  config?: Record<string, unknown>;
+  credentials?: Record<string, unknown>;
+};
+
 export type ExpenseStatus = "DRAFT" | "POSTED" | "REVERSED";
 
 export type ExpenseCategory = {
@@ -2187,6 +2285,97 @@ export const api = {
     request<AnalyticsInventoryConsumption>(`/api/v1/analytics/inventory-consumption?${operationFilters(filters)}`, { headers: tenantAuthorization(organizationId, accessToken) }),
   getAnalyticsLocations: (organizationId: string, accessToken: string, filters: Omit<AnalyticsRangeFilters, "locationId">) =>
     request<AnalyticsLocations>(`/api/v1/analytics/locations?${operationFilters(filters)}`, { headers: tenantAuthorization(organizationId, accessToken) }),
+  listIntegrationProviders: (organizationId: string, accessToken: string) =>
+    request<IntegrationProvider[]>("/api/v1/integrations/providers", {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  listIntegrationConnections: (organizationId: string, accessToken: string) =>
+    request<IntegrationConnection[]>("/api/v1/integrations/connections", {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  createIntegrationConnection: (
+    input: IntegrationConnectionInput,
+    organizationId: string,
+    accessToken: string,
+  ) => request<IntegrationConnection>("/api/v1/integrations/connections", {
+    method: "POST",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  getIntegrationConnection: (id: string, organizationId: string, accessToken: string) =>
+    request<IntegrationConnection>(`/api/v1/integrations/connections/${id}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  updateIntegrationConnection: (
+    id: string,
+    input: Partial<Pick<IntegrationConnectionInput, "display_name" | "config" | "credentials">>,
+    organizationId: string,
+    accessToken: string,
+  ) => request<IntegrationConnection>(`/api/v1/integrations/connections/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  testIntegrationConnection: (id: string, organizationId: string, accessToken: string) =>
+    request<IntegrationConnection>(`/api/v1/integrations/connections/${id}/test`, {
+      method: "POST",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  disconnectIntegrationConnection: (id: string, organizationId: string, accessToken: string) =>
+    request<IntegrationConnection>(`/api/v1/integrations/connections/${id}/disconnect`, {
+      method: "POST",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  setIntegrationLocationBinding: (
+    connectionId: string,
+    locationId: string,
+    input: {
+      capability: IntegrationCapability;
+      external_location_id?: string;
+      settings?: Record<string, unknown>;
+      is_active?: boolean;
+    },
+    organizationId: string,
+    accessToken: string,
+  ) => request<IntegrationLocationBinding>(
+    `/api/v1/integrations/connections/${connectionId}/locations/${locationId}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(input),
+      headers: tenantAuthorization(organizationId, accessToken),
+    },
+  ),
+  deleteIntegrationLocationBinding: (
+    connectionId: string,
+    locationId: string,
+    capability: IntegrationCapability,
+    organizationId: string,
+    accessToken: string,
+  ) => request<void>(
+    `/api/v1/integrations/connections/${connectionId}/locations/${locationId}?capability=${capability}`,
+    { method: "DELETE", headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  listIntegrationJobs: (
+    organizationId: string,
+    accessToken: string,
+    filters: {
+      connectionId?: string;
+      status?: IntegrationJobStatus | "";
+      jobType?: string;
+      dateFrom?: string;
+      dateTo?: string;
+      limit?: string;
+      offset?: string;
+    } = {},
+  ) => request<IntegrationJobList>(
+    `/api/v1/integrations/jobs?${operationFilters(filters)}`,
+    { headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  retryIntegrationJob: (id: string, organizationId: string, accessToken: string) =>
+    request<IntegrationJob>(`/api/v1/integrations/jobs/${id}/retry`, {
+      method: "POST",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
   getFinancePnl: (
     organizationId: string,
     accessToken: string,
