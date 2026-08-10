@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 from sqlalchemy.exc import IntegrityError
 
 from beanly.core.events import DomainEventSink, NullDomainEventSink
+from beanly.core.security.audit import SecurityAuditRecorder
 from beanly.modules.inventory.application.commands import (
     CreateAndPostCommand,
     CreateDraftCommand,
@@ -95,12 +96,14 @@ class InventoryService:
         organizations: OrganizationService,
         sink: DomainEventSink | None = None,
         reference_validator: InventoryReferenceValidator | None = None,
+        audit: SecurityAuditRecorder | None = None,
     ) -> None:
         self.repository = repository
         self.organizations = organizations
         self.sink = sink or NullDomainEventSink()
         self.reference_validator = reference_validator or RejectingInventoryReferenceValidator()
         self.costing = WeightedAverageCostCalculator()
+        self.audit = audit
 
     async def create_warehouse(
         self, context: TenantContext, command: CreateWarehouseCommand
@@ -282,6 +285,14 @@ class InventoryService:
         try:
             staged = await self.create_and_post_staged(context, command)
             await self.sink.stage_many(staged.events)
+            if self.audit and command.type is InventoryTransactionType.ADJUSTMENT:
+                await self.audit.record(
+                    action="INVENTORY_MANUAL_ADJUSTMENT",
+                    resource_type="inventory_transaction",
+                    organization_id=context.organization_id,
+                    actor_user_id=context.user_id,
+                    resource_id=staged.detail.transaction.id,
+                )
             await self.repository.commit()
         except IntegrityError as exc:
             await self.repository.rollback()

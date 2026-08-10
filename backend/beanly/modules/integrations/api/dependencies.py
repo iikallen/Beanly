@@ -4,6 +4,7 @@ from fastapi import Depends
 
 from beanly.core.events.outbox.repositories import OutboxRepository
 from beanly.core.events.outbox.writer import OutboxEventSink
+from beanly.core.security.audit import SecurityAuditRecorder
 from beanly.modules.identity.api.dependencies import SessionDep, SettingsDep
 from beanly.modules.integrations.application.connection_service import (
     IntegrationConnectionService,
@@ -50,6 +51,7 @@ def connection_service(
         build_provider_registry(settings),
         FernetSecretCipher(settings.integration_encryption_key_list),
         OutboxEventSink(OutboxRepository(session)),
+        SecurityAuditRecorder(session) if settings.audit_enabled else None,
     )
 
 

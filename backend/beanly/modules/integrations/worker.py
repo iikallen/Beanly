@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import socket
+import time
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from beanly.core.config.settings import get_settings
@@ -8,6 +10,12 @@ from beanly.core.database.session import engine, session_factory
 from beanly.core.events.outbox.repositories import OutboxRepository
 from beanly.core.events.outbox.writer import OutboxEventSink
 from beanly.core.logging.config import configure_logging
+from beanly.core.observability import (
+    configure_telemetry,
+    metrics,
+    shutdown_telemetry,
+)
+from beanly.core.runtime import ShutdownSignal
 from beanly.modules.integrations.application.job_service import IntegrationJobService
 from beanly.modules.integrations.domain.events import IntegrationWebhookProcessed
 from beanly.modules.integrations.infrastructure.crypto import FernetSecretCipher
@@ -22,11 +30,13 @@ from beanly.modules.integrations.infrastructure.source_reader import (
 logger = logging.getLogger(__name__)
 
 
-async def run_worker() -> None:
+async def run_worker(shutdown: ShutdownSignal | None = None) -> None:
     settings = get_settings()
+    shutdown = shutdown or ShutdownSignal()
     worker_id = f"{socket.gethostname()[:83]}-{uuid4()}"
     registry = build_provider_registry(settings)
     cipher = FernetSecretCipher(settings.integration_encryption_key_list)
+    last_stats_at = 0.0
     logger.info("Integration worker started: worker_id=%s", worker_id)
     async with session_factory() as session:
         repository = SqlAlchemyIntegrationRepository(session)
@@ -39,7 +49,7 @@ async def run_worker() -> None:
             sink,
             max_attempts=settings.integration_job_max_attempts,
         )
-        while True:
+        while not shutdown.is_set:
             claimed = await repository.claim_jobs(
                 worker_id,
                 settings.integration_job_batch_size,
@@ -54,6 +64,8 @@ async def run_worker() -> None:
                     logger.exception(
                         "Integration job bookkeeping failed: job_id=%s", job.id
                     )
+            if shutdown.is_set:
+                continue
 
             inbox = await repository.claim_inbox(
                 worker_id,
@@ -86,19 +98,43 @@ async def run_worker() -> None:
                             "Integration inbox bookkeeping failed: inbox_id=%s",
                             inbox_id,
                         )
+            monotonic_now = time.monotonic()
+            if monotonic_now - last_stats_at >= 60:
+                stats = await repository.queue_stats()
+                await repository.rollback()
+                oldest_seconds = (
+                    max(
+                        0,
+                        (datetime.now(UTC) - stats.oldest_pending_at).total_seconds(),
+                    )
+                    if stats.oldest_pending_at
+                    else 0
+                )
+                metrics.set_queue(
+                    integration_jobs_pending=stats.pending,
+                    integration_oldest_pending_seconds=oldest_seconds,
+                    integration_dead_lettered=stats.dead_lettered,
+                )
+                last_stats_at = monotonic_now
             if not claimed and not inbox:
-                await asyncio.sleep(settings.integration_poll_interval_seconds)
+                await shutdown.wait(settings.integration_poll_interval_seconds)
+    logger.info("Integration worker stopped", extra={"worker_id": worker_id})
 
 
 async def _main() -> None:
+    settings = get_settings()
+    shutdown = ShutdownSignal()
+    shutdown.install()
+    configure_telemetry(settings, engine=engine, service_name="beanly-integration-worker")
     try:
-        await run_worker()
+        await run_worker(shutdown)
     finally:
         await engine.dispose()
+        shutdown_telemetry()
 
 
 def main() -> None:
-    configure_logging()
+    configure_logging("beanly-integration-worker")
     try:
         asyncio.run(_main())
     except KeyboardInterrupt:

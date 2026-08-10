@@ -4,7 +4,8 @@ from fastapi import Depends, HTTPException, status
 
 from beanly.core.events.outbox.repositories import OutboxRepository
 from beanly.core.events.outbox.writer import OutboxEventSink
-from beanly.modules.identity.api.dependencies import SessionDep
+from beanly.core.security.audit import SecurityAuditRecorder
+from beanly.modules.identity.api.dependencies import SessionDep, SettingsDep
 from beanly.modules.inventory.application.operations import InventoryOperationsService
 from beanly.modules.inventory.application.services import InventoryService
 from beanly.modules.inventory.infrastructure.db.operation_repository import (
@@ -24,18 +25,21 @@ from beanly.modules.organizations.infrastructure.db.repositories import (
 )
 
 
-def inventory_service(session: SessionDep) -> InventoryService:
+def inventory_service(session: SessionDep, settings: SettingsDep) -> InventoryService:
     return InventoryService(
         SqlAlchemyInventoryRepository(session),
         OrganizationService(SqlAlchemyOrganizationRepository(session)),
         OutboxEventSink(OutboxRepository(session)),
+        audit=SecurityAuditRecorder(session) if settings.audit_enabled else None,
     )
 
 
 InventoryServiceDep = Annotated[InventoryService, Depends(inventory_service)]
 
 
-def inventory_operations_service(session: SessionDep) -> InventoryOperationsService:
+def inventory_operations_service(
+    session: SessionDep, settings: SettingsDep
+) -> InventoryOperationsService:
     sink = OutboxEventSink(OutboxRepository(session))
     return InventoryOperationsService(
         SqlAlchemyInventoryOperationsRepository(session),
@@ -45,6 +49,7 @@ def inventory_operations_service(session: SessionDep) -> InventoryOperationsServ
             sink,
         ),
         sink,
+        SecurityAuditRecorder(session) if settings.audit_enabled else None,
     )
 
 

@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 from beanly.core.events.outbox.writer import DomainEventSink
 from beanly.core.money import MAX_NUMERIC_20_6_MINOR
+from beanly.core.security.audit import SecurityAuditRecorder
 from beanly.modules.finance.application.access import allowed_locations, ensure_location
 from beanly.modules.finance.domain.entities import (
     CashEntry,
@@ -32,10 +33,12 @@ class ExpenseService:
         repository: FinanceRepository,
         sink: DomainEventSink,
         organizations: OrganizationService,
+        audit: SecurityAuditRecorder | None = None,
     ) -> None:
         self.repository = repository
         self.sink = sink
         self.organizations = organizations
+        self.audit = audit
 
     async def list_categories(self, context: TenantContext) -> list[ExpenseCategory]:
         return await self.repository.list_categories(context.organization_id)
@@ -293,6 +296,14 @@ class ExpenseService:
             )
             await self.repository.update_expense(posted)
             await self.sink.stage(ExpensePosted(value.organization_id, value.id))
+            if self.audit:
+                await self.audit.record(
+                    action="EXPENSE_POSTED",
+                    resource_type="expense",
+                    organization_id=context.organization_id,
+                    actor_user_id=context.user_id,
+                    resource_id=value.id,
+                )
             await self.repository.commit()
             return posted
         except Exception:
@@ -361,6 +372,14 @@ class ExpenseService:
             )
             await self.repository.update_expense(reversed_value)
             await self.sink.stage(ExpenseReversed(value.organization_id, value.id))
+            if self.audit:
+                await self.audit.record(
+                    action="EXPENSE_REVERSED",
+                    resource_type="expense",
+                    organization_id=context.organization_id,
+                    actor_user_id=context.user_id,
+                    resource_id=value.id,
+                )
             await self.repository.commit()
             return reversed_value
         except Exception:

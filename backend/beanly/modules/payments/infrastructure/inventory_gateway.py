@@ -1,6 +1,7 @@
 from decimal import Decimal, InvalidOperation
 from uuid import UUID
 
+from beanly.core.observability import traced
 from beanly.modules.inventory.application.commands import (
     CreateAndPostCommand,
     QuantityInput,
@@ -77,14 +78,15 @@ class InventorySaleGateway:
         )
         if any(line.total_cost_amount is None for line in staged.detail.lines):
             raise InvalidInventoryOperation("Posted SALE cost snapshot is missing")
-        try:
-            cogs_amount = -sum(
-                (line.total_cost_amount for line in staged.detail.lines),
-                Decimal(0),
-            )
-            cogs_amount = cogs_amount.quantize(Decimal("0.000001"))
-        except (InvalidOperation, ValueError) as exc:
-            raise InvalidInventoryOperation("COGS is outside NUMERIC(20, 6)") from exc
+        with traced("cogs.calculate", order_id=str(order_id)):
+            try:
+                cogs_amount = -sum(
+                    (line.total_cost_amount for line in staged.detail.lines),
+                    Decimal(0),
+                )
+                cogs_amount = cogs_amount.quantize(Decimal("0.000001"))
+            except (InvalidOperation, ValueError) as exc:
+                raise InvalidInventoryOperation("COGS is outside NUMERIC(20, 6)") from exc
         if (
             not cogs_amount.is_finite()
             or cogs_amount < 0

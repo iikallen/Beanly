@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException, status
 
+from beanly.core.security.audit import SecurityAuditRecorder
 from beanly.modules.employees.application.services.employee_service import EmployeeService
 from beanly.modules.employees.infrastructure.db.repositories import (
     SqlAlchemyEmployeeRepository,
@@ -48,6 +49,7 @@ def invitation_service(session: SessionDep, settings: SettingsDep) -> Invitation
         employees=SqlAlchemyEmployeeRepository(session),
         email_sender=ConsoleEmailSender(),
         settings=settings,
+        audit=SecurityAuditRecorder(session) if settings.audit_enabled else None,
     )
 
 

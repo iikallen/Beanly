@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from beanly.core.config.settings import Settings, get_settings
 from beanly.core.database.session import get_session
+from beanly.core.logging.context import set_user_id
 from beanly.core.security.tokens import decode_access_token
 from beanly.modules.identity.application.services import AuthService
 from beanly.modules.identity.domain.entities import User
@@ -34,6 +35,7 @@ OriginDep = Annotated[None, Depends(require_allowed_origin)]
 
 
 async def current_user(
+    request: Request,
     service: AuthServiceDep,
     settings: SettingsDep,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
@@ -44,7 +46,10 @@ async def current_user(
     if claims is None:
         raise _unauthorized()
     try:
-        return await service.current_user(claims)
+        user = await service.current_user(claims)
+        request.state.actor_user_id = str(user.id)
+        set_user_id(user.id)
+        return user
     except AuthenticationRequiredError as exc:
         raise _unauthorized() from exc
 

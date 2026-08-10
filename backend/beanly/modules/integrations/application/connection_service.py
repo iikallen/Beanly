@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from beanly.core.events.outbox.writer import DomainEventSink
+from beanly.core.security.audit import SecurityAuditRecorder
 from beanly.modules.integrations.application.ports import (
     IntegrationRepository,
     ProviderRegistryPort,
@@ -48,12 +49,14 @@ class IntegrationConnectionService:
         registry: ProviderRegistryPort,
         cipher: SecretCipher,
         sink: DomainEventSink,
+        audit: SecurityAuditRecorder | None = None,
     ) -> None:
         self.repository = repository
         self.organizations = organizations
         self.registry = registry
         self.cipher = cipher
         self.sink = sink
+        self.audit = audit
 
     async def create(
         self,
@@ -136,6 +139,14 @@ class IntegrationConnectionService:
             updated_at=datetime.now(UTC),
         )
         result = await self.repository.update_connection(value)
+        if credentials is not None and self.audit:
+            await self.audit.record(
+                action="INTEGRATION_CREDENTIALS_REPLACED",
+                resource_type="integration_connection",
+                organization_id=context.organization_id,
+                actor_user_id=context.user_id,
+                resource_id=result.id,
+            )
         await self.repository.commit()
         return result
 
@@ -200,6 +211,14 @@ class IntegrationConnectionService:
         )
         result = await self.repository.update_connection(value)
         await self.sink.stage(IntegrationConnectionRevoked(result.id, result.organization_id))
+        if self.audit:
+            await self.audit.record(
+                action="INTEGRATION_DISCONNECTED",
+                resource_type="integration_connection",
+                organization_id=context.organization_id,
+                actor_user_id=context.user_id,
+                resource_id=result.id,
+            )
         await self.repository.commit()
         return result
 

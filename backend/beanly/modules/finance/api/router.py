@@ -288,22 +288,28 @@ async def update_expense(
 
 @router.post("/expenses/{expense_id}/post", response_model=ExpenseResponse)
 async def post_expense(
-    expense_id: UUID, context: FinanceWriteDep, service: ExpenseServiceDep
+    expense_id: UUID,
+    context: FinanceWriteDep,
+    service: ExpenseServiceDep,
 ) -> ExpenseResponse:
     try:
-        return _expense(await service.post(context, expense_id))
+        value = await service.post(context, expense_id)
     except Exception as exc:
         raise _http_error(exc) from exc
+    return _expense(value)
 
 
 @router.post("/expenses/{expense_id}/reverse", response_model=ExpenseResponse)
 async def reverse_expense(
-    expense_id: UUID, context: FinanceWriteDep, service: ExpenseServiceDep
+    expense_id: UUID,
+    context: FinanceWriteDep,
+    service: ExpenseServiceDep,
 ) -> ExpenseResponse:
     try:
-        return _expense(await service.reverse(context, expense_id))
+        value = await service.reverse(context, expense_id)
     except Exception as exc:
         raise _http_error(exc) from exc
+    return _expense(value)
 
 
 @router.get("/accounts", response_model=list[CashAccountResponse])
