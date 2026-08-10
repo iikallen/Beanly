@@ -10,6 +10,16 @@ from beanly.core.events.handlers.registry import EventHandlerRegistry
 from beanly.core.events.outbox.dispatcher import OutboxDispatcher
 from beanly.core.events.outbox.repositories import OutboxRepository
 from beanly.core.logging.config import configure_logging
+from beanly.modules.analytics.application.projection_service import (
+    AnalyticsProjectionService,
+)
+from beanly.modules.analytics.infrastructure.db.repositories import (
+    SqlAlchemyAnalyticsRepository,
+)
+from beanly.modules.analytics.infrastructure.handlers import register_analytics_handlers
+from beanly.modules.analytics.infrastructure.source_reader import (
+    SqlAlchemyAnalyticsSourceReader,
+)
 from beanly.modules.finance.application.projection_service import FinanceProjectionService
 from beanly.modules.finance.infrastructure.db.repositories import (
     SqlAlchemyFinanceRepository,
@@ -34,6 +44,13 @@ async def run_worker() -> None:
             FinanceProjectionService(
                 SqlAlchemyFinanceRepository(session),
                 SqlAlchemyFinanceSourceReader(session),
+            ),
+        )
+        register_analytics_handlers(
+            handlers,
+            AnalyticsProjectionService(
+                SqlAlchemyAnalyticsRepository(session),
+                SqlAlchemyAnalyticsSourceReader(session),
             ),
         )
         repository = OutboxRepository(session)
