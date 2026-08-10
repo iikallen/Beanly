@@ -3420,7 +3420,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
             "alembic_version",
             *APPLICATION_TABLES,
         } <= upgraded["tables"]
-        assert upgraded["revision"] == "0016_dashboard_query_indexes"
+        assert upgraded["revision"] == "0017_analytics_read_models"
         assert INVENTORY_OPERATION_TABLES <= upgraded["tables"]
         assert {
             "inventory_writeoff_number_seq",
@@ -4253,7 +4253,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
         await asyncio.to_thread(command.upgrade, config, "head")
         reupgraded = await database_snapshot(test_url)
         assert APPLICATION_TABLES <= reupgraded["tables"]
-        assert reupgraded["revision"] == "0016_dashboard_query_indexes"
+        assert reupgraded["revision"] == "0017_analytics_read_models"
         assert await membership_state(test_url, legacy_membership_id) == ("ACTIVE", "ALL")
     finally:
         await admin_engine.dispose()

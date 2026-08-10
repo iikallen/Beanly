@@ -1002,6 +1002,127 @@ export type DashboardOverview = {
   alerts: DashboardAlert[];
 };
 
+export type AnalyticsGroupBy = "PRODUCT" | "VARIANT";
+export type AnalyticsProductSort = "REVENUE" | "QUANTITY" | "GROSS_PROFIT";
+export type AnalyticsHourMetric = "REVENUE" | "ORDERS" | "ITEMS";
+export type AnalyticsMenuClass = "HERO" | "WORKHORSE" | "PUZZLE" | "LOW_PERFORMER";
+export type AnalyticsRangeFilters = { dateFrom: string; dateTo: string; locationId?: string };
+
+export type AnalyticsOverview = {
+  organization_id: string;
+  location_id: string | null;
+  date_from: string;
+  date_to: string;
+  currency_code: string;
+  revenue: string;
+  paid_orders: number;
+  items_sold: number;
+  average_check: string;
+  cogs: string | null;
+  gross_profit: string | null;
+  gross_margin_percent: string | null;
+  inventory_losses: string | null;
+  incomplete_cogs_orders: number | null;
+  data_as_of: string | null;
+};
+
+export type AnalyticsProductRow = {
+  product_id: string;
+  product_variant_id: string | null;
+  name: string;
+  variant_name: string | null;
+  quantity_sold: number;
+  revenue: string;
+  orders: number;
+  cogs: string | null;
+  gross_profit: string | null;
+  gross_margin_percent: string | null;
+  incomplete_cogs_orders: number | null;
+};
+
+export type AnalyticsProducts = {
+  group_by: AnalyticsGroupBy;
+  rows: AnalyticsProductRow[];
+  data_as_of: string | null;
+};
+
+export type AnalyticsAbc = {
+  thresholds: { a_max_cumulative_share: string; b_max_cumulative_share: string };
+  rows: Array<{
+    product_id: string;
+    name: string;
+    revenue: string;
+    revenue_share_percent: string;
+    cumulative_share_percent: string;
+    abc_class: "A" | "B" | "C";
+  }>;
+  data_as_of: string | null;
+};
+
+export type AnalyticsMenuEngineering = {
+  thresholds: {
+    popularity_factor: string;
+    expected_popularity_share_percent: string;
+    high_popularity_share_percent: string;
+    average_contribution_margin_per_item: string;
+  };
+  rows: Array<{
+    product_id: string;
+    name: string;
+    quantity_sold: number;
+    revenue: string;
+    orders: number;
+    popularity_share_percent: string;
+    contribution_margin_per_item: string;
+    gross_margin_percent: string | null;
+    classification: AnalyticsMenuClass;
+  }>;
+  data_as_of: string | null;
+};
+
+export type AnalyticsHours = {
+  metric: AnalyticsHourMetric;
+  rows: Array<{ day_of_week: number; local_hour: number; value: string }>;
+  data_as_of: string | null;
+};
+
+export type AnalyticsInventoryConsumption = {
+  rows: Array<{
+    inventory_item_id: string;
+    name: string;
+    base_unit: string;
+    sale_quantity: string;
+    sale_cost_amount: string | null;
+    writeoff_quantity: string;
+    writeoff_cost_amount: string | null;
+    adjustment_quantity: string;
+    waste_rate_percent: string | null;
+  }>;
+  data_as_of: string | null;
+};
+
+export type AnalyticsLocations = {
+  rows: Array<{
+    location_id: string;
+    location_name: string;
+    revenue: string;
+    paid_orders: number;
+    items_sold: number;
+    average_check: string;
+    cogs: string | null;
+    gross_profit: string | null;
+    gross_margin_percent: string | null;
+    operating_expenses: string | null;
+    operating_profit: string | null;
+    revenue_rank: number;
+    orders_rank: number;
+    average_check_rank: number;
+    gross_margin_rank: number | null;
+    operating_profit_rank: number | null;
+  }>;
+  data_as_of: string | null;
+};
+
 export type ExpenseStatus = "DRAFT" | "POSTED" | "REVERSED";
 
 export type ExpenseCategory = {
@@ -2052,6 +2173,20 @@ export const api = {
   ) => request<DashboardOverview>(`/api/v1/dashboard/overview?${operationFilters(filters)}`, {
     headers: tenantAuthorization(organizationId, accessToken),
   }),
+  getAnalyticsOverview: (organizationId: string, accessToken: string, filters: AnalyticsRangeFilters) =>
+    request<AnalyticsOverview>(`/api/v1/analytics/overview?${operationFilters(filters)}`, { headers: tenantAuthorization(organizationId, accessToken) }),
+  getAnalyticsProducts: (organizationId: string, accessToken: string, filters: AnalyticsRangeFilters & { groupBy: AnalyticsGroupBy; sortBy: AnalyticsProductSort; limit?: string }) =>
+    request<AnalyticsProducts>(`/api/v1/analytics/products?${operationFilters(filters)}`, { headers: tenantAuthorization(organizationId, accessToken) }),
+  getAnalyticsAbc: (organizationId: string, accessToken: string, filters: AnalyticsRangeFilters) =>
+    request<AnalyticsAbc>(`/api/v1/analytics/products/abc?${operationFilters(filters)}`, { headers: tenantAuthorization(organizationId, accessToken) }),
+  getAnalyticsMenuEngineering: (organizationId: string, accessToken: string, filters: AnalyticsRangeFilters) =>
+    request<AnalyticsMenuEngineering>(`/api/v1/analytics/menu-engineering?${operationFilters(filters)}`, { headers: tenantAuthorization(organizationId, accessToken) }),
+  getAnalyticsHours: (organizationId: string, accessToken: string, filters: AnalyticsRangeFilters & { metric: AnalyticsHourMetric }) =>
+    request<AnalyticsHours>(`/api/v1/analytics/hours?${operationFilters(filters)}`, { headers: tenantAuthorization(organizationId, accessToken) }),
+  getAnalyticsInventoryConsumption: (organizationId: string, accessToken: string, filters: AnalyticsRangeFilters & { warehouseId?: string; inventoryItemId?: string }) =>
+    request<AnalyticsInventoryConsumption>(`/api/v1/analytics/inventory-consumption?${operationFilters(filters)}`, { headers: tenantAuthorization(organizationId, accessToken) }),
+  getAnalyticsLocations: (organizationId: string, accessToken: string, filters: Omit<AnalyticsRangeFilters, "locationId">) =>
+    request<AnalyticsLocations>(`/api/v1/analytics/locations?${operationFilters(filters)}`, { headers: tenantAuthorization(organizationId, accessToken) }),
   getFinancePnl: (
     organizationId: string,
     accessToken: string,

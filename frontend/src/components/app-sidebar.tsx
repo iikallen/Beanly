@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  BarChart3,
   Building2,
   Coffee,
   Landmark,
@@ -25,7 +26,7 @@ export function AppSidebar({
   teamView,
   onTeamView,
 }: {
-  active: "dashboard" | "pos" | "inventory" | "menu" | "purchasing" | "finance" | "team" | "settings";
+  active: "dashboard" | "analytics" | "pos" | "inventory" | "menu" | "purchasing" | "finance" | "team" | "settings";
   teamView?: "employees" | "invitations";
   onTeamView?: (view: "employees" | "invitations") => void;
 }) {
@@ -78,6 +79,24 @@ export function AppSidebar({
           <LayoutDashboard aria-hidden="true" />
           Dashboard
         </button>
+        <button
+          className={active === "analytics" ? "app-nav-item is-active" : "app-nav-item"}
+          type="button"
+          onClick={() => router.push("/app/analytics")}
+        >
+          <BarChart3 aria-hidden="true" />
+          Analytics
+        </button>
+        {active === "analytics" && (
+          <div className="app-subnav analytics-subnav" aria-label="Analytics navigation">
+            <Link className={pathname === "/app/analytics" ? "is-active" : ""} href="/app/analytics">Overview</Link>
+            <Link className={pathname === "/app/analytics/products" ? "is-active" : ""} href="/app/analytics/products">Products</Link>
+            <Link className={pathname === "/app/analytics/menu-engineering" ? "is-active" : ""} href="/app/analytics/menu-engineering">Menu Engineering</Link>
+            <Link className={pathname === "/app/analytics/hours" ? "is-active" : ""} href="/app/analytics/hours">Sales by Hour</Link>
+            <Link className={pathname === "/app/analytics/inventory" ? "is-active" : ""} href="/app/analytics/inventory">Inventory Consumption</Link>
+            <Link className={pathname === "/app/analytics/locations" ? "is-active" : ""} href="/app/analytics/locations">Locations</Link>
+          </div>
+        )}
         <button
           className={active === "pos" ? "app-nav-item is-active" : "app-nav-item"}
           type="button"
