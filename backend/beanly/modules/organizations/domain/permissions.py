@@ -18,12 +18,17 @@ class Permission(StrEnum):
     INVENTORY_READ_LIMITED = "inventory.read_limited"
     INVENTORY_WRITE = "inventory.write"
     INVENTORY_ADJUST = "inventory.adjust"
+    INVENTORY_WRITEOFF = "inventory.writeoff"
+    INVENTORY_COUNT = "inventory.count"
+    INVENTORY_TRANSFER = "inventory.transfer"
+    INVENTORY_MOVEMENT_READ = "inventory.movement.read"
     PURCHASING_READ = "purchasing.read"
     PURCHASING_WRITE = "purchasing.write"
     PURCHASING_CREATE = "purchasing.create"
     PURCHASING_UPDATE = "purchasing.update"
     PURCHASING_RECEIVE = "purchasing.receive"
     PURCHASING_CANCEL = "purchasing.cancel"
+    PURCHASING_RETURN = "purchasing.return"
     MENU_READ = "menu.read"
     MENU_WRITE = "menu.write"
     MENU_PRODUCT_CREATE = "menu.product.create"
@@ -65,12 +70,17 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.INVENTORY_READ,
             Permission.INVENTORY_WRITE,
             Permission.INVENTORY_ADJUST,
+            Permission.INVENTORY_WRITEOFF,
+            Permission.INVENTORY_COUNT,
+            Permission.INVENTORY_TRANSFER,
+            Permission.INVENTORY_MOVEMENT_READ,
             Permission.PURCHASING_READ,
             Permission.PURCHASING_WRITE,
             Permission.PURCHASING_CREATE,
             Permission.PURCHASING_UPDATE,
             Permission.PURCHASING_RECEIVE,
             Permission.PURCHASING_CANCEL,
+            Permission.PURCHASING_RETURN,
             Permission.MENU_READ,
             Permission.MENU_WRITE,
             Permission.MENU_PRODUCT_CREATE,
@@ -102,11 +112,16 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.INVENTORY_READ,
             Permission.INVENTORY_WRITE,
             Permission.INVENTORY_ADJUST,
+            Permission.INVENTORY_WRITEOFF,
+            Permission.INVENTORY_COUNT,
+            Permission.INVENTORY_TRANSFER,
+            Permission.INVENTORY_MOVEMENT_READ,
             Permission.PURCHASING_READ,
             Permission.PURCHASING_WRITE,
             Permission.PURCHASING_CREATE,
             Permission.PURCHASING_UPDATE,
             Permission.PURCHASING_RECEIVE,
+            Permission.PURCHASING_RETURN,
             Permission.MENU_READ,
             Permission.MENU_WRITE,
             Permission.MENU_PRODUCT_CREATE,
@@ -130,6 +145,7 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
         {
             Permission.ORGANIZATION_READ,
             Permission.INVENTORY_READ,
+            Permission.INVENTORY_MOVEMENT_READ,
             Permission.SALES_READ,
             Permission.PAYMENTS_READ,
             Permission.PURCHASING_READ,

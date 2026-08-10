@@ -6,9 +6,15 @@ from beanly.core.events.envelope import EventEnvelope
 from beanly.core.events.serializer import serialize_event_payload
 from beanly.modules.inventory.domain.events import (
     InventoryCostUpdated,
+    InventoryCountCancelled,
+    InventoryCountPosted,
     InventoryTransactionPosted,
     InventoryTransactionReversed,
+    InventoryTransferPosted,
+    InventoryTransferReversed,
     InventoryValuationChanged,
+    InventoryWriteOffPosted,
+    InventoryWriteOffReversed,
     StockAdjusted,
     StockWentNegative,
 )
@@ -22,6 +28,9 @@ from beanly.modules.purchasing.domain.events import (
     PurchaseOrderReceived,
     PurchaseOrderSubmitted,
     SupplierCreated,
+    SupplierReturnCreated,
+    SupplierReturnPosted,
+    SupplierReturnReversed,
 )
 
 
@@ -53,7 +62,34 @@ EVENT_REGISTRY: dict[type[object], EventSpec] = {
     InventoryValuationChanged: EventSpec(
         "inventory.valuation_changed", 1, "inventory_transaction", "transaction_id"
     ),
+    InventoryWriteOffPosted: EventSpec(
+        "inventory.writeoff_posted", 1, "inventory_writeoff", "writeoff_id"
+    ),
+    InventoryWriteOffReversed: EventSpec(
+        "inventory.writeoff_reversed", 1, "inventory_writeoff", "writeoff_id"
+    ),
+    InventoryCountPosted: EventSpec(
+        "inventory.count_posted", 1, "inventory_count", "inventory_count_id"
+    ),
+    InventoryCountCancelled: EventSpec(
+        "inventory.count_cancelled", 1, "inventory_count", "inventory_count_id"
+    ),
+    InventoryTransferPosted: EventSpec(
+        "inventory.transfer_posted", 1, "inventory_transfer", "transfer_id"
+    ),
+    InventoryTransferReversed: EventSpec(
+        "inventory.transfer_reversed", 1, "inventory_transfer", "transfer_id"
+    ),
     SupplierCreated: EventSpec("purchasing.supplier_created", 1, "supplier", "supplier_id"),
+    SupplierReturnCreated: EventSpec(
+        "purchasing.supplier_return_created", 1, "supplier_return", "supplier_return_id"
+    ),
+    SupplierReturnPosted: EventSpec(
+        "purchasing.supplier_return_posted", 1, "supplier_return", "supplier_return_id"
+    ),
+    SupplierReturnReversed: EventSpec(
+        "purchasing.supplier_return_reversed", 1, "supplier_return", "supplier_return_id"
+    ),
     PurchaseOrderCreated: EventSpec(
         "purchasing.order_created", 1, "purchase_order", "purchase_order_id"
     ),

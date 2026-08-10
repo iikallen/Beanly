@@ -1,6 +1,6 @@
 from dataclasses import replace
 from datetime import UTC, datetime
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from uuid import UUID, uuid4
 
 from sqlalchemy.exc import IntegrityError
@@ -19,22 +19,28 @@ from beanly.modules.organizations.domain.entities import TenantContext
 from beanly.modules.purchasing.application.commands import (
     CreateGoodsReceiptCommand,
     CreatePurchaseOrderCommand,
+    CreateSupplierReturnCommand,
     PurchaseLineInput,
     ReceiptLineInput,
     SupplierInput,
+    SupplierReturnLineInput,
     UpdateGoodsReceiptCommand,
     UpdatePurchaseOrderCommand,
+    UpdateSupplierReturnCommand,
 )
 from beanly.modules.purchasing.application.dto import (
     GoodsReceiptDetail,
     OrderListRow,
     PurchaseOrderDetail,
     ReceiptListRow,
+    SupplierReturnDetail,
+    SupplierReturnListRow,
 )
 from beanly.modules.purchasing.application.ports import (
     InventoryGateway,
     InventoryResources,
     PurchaseStockLine,
+    ReturnStockLine,
 )
 from beanly.modules.purchasing.domain.entities import (
     GoodsReceipt,
@@ -42,8 +48,14 @@ from beanly.modules.purchasing.domain.entities import (
     PurchaseOrder,
     PurchaseOrderLine,
     Supplier,
+    SupplierReturn,
+    SupplierReturnLine,
 )
-from beanly.modules.purchasing.domain.enums import GoodsReceiptStatus, PurchaseOrderStatus
+from beanly.modules.purchasing.domain.enums import (
+    GoodsReceiptStatus,
+    PurchaseOrderStatus,
+    SupplierReturnStatus,
+)
 from beanly.modules.purchasing.domain.events import (
     GoodsReceiptCreated,
     GoodsReceiptPosted,
@@ -53,6 +65,9 @@ from beanly.modules.purchasing.domain.events import (
     PurchaseOrderReceived,
     PurchaseOrderSubmitted,
     SupplierCreated,
+    SupplierReturnCreated,
+    SupplierReturnPosted,
+    SupplierReturnReversed,
 )
 from beanly.modules.purchasing.domain.exceptions import (
     DuplicatePurchasingResource,
@@ -315,9 +330,7 @@ class PurchasingService:
         )
         try:
             await self.repository.update_order(updated)
-            await self.sink.stage(
-                PurchaseOrderSubmitted(context.organization_id, order.id)
-            )
+            await self.sink.stage(PurchaseOrderSubmitted(context.organization_id, order.id))
             await self.repository.commit()
         except Exception:
             await self.repository.rollback()
@@ -400,9 +413,7 @@ class PurchasingService:
         try:
             await self.repository.add_receipt(receipt)
             await self.repository.add_receipt_lines(lines)
-            await self.sink.stage(
-                GoodsReceiptCreated(context.organization_id, receipt.id)
-            )
+            await self.sink.stage(GoodsReceiptCreated(context.organization_id, receipt.id))
             await self.repository.commit()
         except IntegrityError as exc:
             await self.repository.rollback()
@@ -482,6 +493,7 @@ class PurchasingService:
             await self.repository.get_receipt_lines(context.organization_id, receipt.id),
             supplier.name,
             order_number,
+            await self.repository.returned_totals(context.organization_id, receipt.id),
         )
 
     async def update_receipt(
@@ -636,6 +648,18 @@ class PurchasingService:
                 raise InvalidPurchasingOperation("Only posted receipts can be reversed")
             if receipt.inventory_transaction_id is None:
                 raise InvalidPurchasingOperation("Receipt has no inventory transaction")
+            linked_returns = await self.repository.list_returns(
+                context.organization_id,
+                await self._location_ids(context),
+                None,
+                None,
+                receipt.id,
+                SupplierReturnStatus.POSTED,
+            )
+            if linked_returns:
+                raise InvalidPurchasingOperation(
+                    "Goods receipt with posted supplier returns cannot be reversed"
+                )
             staged = await self.inventory.reverse_purchase(
                 context,
                 receipt.inventory_transaction_id,
@@ -663,6 +687,397 @@ class PurchasingService:
             await self.repository.rollback()
             raise
         return await self.get_receipt(context, receipt_id)
+
+    async def create_supplier_return(
+        self,
+        context: TenantContext,
+        command: CreateSupplierReturnCommand,
+    ) -> SupplierReturnDetail:
+        supplier = await self._active_supplier(context, command.supplier_id)
+        resources = await self._resources(
+            context,
+            command.location_id,
+            command.warehouse_id,
+            tuple(line.inventory_item_id for line in command.lines),
+        )
+        receipt, receipt_lines = await self._linked_receipt(
+            context,
+            command.goods_receipt_id,
+            supplier.id,
+            command.location_id,
+            command.warehouse_id,
+        )
+        now = datetime.now(UTC)
+        supplier_return = SupplierReturn(
+            uuid4(),
+            context.organization_id,
+            command.location_id,
+            command.warehouse_id,
+            supplier.id,
+            receipt.id if receipt else None,
+            await self.repository.next_return_number(),
+            SupplierReturnStatus.DRAFT,
+            _text(command.document_number, 100),
+            command.returned_at,
+            _text(command.note, 2000),
+            context.user_id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            now,
+            now,
+        )
+        lines = self._return_lines(supplier_return.id, command.lines, resources, receipt_lines, now)
+        if receipt is not None:
+            await self._check_return_limit(context, supplier_return, lines, receipt_lines)
+        try:
+            await self.repository.add_return(supplier_return)
+            await self.repository.add_return_lines(lines)
+            await self.sink.stage(
+                SupplierReturnCreated(context.organization_id, supplier_return.id)
+            )
+            await self.repository.commit()
+        except IntegrityError as exc:
+            await self.repository.rollback()
+            raise DuplicatePurchasingResource from exc
+        except Exception:
+            await self.repository.rollback()
+            raise
+        return await self.get_supplier_return(context, supplier_return.id)
+
+    async def list_supplier_returns(
+        self,
+        context: TenantContext,
+        supplier_id: UUID | None = None,
+        warehouse_id: UUID | None = None,
+        goods_receipt_id: UUID | None = None,
+        status: SupplierReturnStatus | None = None,
+    ) -> list[SupplierReturnListRow]:
+        values = await self.repository.list_returns(
+            context.organization_id,
+            await self._location_ids(context),
+            supplier_id,
+            warehouse_id,
+            goods_receipt_id,
+            status,
+        )
+        rows = []
+        for value in values:
+            supplier = await self.repository.get_supplier(
+                context.organization_id, value.supplier_id
+            )
+            receipt = (
+                await self.repository.get_receipt(context.organization_id, value.goods_receipt_id)
+                if value.goods_receipt_id is not None
+                else None
+            )
+            lines = await self.repository.get_return_lines(context.organization_id, value.id)
+            rows.append(
+                SupplierReturnListRow(
+                    value,
+                    supplier.name if supplier else "Unknown supplier",
+                    receipt.number if receipt else None,
+                    sum(line.line_total_minor for line in lines),
+                )
+            )
+        return rows
+
+    async def get_supplier_return(
+        self, context: TenantContext, return_id: UUID
+    ) -> SupplierReturnDetail:
+        value = await self.repository.get_return(context.organization_id, return_id)
+        if value is None:
+            raise PurchasingNotFound
+        await self._ensure_location(context, value.location_id)
+        supplier = await self.get_supplier(context, value.supplier_id)
+        receipt = (
+            await self.repository.get_receipt(context.organization_id, value.goods_receipt_id)
+            if value.goods_receipt_id is not None
+            else None
+        )
+        totals = (
+            await self.repository.returned_totals(context.organization_id, value.goods_receipt_id)
+            if value.goods_receipt_id is not None
+            else {}
+        )
+        return SupplierReturnDetail(
+            value,
+            await self.repository.get_return_lines(context.organization_id, value.id),
+            supplier.name,
+            receipt.number if receipt else None,
+            totals,
+        )
+
+    async def update_supplier_return(
+        self,
+        context: TenantContext,
+        return_id: UUID,
+        command: UpdateSupplierReturnCommand,
+    ) -> SupplierReturnDetail:
+        value = await self._locked_return(context, return_id)
+        if value.status != SupplierReturnStatus.DRAFT:
+            raise InvalidPurchasingOperation("Posted supplier returns are immutable")
+        supplier_id = command.supplier_id or value.supplier_id
+        location_id = command.location_id or value.location_id
+        warehouse_id = command.warehouse_id or value.warehouse_id
+        goods_receipt_id = (
+            command.goods_receipt_id if command.goods_receipt_id_set else value.goods_receipt_id
+        )
+        await self._active_supplier(context, supplier_id)
+        current_lines = await self.repository.get_return_lines(context.organization_id, value.id)
+        item_ids = (
+            tuple(line.inventory_item_id for line in command.lines)
+            if command.lines is not None
+            else tuple(line.inventory_item_id for line in current_lines)
+        )
+        resources = await self._resources(context, location_id, warehouse_id, item_ids)
+        receipt, receipt_lines = await self._linked_receipt(
+            context,
+            goods_receipt_id,
+            supplier_id,
+            location_id,
+            warehouse_id,
+        )
+        now = datetime.now(UTC)
+        updated = replace(
+            value,
+            supplier_id=supplier_id,
+            location_id=location_id,
+            warehouse_id=warehouse_id,
+            goods_receipt_id=receipt.id if receipt else None,
+            document_number=(
+                _text(command.document_number, 100)
+                if command.document_number_set
+                else value.document_number
+            ),
+            returned_at=command.returned_at or value.returned_at,
+            note=_text(command.note, 2000) if command.note_set else value.note,
+            updated_at=now,
+        )
+        lines = (
+            self._return_lines(value.id, command.lines, resources, receipt_lines, now)
+            if command.lines is not None
+            else current_lines
+        )
+        if receipt is not None:
+            await self._check_return_limit(context, updated, lines, receipt_lines)
+        elif any(line.goods_receipt_line_id is not None for line in lines):
+            raise InvalidPurchasingOperation(
+                "Unlinked supplier return lines cannot reference receipt lines"
+            )
+        try:
+            await self.repository.update_return(updated)
+            if command.lines is not None:
+                await self.repository.replace_return_lines(context.organization_id, value.id, lines)
+            await self.repository.commit()
+        except Exception:
+            await self.repository.rollback()
+            raise
+        return await self.get_supplier_return(context, value.id)
+
+    async def post_supplier_return(
+        self, context: TenantContext, return_id: UUID
+    ) -> SupplierReturnDetail:
+        try:
+            value = await self._locked_return(context, return_id)
+            if value.status == SupplierReturnStatus.POSTED:
+                await self.repository.commit()
+                return await self.get_supplier_return(context, value.id)
+            if value.status != SupplierReturnStatus.DRAFT:
+                raise InvalidPurchasingOperation("Supplier return cannot be posted")
+            lines = await self.repository.get_return_lines(context.organization_id, value.id)
+            if not lines:
+                raise InvalidPurchasingOperation("Supplier return has no lines")
+            resources = await self._resources(
+                context,
+                value.location_id,
+                value.warehouse_id,
+                tuple(line.inventory_item_id for line in lines),
+            )
+            receipt, receipt_lines = await self._linked_receipt(
+                context,
+                value.goods_receipt_id,
+                value.supplier_id,
+                value.location_id,
+                value.warehouse_id,
+                lock=True,
+            )
+            if receipt is not None:
+                await self._check_return_limit(context, value, lines, receipt_lines)
+            staged = await self.inventory.return_to_supplier(
+                context,
+                value.id,
+                value.warehouse_id,
+                f"Supplier return {value.number}",
+                tuple(
+                    ReturnStockLine(
+                        line.inventory_item_id,
+                        line.base_quantity,
+                        resources.items[line.inventory_item_id].base_unit,
+                    )
+                    for line in lines
+                ),
+            )
+            now = datetime.now(UTC)
+            posted = replace(
+                value,
+                status=SupplierReturnStatus.POSTED,
+                posted_by=context.user_id,
+                posted_at=now,
+                inventory_transaction_id=staged.transaction_id,
+                updated_at=now,
+            )
+            await self.repository.update_return(posted)
+            await self.sink.stage_many(
+                (
+                    *staged.events,
+                    SupplierReturnPosted(context.organization_id, value.id, staged.transaction_id),
+                )
+            )
+            await self.repository.commit()
+        except Exception:
+            await self.repository.rollback()
+            raise
+        return await self.get_supplier_return(context, return_id)
+
+    async def reverse_supplier_return(
+        self, context: TenantContext, return_id: UUID
+    ) -> SupplierReturnDetail:
+        try:
+            value = await self._locked_return(context, return_id)
+            if value.status != SupplierReturnStatus.POSTED:
+                raise InvalidPurchasingOperation("Only posted supplier returns can be reversed")
+            if value.inventory_transaction_id is None:
+                raise InvalidPurchasingOperation("Supplier return has no inventory transaction")
+            staged = await self.inventory.reverse_supplier_return(
+                context, value.inventory_transaction_id, value.id
+            )
+            now = datetime.now(UTC)
+            reversed_value = replace(
+                value,
+                status=SupplierReturnStatus.REVERSED,
+                reversed_by=context.user_id,
+                reversed_at=now,
+                updated_at=now,
+            )
+            await self.repository.update_return(reversed_value)
+            await self.sink.stage_many(
+                (*staged.events, SupplierReturnReversed(context.organization_id, value.id))
+            )
+            await self.repository.commit()
+        except Exception:
+            await self.repository.rollback()
+            raise
+        return await self.get_supplier_return(context, return_id)
+
+    async def _linked_receipt(
+        self,
+        context: TenantContext,
+        receipt_id: UUID | None,
+        supplier_id: UUID,
+        location_id: UUID,
+        warehouse_id: UUID,
+        *,
+        lock: bool = False,
+    ) -> tuple[GoodsReceipt | None, tuple[GoodsReceiptLine, ...]]:
+        if receipt_id is None:
+            return None, ()
+        receipt = await self.repository.get_receipt(context.organization_id, receipt_id, lock=lock)
+        if receipt is None:
+            raise PurchasingNotFound
+        await self._ensure_location(context, receipt.location_id)
+        if receipt.status != GoodsReceiptStatus.POSTED:
+            raise InvalidPurchasingOperation("Linked goods receipt must be posted")
+        if receipt.supplier_id != supplier_id:
+            raise InvalidPurchasingOperation("Supplier does not match goods receipt")
+        if receipt.location_id != location_id or receipt.warehouse_id != warehouse_id:
+            raise InvalidPurchasingOperation("Warehouse does not match goods receipt")
+        return receipt, await self.repository.get_receipt_lines(context.organization_id, receipt.id)
+
+    async def _check_return_limit(
+        self,
+        context: TenantContext,
+        value: SupplierReturn,
+        lines: tuple[SupplierReturnLine, ...],
+        receipt_lines: tuple[GoodsReceiptLine, ...],
+    ) -> None:
+        if value.goods_receipt_id is None:
+            return
+        received = {line.id: line for line in receipt_lines}
+        returned = await self.repository.returned_totals(
+            context.organization_id,
+            value.goods_receipt_id,
+            exclude_return_id=value.id,
+        )
+        for line in lines:
+            source = received.get(line.goods_receipt_line_id)
+            if source is None or source.inventory_item_id != line.inventory_item_id:
+                raise InvalidPurchasingOperation("Return line does not match goods receipt")
+            if returned.get(source.id, Decimal(0)) + line.base_quantity > source.base_quantity:
+                raise InvalidPurchasingOperation("Return quantity exceeds received quantity")
+
+    def _return_lines(
+        self,
+        return_id: UUID,
+        values: tuple[SupplierReturnLineInput, ...],
+        resources: InventoryResources,
+        receipt_lines: tuple[GoodsReceiptLine, ...],
+        now: datetime,
+    ) -> tuple[SupplierReturnLine, ...]:
+        linked = {line.id: line for line in receipt_lines}
+        result = []
+        for value in values:
+            source = linked.get(value.goods_receipt_line_id)
+            if receipt_lines:
+                if source is None or source.inventory_item_id != value.inventory_item_id:
+                    raise InvalidPurchasingOperation("Return line does not match goods receipt")
+                quantity = _decimal(value.quantity, positive=True, label="Return quantity")
+                unit, multiplier, price = (
+                    source.purchase_unit,
+                    source.unit_multiplier,
+                    source.unit_price,
+                )
+            else:
+                if value.goods_receipt_line_id is not None:
+                    raise InvalidPurchasingOperation(
+                        "Unlinked supplier return cannot reference a receipt line"
+                    )
+                if value.purchase_unit is None or value.unit_price is None:
+                    raise InvalidPurchaseQuantity(
+                        "purchase_unit and unit_price are required for unlinked returns"
+                    )
+                quantity, unit, multiplier, price = _line_values(
+                    value.quantity,
+                    value.purchase_unit,
+                    value.unit_multiplier,
+                    value.unit_price,
+                    resources.items[value.inventory_item_id].base_unit,
+                )
+            result.append(
+                SupplierReturnLine(
+                    uuid4(),
+                    return_id,
+                    source.id if source else None,
+                    value.inventory_item_id,
+                    quantity,
+                    _base_quantity(quantity, multiplier),
+                    unit,
+                    multiplier,
+                    price,
+                    _line_total_minor(quantity, price),
+                    now,
+                )
+            )
+        return tuple(result)
+
+    async def _locked_return(self, context: TenantContext, return_id: UUID) -> SupplierReturn:
+        value = await self.repository.get_return(context.organization_id, return_id, lock=True)
+        if value is None:
+            raise PurchasingNotFound
+        await self._ensure_location(context, value.location_id)
+        return value
 
     async def _recalculate_order(
         self, context: TenantContext, order: PurchaseOrder
@@ -824,6 +1239,7 @@ class PurchasingService:
         if location_id not in await self._location_ids(context):
             raise PurchasingNotFound
 
+
 def _line_values(
     quantity: Decimal,
     purchase_unit: str,
@@ -846,6 +1262,8 @@ def _decimal(value: Decimal | None, *, positive: bool, label: str) -> Decimal:
         raise InvalidPurchaseQuantity(f"{label} must be a finite decimal string")
     if value.as_tuple().exponent < -6:
         raise InvalidPurchaseQuantity(f"{label} supports at most 6 decimal places")
+    if value != 0 and value.adjusted() > 13:
+        raise InvalidPurchaseQuantity(f"{label} exceeds NUMERIC(20, 6)")
     if positive and value <= 0:
         raise InvalidPurchaseQuantity(f"{label} must be greater than zero")
     if not positive and value < 0:
@@ -861,7 +1279,13 @@ def _base_quantity(quantity: Decimal, multiplier: Decimal) -> Decimal:
 
 
 def _line_total_minor(quantity: Decimal, unit_price: Decimal) -> int:
-    return int((quantity * unit_price * _MONEY_MINOR).quantize(1, rounding=ROUND_HALF_UP))
+    try:
+        value = int((quantity * unit_price * _MONEY_MINOR).quantize(1, rounding=ROUND_HALF_UP))
+    except (InvalidOperation, ValueError, OverflowError) as exc:
+        raise InvalidPurchaseQuantity("Line total exceeds BIGINT") from exc
+    if value > 9_223_372_036_854_775_807:
+        raise InvalidPurchaseQuantity("Line total exceeds BIGINT")
+    return value
 
 
 def _acquisition_total(quantity: Decimal, unit_price: Decimal) -> Decimal:

@@ -12,9 +12,15 @@ from beanly.core.events.serializer import (
 )
 from beanly.modules.inventory.domain.events import (
     InventoryCostUpdated,
+    InventoryCountCancelled,
+    InventoryCountPosted,
     InventoryTransactionPosted,
     InventoryTransactionReversed,
+    InventoryTransferPosted,
+    InventoryTransferReversed,
     InventoryValuationChanged,
+    InventoryWriteOffPosted,
+    InventoryWriteOffReversed,
     StockAdjusted,
     StockWentNegative,
 )
@@ -28,6 +34,9 @@ from beanly.modules.purchasing.domain.events import (
     PurchaseOrderReceived,
     PurchaseOrderSubmitted,
     SupplierCreated,
+    SupplierReturnCreated,
+    SupplierReturnPosted,
+    SupplierReturnReversed,
 )
 
 
@@ -43,6 +52,11 @@ def _event_contracts() -> tuple[tuple[object, str, str, UUID], ...]:
     supplier_id = uuid4()
     purchase_order_id = uuid4()
     receipt_id = uuid4()
+    writeoff_id = uuid4()
+    count_id = uuid4()
+    transfer_id = uuid4()
+    in_transaction_id = uuid4()
+    supplier_return_id = uuid4()
     return (
         (
             PaymentCompleted(
@@ -97,10 +111,78 @@ def _event_contracts() -> tuple[tuple[object, str, str, UUID], ...]:
             transaction_id,
         ),
         (
+            InventoryWriteOffPosted(
+                organization_id,
+                writeoff_id,
+                transaction_id,
+                uuid4(),
+                Decimal("42.000000"),
+            ),
+            "inventory.writeoff_posted",
+            "inventory_writeoff",
+            writeoff_id,
+        ),
+        (
+            InventoryWriteOffReversed(
+                organization_id, writeoff_id, transaction_id, reversal_id
+            ),
+            "inventory.writeoff_reversed",
+            "inventory_writeoff",
+            writeoff_id,
+        ),
+        (
+            InventoryCountPosted(organization_id, count_id, transaction_id),
+            "inventory.count_posted",
+            "inventory_count",
+            count_id,
+        ),
+        (
+            InventoryCountCancelled(organization_id, count_id),
+            "inventory.count_cancelled",
+            "inventory_count",
+            count_id,
+        ),
+        (
+            InventoryTransferPosted(
+                organization_id, transfer_id, transaction_id, in_transaction_id
+            ),
+            "inventory.transfer_posted",
+            "inventory_transfer",
+            transfer_id,
+        ),
+        (
+            InventoryTransferReversed(
+                organization_id, transfer_id, reversal_id, uuid4()
+            ),
+            "inventory.transfer_reversed",
+            "inventory_transfer",
+            transfer_id,
+        ),
+        (
             SupplierCreated(organization_id, supplier_id),
             "purchasing.supplier_created",
             "supplier",
             supplier_id,
+        ),
+        (
+            SupplierReturnCreated(organization_id, supplier_return_id),
+            "purchasing.supplier_return_created",
+            "supplier_return",
+            supplier_return_id,
+        ),
+        (
+            SupplierReturnPosted(
+                organization_id, supplier_return_id, transaction_id
+            ),
+            "purchasing.supplier_return_posted",
+            "supplier_return",
+            supplier_return_id,
+        ),
+        (
+            SupplierReturnReversed(organization_id, supplier_return_id),
+            "purchasing.supplier_return_reversed",
+            "supplier_return",
+            supplier_return_id,
         ),
         (
             PurchaseOrderCreated(organization_id, purchase_order_id),

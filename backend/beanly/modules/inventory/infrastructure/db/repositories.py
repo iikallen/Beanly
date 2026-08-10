@@ -1,13 +1,14 @@
 from decimal import Decimal
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from beanly.modules.inventory.domain.costing import inventory_value
 from beanly.modules.inventory.domain.entities import (
+    GlobalMovementRow,
     InventoryItem,
     InventoryTransaction,
     InventoryTransactionLine,
@@ -145,6 +146,36 @@ class SqlAlchemyInventoryRepository:
         ).all()
         # A present Decimal(0) is intentionally different from a missing balance row.
         return {item_id: average_unit_cost for item_id, average_unit_cost in rows}
+
+    async def changed_items_since(
+        self,
+        organization_id: UUID,
+        warehouse_id: UUID,
+        item_ids: tuple[UUID, ...],
+        since,
+    ) -> set[UUID]:
+        if not item_ids:
+            return set()
+        values = await self.session.scalars(
+            select(InventoryTransactionLineModel.inventory_item_id)
+            .join(
+                InventoryTransactionModel,
+                InventoryTransactionModel.id == InventoryTransactionLineModel.transaction_id,
+            )
+            .where(
+                InventoryTransactionModel.organization_id == organization_id,
+                InventoryTransactionModel.warehouse_id == warehouse_id,
+                InventoryTransactionModel.status.in_(
+                    (
+                        InventoryTransactionStatus.POSTED.value,
+                        InventoryTransactionStatus.REVERSED.value,
+                    )
+                ),
+                InventoryTransactionModel.posted_at >= since,
+                InventoryTransactionLineModel.inventory_item_id.in_(item_ids),
+            )
+        )
+        return set(values)
 
     async def add_transaction(self, transaction: InventoryTransaction) -> InventoryTransaction:
         model = InventoryTransactionModel(
@@ -309,6 +340,65 @@ class SqlAlchemyInventoryRepository:
             for model in models
         }
         if set(balances) != set(ordered_ids):
+            raise RuntimeError("Could not lock every inventory balance")
+        return balances
+
+    async def lock_balances_across_warehouses(
+        self,
+        organization_id: UUID,
+        warehouse_item_pairs: tuple[tuple[UUID, UUID, UUID], ...],
+        now,
+    ) -> dict[tuple[UUID, UUID], StockBalance]:
+        ordered = tuple(
+            sorted(set(warehouse_item_pairs), key=lambda value: (str(value[1]), str(value[2])))
+        )
+        dialect = self.session.get_bind().dialect.name
+        insert_factory = postgresql_insert if dialect == "postgresql" else sqlite_insert
+        for location_id, warehouse_id, item_id in ordered:
+            insert = insert_factory(StockBalanceModel).values(
+                id=uuid4(),
+                organization_id=organization_id,
+                location_id=location_id,
+                warehouse_id=warehouse_id,
+                inventory_item_id=item_id,
+                quantity=Decimal(0),
+                average_unit_cost=Decimal(0),
+                updated_at=now,
+            )
+            await self.session.execute(
+                insert.on_conflict_do_nothing(
+                    index_elements=["warehouse_id", "inventory_item_id"]
+                )
+            )
+        keys = tuple((warehouse_id, item_id) for _, warehouse_id, item_id in ordered)
+        if not keys:
+            return {}
+        models = await self.session.scalars(
+            select(StockBalanceModel)
+            .where(
+                StockBalanceModel.organization_id == organization_id,
+                tuple_(
+                    StockBalanceModel.warehouse_id,
+                    StockBalanceModel.inventory_item_id,
+                ).in_(keys),
+            )
+            .order_by(StockBalanceModel.warehouse_id, StockBalanceModel.inventory_item_id)
+            .with_for_update()
+        )
+        balances = {
+            (model.warehouse_id, model.inventory_item_id): StockBalance(
+                model.id,
+                model.organization_id,
+                model.location_id,
+                model.warehouse_id,
+                model.inventory_item_id,
+                model.quantity,
+                model.average_unit_cost,
+                model.updated_at,
+            )
+            for model in models
+        }
+        if set(balances) != set(keys):
             raise RuntimeError("Could not lock every inventory balance")
         return balances
 
@@ -482,6 +572,90 @@ class SqlAlchemyInventoryRepository:
                 transaction.created_at,
             )
             for transaction, line in rows
+        ]
+
+    async def list_global_movements(
+        self,
+        organization_id: UUID,
+        location_ids: tuple[UUID, ...],
+        warehouse_id: UUID | None,
+        location_id: UUID | None,
+        item_id: UUID | None,
+        type_: str | None,
+        date_from,
+        date_to,
+        reference_type: str | None,
+    ) -> list[GlobalMovementRow]:
+        if not location_ids:
+            return []
+        statement = (
+            select(
+                InventoryTransactionModel,
+                InventoryTransactionLineModel,
+                InventoryItemModel,
+            )
+            .join(
+                InventoryTransactionLineModel,
+                InventoryTransactionLineModel.transaction_id
+                == InventoryTransactionModel.id,
+            )
+            .join(
+                InventoryItemModel,
+                InventoryItemModel.id == InventoryTransactionLineModel.inventory_item_id,
+            )
+            .where(
+                InventoryTransactionModel.organization_id == organization_id,
+                InventoryTransactionModel.location_id.in_(location_ids),
+                InventoryTransactionModel.status.in_(
+                    (
+                        InventoryTransactionStatus.POSTED.value,
+                        InventoryTransactionStatus.REVERSED.value,
+                    )
+                ),
+                InventoryTransactionModel.posted_at.is_not(None),
+            )
+        )
+        filters = (
+            (warehouse_id, InventoryTransactionModel.warehouse_id),
+            (location_id, InventoryTransactionModel.location_id),
+            (item_id, InventoryTransactionLineModel.inventory_item_id),
+            (type_, InventoryTransactionModel.type),
+            (reference_type, InventoryTransactionModel.reference_type),
+        )
+        for value, column in filters:
+            if value is not None:
+                statement = statement.where(column == value)
+        if date_from is not None:
+            statement = statement.where(InventoryTransactionModel.posted_at >= date_from)
+        if date_to is not None:
+            statement = statement.where(InventoryTransactionModel.posted_at <= date_to)
+        rows = (
+            await self.session.execute(
+                statement.order_by(
+                    InventoryTransactionModel.posted_at.desc(),
+                    InventoryTransactionModel.id.desc(),
+                    InventoryTransactionLineModel.id,
+                )
+            )
+        ).all()
+        return [
+            GlobalMovementRow(
+                transaction.id,
+                transaction.warehouse_id,
+                transaction.location_id,
+                line.inventory_item_id,
+                item.name,
+                InventoryTransactionType(transaction.type),
+                line.quantity_delta,
+                UnitCode(item.base_unit),
+                line.unit_cost_amount,
+                line.total_cost_amount,
+                transaction.reference_type,
+                transaction.reference_id,
+                transaction.note,
+                transaction.posted_at,
+            )
+            for transaction, line, item in rows
         ]
 
     async def list_transactions(

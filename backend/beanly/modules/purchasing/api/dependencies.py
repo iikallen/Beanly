@@ -61,3 +61,4 @@ PurchasingCreateDep = Annotated[TenantContext, Depends(_permission(Permission.PU
 PurchasingUpdateDep = Annotated[TenantContext, Depends(_permission(Permission.PURCHASING_UPDATE))]
 PurchasingReceiveDep = Annotated[TenantContext, Depends(_permission(Permission.PURCHASING_RECEIVE))]
 PurchasingCancelDep = Annotated[TenantContext, Depends(_permission(Permission.PURCHASING_CANCEL))]
+PurchasingReturnDep = Annotated[TenantContext, Depends(_permission(Permission.PURCHASING_RETURN))]

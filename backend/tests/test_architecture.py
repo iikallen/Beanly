@@ -34,6 +34,24 @@ def test_openapi_contains_current_contract() -> None:
         "/api/v1/inventory/transactions/{transaction_id}/reverse",
         "/api/v1/inventory/adjustments",
         "/api/v1/inventory/opening-balances",
+        "/api/v1/inventory/movements",
+        "/api/v1/inventory/write-off-reasons",
+        "/api/v1/inventory/write-off-reasons/{reason_id}",
+        "/api/v1/inventory/write-off-reasons/{reason_id}/deactivate",
+        "/api/v1/inventory/write-offs",
+        "/api/v1/inventory/write-offs/{writeoff_id}",
+        "/api/v1/inventory/write-offs/{writeoff_id}/post",
+        "/api/v1/inventory/write-offs/{writeoff_id}/reverse",
+        "/api/v1/inventory/counts",
+        "/api/v1/inventory/counts/{count_id}",
+        "/api/v1/inventory/counts/{count_id}/lines",
+        "/api/v1/inventory/counts/{count_id}/lines/{line_id}",
+        "/api/v1/inventory/counts/{count_id}/post",
+        "/api/v1/inventory/counts/{count_id}/cancel",
+        "/api/v1/inventory/transfers",
+        "/api/v1/inventory/transfers/{transfer_id}",
+        "/api/v1/inventory/transfers/{transfer_id}/post",
+        "/api/v1/inventory/transfers/{transfer_id}/reverse",
         "/api/v1/suppliers",
         "/api/v1/suppliers/{supplier_id}",
         "/api/v1/suppliers/{supplier_id}/deactivate",
@@ -170,3 +188,15 @@ def test_transactional_outbox_replaces_post_commit_domain_publication() -> None:
     ):
         source = path.read_text(encoding="utf-8")
         assert "OutboxEventSink(OutboxRepository(session))" in source, path
+
+
+def test_inventory_operations_use_ledger_application_boundary() -> None:
+    source = Path("beanly/modules/inventory/application/operations.py").read_text(
+        encoding="utf-8"
+    )
+    assert "infrastructure" not in source
+    assert "StockBalanceModel" not in source
+    assert "InventoryTransactionModel" not in source
+    assert "self.inventory.repository" not in source
+    assert "create_and_post_staged" in source
+    assert "reverse_staged" in source

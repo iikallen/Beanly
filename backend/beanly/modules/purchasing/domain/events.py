@@ -49,3 +49,22 @@ class PurchaseOrderPartiallyReceived:
 class PurchaseOrderReceived:
     organization_id: UUID
     purchase_order_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class SupplierReturnCreated:
+    organization_id: UUID
+    supplier_return_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class SupplierReturnPosted:
+    organization_id: UUID
+    supplier_return_id: UUID
+    inventory_transaction_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class SupplierReturnReversed:
+    organization_id: UUID
+    supplier_return_id: UUID

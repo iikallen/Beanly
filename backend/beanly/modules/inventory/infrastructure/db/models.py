@@ -152,3 +152,255 @@ class InventoryTransactionLineModel(Base):
         Numeric(20, 6), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class WriteOffReasonModel(Base):
+    __tablename__ = "inventory_writeoff_reasons"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    organization_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("organizations.id"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(150))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class WriteOffModel(Base):
+    __tablename__ = "inventory_writeoffs"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "number"),
+        CheckConstraint(
+            "status IN ('DRAFT', 'POSTED', 'REVERSED')", name="ck_writeoff_status"
+        ),
+        Index(
+            "ix_inventory_writeoffs_organization_status_occurred",
+            "organization_id",
+            "status",
+            "occurred_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    organization_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("organizations.id"), index=True
+    )
+    location_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("locations.id"), index=True)
+    warehouse_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("warehouses.id"), index=True)
+    number: Mapped[str] = mapped_column(String(32))
+    reason_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("inventory_writeoff_reasons.id"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(16))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id"))
+    posted_by: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id"), nullable=True
+    )
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reversed_by: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id"), nullable=True
+    )
+    reversed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    inventory_transaction_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("inventory_transactions.id"), nullable=True, unique=True
+    )
+    total_cost_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class WriteOffLineModel(Base):
+    __tablename__ = "inventory_writeoff_lines"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_writeoff_line_quantity_positive"),
+        CheckConstraint("base_quantity > 0", name="ck_writeoff_line_base_quantity_positive"),
+        UniqueConstraint("writeoff_id", "inventory_item_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    writeoff_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("inventory_writeoffs.id", ondelete="CASCADE"), index=True
+    )
+    inventory_item_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("inventory_items.id"), index=True
+    )
+    quantity: Mapped[Decimal] = mapped_column(Numeric(20, 6))
+    unit_code: Mapped[str] = mapped_column(String(8))
+    base_quantity: Mapped[Decimal] = mapped_column(Numeric(20, 6))
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class InventoryCountModel(Base):
+    __tablename__ = "inventory_counts"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "number"),
+        CheckConstraint("type IN ('FULL', 'PARTIAL')", name="ck_inventory_count_type"),
+        CheckConstraint(
+            "status IN ('COUNTING', 'POSTED', 'CANCELLED')",
+            name="ck_inventory_count_status",
+        ),
+        Index(
+            "ix_inventory_counts_organization_status_snapshot",
+            "organization_id",
+            "status",
+            "snapshot_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    organization_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("organizations.id"), index=True
+    )
+    location_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("locations.id"), index=True)
+    warehouse_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("warehouses.id"), index=True)
+    number: Mapped[str] = mapped_column(String(32))
+    type: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16))
+    snapshot_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    started_by: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id"))
+    posted_by: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id"), nullable=True
+    )
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_by: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id"), nullable=True
+    )
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    inventory_transaction_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("inventory_transactions.id"), nullable=True, unique=True
+    )
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class InventoryCountLineModel(Base):
+    __tablename__ = "inventory_count_lines"
+    __table_args__ = (
+        UniqueConstraint("inventory_count_id", "inventory_item_id"),
+        CheckConstraint(
+            "counted_quantity IS NULL OR counted_quantity >= 0",
+            name="ck_inventory_count_line_counted_nonnegative",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    inventory_count_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("inventory_counts.id", ondelete="CASCADE"), index=True
+    )
+    inventory_item_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("inventory_items.id"), index=True
+    )
+    expected_quantity: Mapped[Decimal] = mapped_column(Numeric(20, 6))
+    counted_quantity: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    current_quantity_before_post: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 6), nullable=True
+    )
+    difference_quantity: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    difference_cost_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 6), nullable=True
+    )
+    unit_cost_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class InventoryTransferModel(Base):
+    __tablename__ = "inventory_transfers"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "number"),
+        CheckConstraint(
+            "status IN ('DRAFT', 'POSTED', 'REVERSED')", name="ck_inventory_transfer_status"
+        ),
+        CheckConstraint(
+            "source_warehouse_id <> destination_warehouse_id",
+            name="ck_inventory_transfer_distinct_warehouses",
+        ),
+        Index(
+            "ix_inventory_transfers_organization_status_occurred",
+            "organization_id",
+            "status",
+            "occurred_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    organization_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("organizations.id"), index=True
+    )
+    number: Mapped[str] = mapped_column(String(32))
+    source_location_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("locations.id"), index=True
+    )
+    source_warehouse_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("warehouses.id"), index=True
+    )
+    destination_location_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("locations.id"), index=True
+    )
+    destination_warehouse_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("warehouses.id"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id"))
+    posted_by: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id"), nullable=True
+    )
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reversed_by: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id"), nullable=True
+    )
+    reversed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    out_transaction_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("inventory_transactions.id"), nullable=True, unique=True
+    )
+    in_transaction_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("inventory_transactions.id"), nullable=True, unique=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class InventoryTransferLineModel(Base):
+    __tablename__ = "inventory_transfer_lines"
+    __table_args__ = (
+        UniqueConstraint("transfer_id", "inventory_item_id"),
+        CheckConstraint("quantity > 0", name="ck_inventory_transfer_line_quantity_positive"),
+        CheckConstraint(
+            "base_quantity > 0", name="ck_inventory_transfer_line_base_quantity_positive"
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    transfer_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("inventory_transfers.id", ondelete="CASCADE"), index=True
+    )
+    inventory_item_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("inventory_items.id"), index=True
+    )
+    quantity: Mapped[Decimal] = mapped_column(Numeric(20, 6))
+    unit_code: Mapped[str] = mapped_column(String(8))
+    base_quantity: Mapped[Decimal] = mapped_column(Numeric(20, 6))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )

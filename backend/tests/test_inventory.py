@@ -511,6 +511,127 @@ async def test_tenant_and_selected_location_isolation(app_client) -> None:
         await session.commit()
 
     member_headers = {**member, "X-Organization-ID": str(organization_id)}
+    reason = await client.post(
+        "/api/v1/inventory/write-off-reasons",
+        headers=owner_headers,
+        json={"name": "Scoped reason"},
+    )
+    forbidden_writeoff = await client.post(
+        "/api/v1/inventory/write-offs",
+        headers=owner_headers,
+        json={
+            "warehouse_id": str(forbidden_warehouse),
+            "reason_id": reason.json()["id"],
+            "occurred_at": "2026-08-10T09:40:00Z",
+            "lines": [
+                {"inventory_item_id": str(item_id), "quantity": "1", "unit": "pcs"}
+            ],
+        },
+    )
+    assert forbidden_writeoff.status_code == 201, forbidden_writeoff.text
+    forbidden_transfer = await client.post(
+        "/api/v1/inventory/transfers",
+        headers=owner_headers,
+        json={
+            "source_warehouse_id": str(forbidden_warehouse),
+            "destination_warehouse_id": str(assigned_warehouse),
+            "occurred_at": "2026-08-10T09:45:00Z",
+            "lines": [
+                {"inventory_item_id": str(item_id), "quantity": "1", "unit": "pcs"}
+            ],
+        },
+    )
+    assert forbidden_transfer.status_code == 201, forbidden_transfer.text
+    writeoff_patch = await client.patch(
+        f"/api/v1/inventory/write-offs/{forbidden_writeoff.json()['id']}",
+        headers=member_headers,
+        json={
+            "warehouse_id": str(assigned_warehouse),
+            "reason_id": reason.json()["id"],
+            "occurred_at": "2026-08-10T09:50:00Z",
+            "lines": [
+                {"inventory_item_id": str(item_id), "quantity": "1", "unit": "pcs"}
+            ],
+        },
+    )
+    assert writeoff_patch.status_code == 404
+    transfer_patch = await client.patch(
+        f"/api/v1/inventory/transfers/{forbidden_transfer.json()['id']}",
+        headers=member_headers,
+        json={
+            "source_warehouse_id": str(assigned_warehouse),
+            "destination_warehouse_id": str(forbidden_warehouse),
+            "occurred_at": "2026-08-10T09:50:00Z",
+            "lines": [
+                {"inventory_item_id": str(item_id), "quantity": "1", "unit": "pcs"}
+            ],
+        },
+    )
+    assert transfer_patch.status_code == 404
+    opening = await client.post(
+        "/api/v1/inventory/opening-balances",
+        headers={**owner_headers, "Idempotency-Key": "scope-forbidden-opening"},
+        json={
+            "warehouse_id": str(forbidden_warehouse),
+            "items": [
+                {
+                    "inventory_item_id": str(item_id),
+                    "quantity": "10",
+                    "unit_code": "pcs",
+                    "unit_cost_amount": "1",
+                }
+            ],
+        },
+    )
+    assert opening.status_code == 201, opening.text
+    assert (
+        await client.post(
+            f"/api/v1/inventory/write-offs/{forbidden_writeoff.json()['id']}/post",
+            headers=owner_headers,
+        )
+    ).status_code == 200
+    assert (
+        await client.post(
+            f"/api/v1/inventory/transfers/{forbidden_transfer.json()['id']}/post",
+            headers=owner_headers,
+        )
+    ).status_code == 200
+    assert (
+        await client.patch(
+            f"/api/v1/inventory/write-offs/{forbidden_writeoff.json()['id']}",
+            headers=member_headers,
+            json={
+                "warehouse_id": str(assigned_warehouse),
+                "reason_id": reason.json()["id"],
+                "occurred_at": "2026-08-10T09:50:00Z",
+                "lines": [
+                    {
+                        "inventory_item_id": str(item_id),
+                        "quantity": "1",
+                        "unit": "pcs",
+                    }
+                ],
+            },
+        )
+    ).status_code == 404
+    assert (
+        await client.patch(
+            f"/api/v1/inventory/transfers/{forbidden_transfer.json()['id']}",
+            headers=member_headers,
+            json={
+                "source_warehouse_id": str(assigned_warehouse),
+                "destination_warehouse_id": str(forbidden_warehouse),
+                "occurred_at": "2026-08-10T09:50:00Z",
+                "lines": [
+                    {
+                        "inventory_item_id": str(item_id),
+                        "quantity": "1",
+                        "unit": "pcs",
+                    }
+                ],
+            },
+        )
+    ).status_code == 404
     listed = await client.get("/api/v1/inventory/warehouses", headers=member_headers)
     assert [UUID(value["id"]) for value in listed.json()] == [assigned_warehouse]
     forbidden = await client.post(

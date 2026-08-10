@@ -43,3 +43,49 @@ class InventoryValuationChanged:
     organization_id: UUID
     warehouse_id: UUID
     transaction_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class InventoryWriteOffPosted:
+    organization_id: UUID
+    writeoff_id: UUID
+    inventory_transaction_id: UUID
+    reason_id: UUID
+    total_cost_amount: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class InventoryWriteOffReversed:
+    organization_id: UUID
+    writeoff_id: UUID
+    inventory_transaction_id: UUID
+    reversal_transaction_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class InventoryCountPosted:
+    organization_id: UUID
+    inventory_count_id: UUID
+    inventory_transaction_id: UUID | None
+
+
+@dataclass(frozen=True, slots=True)
+class InventoryCountCancelled:
+    organization_id: UUID
+    inventory_count_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class InventoryTransferPosted:
+    organization_id: UUID
+    transfer_id: UUID
+    out_transaction_id: UUID
+    in_transaction_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class InventoryTransferReversed:
+    organization_id: UUID
+    transfer_id: UUID
+    out_reversal_transaction_id: UUID
+    in_reversal_transaction_id: UUID

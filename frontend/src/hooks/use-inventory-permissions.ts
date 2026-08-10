@@ -9,7 +9,7 @@ import { api } from "@/lib/api";
 export function useInventoryPermissions() {
   const { accessToken } = useAuth();
   const { currentOrganization } = useWorkspace();
-  const [canAdjust, setCanAdjust] = useState(false);
+  const [permissions, setPermissions] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -17,17 +17,17 @@ export function useInventoryPermissions() {
     async function loadPermissions() {
       await Promise.resolve();
       if (cancelled) return;
-      setCanAdjust(false);
+      setPermissions([]);
       setLoading(true);
       if (!accessToken || !currentOrganization) {
         setLoading(false);
         return;
       }
       try {
-        const team = await api.getTeam(currentOrganization.id, accessToken);
-        if (!cancelled) setCanAdjust(team.permissions.includes("inventory.adjust"));
+        const context = await api.getOrganizationContext(currentOrganization.id, accessToken);
+        if (!cancelled) setPermissions(context.permissions);
       } catch {
-        if (!cancelled) setCanAdjust(false);
+        if (!cancelled) setPermissions([]);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -36,5 +36,13 @@ export function useInventoryPermissions() {
     return () => { cancelled = true; };
   }, [accessToken, currentOrganization]);
 
-  return { canAdjust, loading };
+  return {
+    loading,
+    canRead: permissions.includes("inventory.read"),
+    canAdjust: permissions.includes("inventory.adjust"),
+    canWriteOff: permissions.includes("inventory.writeoff"),
+    canCount: permissions.includes("inventory.count"),
+    canTransfer: permissions.includes("inventory.transfer"),
+    canReadMovements: permissions.includes("inventory.movement.read"),
+  };
 }

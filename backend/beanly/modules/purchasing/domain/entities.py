@@ -6,6 +6,7 @@ from uuid import UUID
 from beanly.modules.purchasing.domain.enums import (
     GoodsReceiptStatus,
     PurchaseOrderStatus,
+    SupplierReturnStatus,
 )
 
 
@@ -88,6 +89,44 @@ class GoodsReceiptLine:
     purchase_order_line_id: UUID | None
     inventory_item_id: UUID
     received_quantity: Decimal
+    base_quantity: Decimal
+    purchase_unit: str
+    unit_multiplier: Decimal
+    unit_price: Decimal
+    line_total_minor: int
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class SupplierReturn:
+    id: UUID
+    organization_id: UUID
+    location_id: UUID
+    warehouse_id: UUID
+    supplier_id: UUID
+    goods_receipt_id: UUID | None
+    number: str
+    status: SupplierReturnStatus
+    document_number: str | None
+    returned_at: datetime
+    note: str | None
+    created_by: UUID
+    posted_by: UUID | None
+    posted_at: datetime | None
+    reversed_by: UUID | None
+    reversed_at: datetime | None
+    inventory_transaction_id: UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class SupplierReturnLine:
+    id: UUID
+    supplier_return_id: UUID
+    goods_receipt_line_id: UUID | None
+    inventory_item_id: UUID
+    return_quantity: Decimal
     base_quantity: Decimal
     purchase_unit: str
     unit_multiplier: Decimal

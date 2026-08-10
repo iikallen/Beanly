@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronRight, Search, TriangleAlert } from "lucide-react";
+import { ChevronDown, ChevronRight, Search, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -19,7 +19,13 @@ import {
 export default function InventoryPage() {
   const { accessToken } = useAuth();
   const { currentOrganization, currentLocation } = useWorkspace();
-  const { canAdjust, loading: permissionsLoading } = useInventoryPermissions();
+  const {
+    canAdjust,
+    canCount,
+    canTransfer,
+    canWriteOff,
+    loading: permissionsLoading,
+  } = useInventoryPermissions();
   const searchParams = useSearchParams();
   const router = useRouter();
   const [warehouses, setWarehouses] = useState<WarehouseResponse[]>([]);
@@ -165,22 +171,23 @@ export default function InventoryPage() {
           </select>
         </label>
         {!permissionsLoading && canAdjust && warehouseId && (
-          <div className="inventory-toolbar-actions">
-            <Link
-              className="secondary-button"
-              href={`/app/inventory/adjust?mode=opening&warehouse_id=${encodeURIComponent(warehouseId)}`}
-            >
-              Opening balance
-            </Link>
-            <Link
-              className="inventory-adjust-button"
-              href={`/app/inventory/adjust?warehouse_id=${encodeURIComponent(warehouseId)}`}
-            >
-              Adjust inventory
-            </Link>
-          </div>
+          <details className="inventory-more">
+            <summary>More <ChevronDown aria-hidden="true" /></summary>
+            <div>
+              <Link href={`/app/inventory/adjust?mode=opening&warehouse_id=${encodeURIComponent(warehouseId)}`}>Opening balance</Link>
+              <Link href={`/app/inventory/adjust?warehouse_id=${encodeURIComponent(warehouseId)}`}>Manual adjustment</Link>
+            </div>
+          </details>
         )}
       </div>
+
+      {!permissionsLoading && warehouseId && (canCount || canWriteOff || canTransfer) && (
+        <nav className="inventory-primary-actions" aria-label="Inventory actions">
+          {canCount && <Link href={`/app/inventory/counts/new?warehouse_id=${encodeURIComponent(warehouseId)}`}>Count stock</Link>}
+          {canWriteOff && <Link href={`/app/inventory/write-offs/new?warehouse_id=${encodeURIComponent(warehouseId)}`}>Write off</Link>}
+          {canTransfer && <Link href={`/app/inventory/transfers/new?source_warehouse_id=${encodeURIComponent(warehouseId)}`}>Transfer</Link>}
+        </nav>
+      )}
 
       {totalValue !== null && !loading && !error && (
         <section className="inventory-total-card" aria-label="Inventory valuation">

@@ -568,6 +568,118 @@ export type CreateAdjustmentInput = {
   }>;
 };
 
+export type InventoryDocumentStatus = "DRAFT" | "POSTED" | "REVERSED";
+
+export type WriteOffReason = {
+  id: string;
+  organization_id: string;
+  name: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type InventoryDocumentLine = {
+  id: string;
+  inventory_item_id: string;
+  item_name?: string;
+  quantity: string;
+  unit_code: InventoryUnitCode;
+  base_quantity: string;
+  note?: string | null;
+};
+
+export type InventoryWriteOff = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  warehouse_id: string;
+  number: string;
+  reason_id: string;
+  reason_name?: string;
+  status: InventoryDocumentStatus;
+  occurred_at: string;
+  note: string | null;
+  inventory_transaction_id: string | null;
+  total_cost_amount: string | null;
+  created_at: string;
+  updated_at: string;
+  posted_at: string | null;
+  reversed_at: string | null;
+  lines: InventoryDocumentLine[];
+};
+
+export type InventoryCountStatus = "COUNTING" | "POSTED" | "CANCELLED";
+export type InventoryCountType = "FULL" | "PARTIAL";
+
+export type InventoryCountLine = {
+  id: string;
+  inventory_item_id: string;
+  item_name?: string;
+  base_unit?: InventoryUnitCode;
+  unit_code?: InventoryUnitCode;
+  expected_quantity: string;
+  counted_quantity: string | null;
+  current_quantity_before_post: string | null;
+  difference_quantity: string | null;
+  difference_cost_amount: string | null;
+  unit_cost_amount: string | null;
+};
+
+export type InventoryCount = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  warehouse_id: string;
+  number: string;
+  type: InventoryCountType;
+  status: InventoryCountStatus;
+  snapshot_at: string;
+  note: string | null;
+  inventory_transaction_id: string | null;
+  created_at: string;
+  updated_at: string;
+  posted_at: string | null;
+  cancelled_at: string | null;
+  lines: InventoryCountLine[];
+};
+
+export type InventoryTransfer = {
+  id: string;
+  organization_id: string;
+  number: string;
+  source_location_id: string;
+  source_warehouse_id: string;
+  destination_location_id: string;
+  destination_warehouse_id: string;
+  status: InventoryDocumentStatus;
+  occurred_at: string;
+  note: string | null;
+  out_transaction_id: string | null;
+  in_transaction_id: string | null;
+  created_at: string;
+  updated_at: string;
+  posted_at: string | null;
+  reversed_at: string | null;
+  lines: InventoryDocumentLine[];
+};
+
+export type InventoryMovement = {
+  transaction_id: string;
+  line_id?: string;
+  warehouse_id: string;
+  inventory_item_id: string;
+  item_name: string;
+  unit_code: InventoryUnitCode;
+  type: string;
+  quantity_delta: string;
+  unit_cost_amount: string | null;
+  total_cost_amount: string | null;
+  reference_type: string | null;
+  reference_id: string | null;
+  posted_at: string;
+};
+
 export type Supplier = {
   id: string;
   organization_id: string;
@@ -668,6 +780,8 @@ export type GoodsReceiptLine = {
   unit_multiplier: string;
   unit_price: string;
   line_total_minor: string | number;
+  returned_base_quantity?: string;
+  returnable_base_quantity?: string;
   created_at: string;
 };
 
@@ -719,11 +833,62 @@ export type GoodsReceiptInput = {
   lines: GoodsReceiptLineInput[];
 };
 
+export type SupplierReturnStatus = "DRAFT" | "POSTED" | "REVERSED";
+
+export type SupplierReturnLine = {
+  id: string;
+  supplier_return_id: string;
+  goods_receipt_line_id: string | null;
+  inventory_item_id: string;
+  item_name?: string;
+  return_quantity: string;
+  base_quantity: string;
+  purchase_unit: string;
+  unit_multiplier: string;
+  unit_price: string;
+  line_total_minor: string;
+  cumulative_returned_base_quantity: string;
+  created_at: string;
+};
+
+export type SupplierReturn = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  warehouse_id: string;
+  supplier_id: string;
+  supplier_name?: string;
+  goods_receipt_id: string | null;
+  goods_receipt_number?: string | null;
+  number: string;
+  status: SupplierReturnStatus;
+  document_number: string | null;
+  returned_at: string;
+  note: string | null;
+  inventory_transaction_id: string | null;
+  total_minor?: string;
+  created_at: string;
+  updated_at: string;
+  posted_at: string | null;
+  reversed_at: string | null;
+  lines: SupplierReturnLine[];
+};
+
 type ApiErrorDetail = { code?: string; message?: string; msg?: string };
-type ApiErrorBody = { detail?: string | ApiErrorDetail | Array<{ msg?: string }> };
+type ApiErrorBody = {
+  detail?: string | ApiErrorDetail | Array<{ msg?: string }>;
+  code?: string;
+  message?: string;
+  changed_items?: unknown;
+};
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number, readonly code?: string) {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+    readonly detail?: unknown,
+  ) {
     super(message);
     this.name = "ApiError";
   }
@@ -745,13 +910,14 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       : typeof body.detail === "object"
         ? body.detail.message ?? body.detail.msg
         : body.detail;
-    const code = !Array.isArray(body.detail) && typeof body.detail === "object"
+    const code = body.code ?? (!Array.isArray(body.detail) && typeof body.detail === "object"
       ? body.detail.code
-      : undefined;
+      : undefined);
     throw new ApiError(
-      detail ?? "Something went wrong. Please try again.",
+      detail ?? body.message ?? "Something went wrong. Please try again.",
       response.status,
       code,
+      body.detail ?? body,
     );
   }
   return (response.status === 204 ? undefined : await response.json()) as T;
@@ -906,6 +1072,82 @@ export const api = {
         ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
       },
     }),
+  listInventoryMovements: (
+    organizationId: string,
+    accessToken: string,
+    filters: {
+      warehouseId?: string;
+      locationId?: string;
+      inventoryItemId?: string;
+      type?: string;
+      dateFrom?: string;
+      dateTo?: string;
+      referenceType?: string;
+    } = {},
+  ) => request<InventoryMovement[]>(`/api/v1/inventory/movements?${operationFilters(filters)}`, {
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  listWriteOffReasons: (organizationId: string, accessToken: string, includeInactive = false) =>
+    request<WriteOffReason[]>(`/api/v1/inventory/write-off-reasons?include_inactive=${includeInactive}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  createWriteOffReason: (name: string, organizationId: string, accessToken: string) =>
+    request<WriteOffReason>("/api/v1/inventory/write-off-reasons", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  listWriteOffs: (organizationId: string, accessToken: string, filters: { warehouseId?: string; locationId?: string; status?: string } = {}) =>
+    request<InventoryWriteOff[]>(`/api/v1/inventory/write-offs?${operationFilters(filters)}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  getWriteOff: (id: string, organizationId: string, accessToken: string) =>
+    request<InventoryWriteOff>(`/api/v1/inventory/write-offs/${id}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  createWriteOff: (
+    input: { warehouse_id: string; reason_id: string; occurred_at: string; note?: string | null; lines: Array<{ inventory_item_id: string; quantity: string; unit: InventoryUnitCode }> },
+    organizationId: string,
+    accessToken: string,
+  ) => request<InventoryWriteOff>("/api/v1/inventory/write-offs", {
+    method: "POST", body: JSON.stringify(input), headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  postWriteOff: (id: string, organizationId: string, accessToken: string) =>
+    request<InventoryWriteOff>(`/api/v1/inventory/write-offs/${id}/post`, { method: "POST", headers: tenantAuthorization(organizationId, accessToken) }),
+  reverseWriteOff: (id: string, organizationId: string, accessToken: string) =>
+    request<InventoryWriteOff>(`/api/v1/inventory/write-offs/${id}/reverse`, { method: "POST", headers: tenantAuthorization(organizationId, accessToken) }),
+  listInventoryCounts: (organizationId: string, accessToken: string, filters: { warehouseId?: string; locationId?: string; status?: string } = {}) =>
+    request<InventoryCount[]>(`/api/v1/inventory/counts?${operationFilters(filters)}`, { headers: tenantAuthorization(organizationId, accessToken) }),
+  getInventoryCount: (id: string, organizationId: string, accessToken: string) =>
+    request<InventoryCount>(`/api/v1/inventory/counts/${id}`, { headers: tenantAuthorization(organizationId, accessToken) }),
+  createInventoryCount: (
+    input: { warehouse_id: string; type: InventoryCountType; inventory_item_ids?: string[]; note?: string | null },
+    organizationId: string,
+    accessToken: string,
+  ) => request<InventoryCount>("/api/v1/inventory/counts", { method: "POST", body: JSON.stringify(input), headers: tenantAuthorization(organizationId, accessToken) }),
+  updateInventoryCountLines: (
+    id: string,
+    lines: Array<{ inventory_item_id: string; counted_quantity: string; unit: InventoryUnitCode; unit_cost_amount?: string }>,
+    organizationId: string,
+    accessToken: string,
+  ) => request<InventoryCount>(`/api/v1/inventory/counts/${id}/lines`, { method: "PUT", body: JSON.stringify({ lines }), headers: tenantAuthorization(organizationId, accessToken) }),
+  postInventoryCount: (id: string, confirmStockChanges: boolean, organizationId: string, accessToken: string) =>
+    request<InventoryCount>(`/api/v1/inventory/counts/${id}/post`, { method: "POST", body: JSON.stringify({ confirm_stock_changes: confirmStockChanges }), headers: tenantAuthorization(organizationId, accessToken) }),
+  cancelInventoryCount: (id: string, organizationId: string, accessToken: string) =>
+    request<InventoryCount>(`/api/v1/inventory/counts/${id}/cancel`, { method: "POST", headers: tenantAuthorization(organizationId, accessToken) }),
+  listInventoryTransfers: (organizationId: string, accessToken: string, filters: { warehouseId?: string; locationId?: string; status?: string } = {}) =>
+    request<InventoryTransfer[]>(`/api/v1/inventory/transfers?${operationFilters(filters)}`, { headers: tenantAuthorization(organizationId, accessToken) }),
+  getInventoryTransfer: (id: string, organizationId: string, accessToken: string) =>
+    request<InventoryTransfer>(`/api/v1/inventory/transfers/${id}`, { headers: tenantAuthorization(organizationId, accessToken) }),
+  createInventoryTransfer: (
+    input: { source_warehouse_id: string; destination_warehouse_id: string; occurred_at: string; note?: string | null; lines: Array<{ inventory_item_id: string; quantity: string; unit: InventoryUnitCode }> },
+    organizationId: string,
+    accessToken: string,
+  ) => request<InventoryTransfer>("/api/v1/inventory/transfers", { method: "POST", body: JSON.stringify(input), headers: tenantAuthorization(organizationId, accessToken) }),
+  postInventoryTransfer: (id: string, organizationId: string, accessToken: string) =>
+    request<InventoryTransfer>(`/api/v1/inventory/transfers/${id}/post`, { method: "POST", headers: tenantAuthorization(organizationId, accessToken) }),
+  reverseInventoryTransfer: (id: string, organizationId: string, accessToken: string) =>
+    request<InventoryTransfer>(`/api/v1/inventory/transfers/${id}/reverse`, { method: "POST", headers: tenantAuthorization(organizationId, accessToken) }),
   listMenuCategories: (organizationId: string, accessToken: string) =>
     request<MenuCategory[]>("/api/v1/menu/categories", {
       headers: tenantAuthorization(organizationId, accessToken),
@@ -1553,6 +1795,19 @@ export const api = {
       method: "POST",
       headers: tenantAuthorization(organizationId, accessToken),
     }),
+  listSupplierReturns: (organizationId: string, accessToken: string, filters: { supplierId?: string; warehouseId?: string; locationId?: string; goodsReceiptId?: string; status?: string } = {}) =>
+    request<SupplierReturn[]>(`/api/v1/purchasing/returns?${operationFilters(filters)}`, { headers: tenantAuthorization(organizationId, accessToken) }),
+  getSupplierReturn: (id: string, organizationId: string, accessToken: string) =>
+    request<SupplierReturn>(`/api/v1/purchasing/returns/${id}`, { headers: tenantAuthorization(organizationId, accessToken) }),
+  createSupplierReturn: (
+    input: { supplier_id: string; location_id: string; goods_receipt_id?: string | null; warehouse_id: string; returned_at: string; document_number?: string | null; note?: string | null; lines: Array<{ goods_receipt_line_id?: string | null; inventory_item_id: string; quantity: string; purchase_unit?: string; unit_multiplier?: string; unit_price?: string }> },
+    organizationId: string,
+    accessToken: string,
+  ) => request<SupplierReturn>("/api/v1/purchasing/returns", { method: "POST", body: JSON.stringify(input), headers: tenantAuthorization(organizationId, accessToken) }),
+  postSupplierReturn: (id: string, organizationId: string, accessToken: string) =>
+    request<SupplierReturn>(`/api/v1/purchasing/returns/${id}/post`, { method: "POST", headers: tenantAuthorization(organizationId, accessToken) }),
+  reverseSupplierReturn: (id: string, organizationId: string, accessToken: string) =>
+    request<SupplierReturn>(`/api/v1/purchasing/returns/${id}/reverse`, { method: "POST", headers: tenantAuthorization(organizationId, accessToken) }),
 };
 
 function authorization(accessToken: string) {
@@ -1575,6 +1830,15 @@ function inventoryFilters(filters: {
   if (filters.warehouseId) params.set("warehouse_id", filters.warehouseId);
   if (filters.locationId) params.set("location_id", filters.locationId);
   if (filters.itemId) params.set("item_id", filters.itemId);
+  return params.toString();
+}
+
+function operationFilters(filters: Record<string, string | undefined>) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (!value) continue;
+    params.set(key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`), value);
+  }
   return params.toString();
 }
 

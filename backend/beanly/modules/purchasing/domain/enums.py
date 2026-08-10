@@ -13,3 +13,9 @@ class GoodsReceiptStatus(StrEnum):
     DRAFT = "DRAFT"
     POSTED = "POSTED"
     REVERSED = "REVERSED"
+
+
+class SupplierReturnStatus(StrEnum):
+    DRAFT = "DRAFT"
+    POSTED = "POSTED"
+    REVERSED = "REVERSED"

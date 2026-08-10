@@ -119,6 +119,25 @@ export function AppSidebar({
           <Package aria-hidden="true" />
           Inventory
         </button>
+        {active === "inventory" && (
+          <div className="app-subnav inventory-subnav" aria-label="Inventory navigation">
+            <Link className={pathname === "/app/inventory" ? "is-active" : ""} href="/app/inventory">
+              Overview
+            </Link>
+            <Link className={pathname.startsWith("/app/inventory/movements") ? "is-active" : ""} href="/app/inventory/movements">
+              Movements
+            </Link>
+            <Link className={pathname.startsWith("/app/inventory/write-offs") ? "is-active" : ""} href="/app/inventory/write-offs">
+              Write-offs
+            </Link>
+            <Link className={pathname.startsWith("/app/inventory/counts") ? "is-active" : ""} href="/app/inventory/counts">
+              Inventory Counts
+            </Link>
+            <Link className={pathname.startsWith("/app/inventory/transfers") ? "is-active" : ""} href="/app/inventory/transfers">
+              Transfers
+            </Link>
+          </div>
+        )}
         <button
           className={active === "purchasing" ? "app-nav-item is-active" : "app-nav-item"}
           type="button"
@@ -140,6 +159,12 @@ export function AppSidebar({
               href="/app/purchasing/receipts"
             >
               Goods Receipts
+            </Link>
+            <Link
+              className={pathname.startsWith("/app/purchasing/returns") ? "is-active" : ""}
+              href="/app/purchasing/returns"
+            >
+              Supplier Returns
             </Link>
             <Link
               className={pathname.startsWith("/app/purchasing/suppliers") ? "is-active" : ""}

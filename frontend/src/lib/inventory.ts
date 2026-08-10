@@ -15,6 +15,17 @@ export function formatInventoryQuantity(
   return `${sign}${normalized} ${baseUnit === "l" ? "L" : baseUnit}`;
 }
 
+export function formatBaseInventoryQuantity(
+  value: string,
+  baseUnit: InventoryUnitCode,
+  signed = false,
+) {
+  const normalized = normalizeDecimal(value);
+  const positive = !normalized.startsWith("-") && normalized !== "0";
+  const sign = signed && positive ? "+" : "";
+  return `${sign}${normalized} ${baseUnit === "l" ? "L" : baseUnit}`;
+}
+
 export function formatInventoryDate(value: string | null) {
   if (!value) return "Not posted";
   return new Intl.DateTimeFormat("en", {

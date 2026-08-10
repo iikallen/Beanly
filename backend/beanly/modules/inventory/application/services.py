@@ -20,11 +20,13 @@ from beanly.modules.inventory.application.ports import (
 )
 from beanly.modules.inventory.domain.costing import WeightedAverageCostCalculator
 from beanly.modules.inventory.domain.entities import (
+    GlobalMovementRow,
     InventoryItem,
     InventoryTransaction,
     InventoryTransactionLine,
     InventoryValuation,
     MovementRow,
+    StockBalance,
     StockRow,
     TransactionDetail,
     Warehouse,
@@ -47,6 +49,7 @@ from beanly.modules.inventory.domain.exceptions import (
     InvalidInventoryOperation,
     InvalidInventoryUnit,
     InventoryNotFound,
+    SourceControlledTransaction,
 )
 from beanly.modules.inventory.domain.value_objects import BASE_UNITS, to_base_quantity
 from beanly.modules.organizations.application.queries.get_organization import (
@@ -225,6 +228,40 @@ class InventoryService:
             warehouse_id,
         )
 
+    async def list_global_movements(
+        self,
+        context: TenantContext,
+        warehouse_id: UUID | None,
+        location_id: UUID | None,
+        item_id: UUID | None,
+        type_: InventoryTransactionType | None,
+        date_from: datetime | None,
+        date_to: datetime | None,
+        reference_type: str | None,
+    ) -> list[GlobalMovementRow]:
+        if any(value is not None and value.utcoffset() is None for value in (date_from, date_to)):
+            raise ValueError("Movement dates must include timezone")
+        if date_from is not None and date_to is not None and date_from > date_to:
+            raise ValueError("date_from must not be after date_to")
+        allowed = await self._accessible_location_ids(context)
+        if location_id is not None and location_id not in allowed:
+            raise InventoryNotFound
+        if warehouse_id is not None:
+            await self._warehouse(context, warehouse_id)
+        if item_id is not None:
+            await self._item(context.organization_id, item_id, include_inactive=True)
+        return await self.repository.list_global_movements(
+            context.organization_id,
+            allowed,
+            warehouse_id,
+            location_id,
+            item_id,
+            type_.value if type_ else None,
+            date_from,
+            date_to,
+            reference_type.strip().upper() if reference_type else None,
+        )
+
     async def list_transactions(self, context: TenantContext) -> list[InventoryTransaction]:
         return await self.repository.list_transactions(
             context.organization_id, await self._accessible_location_ids(context)
@@ -255,13 +292,18 @@ class InventoryService:
         return staged.detail
 
     async def create_and_post_staged(
-        self, context: TenantContext, command: CreateAndPostCommand
+        self,
+        context: TenantContext,
+        command: CreateAndPostCommand,
+        *,
+        validate_reference: bool = True,
+        allow_inactive_items: bool = False,
     ) -> StagedInventoryTransaction:
         warehouse = await self._warehouse(context, command.warehouse_id)
         note = _note(command.note)
         key = _idempotency_key(command.idempotency_key)
         reference_type, reference_id = _reference(command.reference_type, command.reference_id)
-        if reference_type is not None and reference_id is not None:
+        if validate_reference and reference_type is not None and reference_id is not None:
             await self.reference_validator.validate(
                 context.organization_id, reference_type, reference_id
             )
@@ -269,7 +311,9 @@ class InventoryService:
             context.organization_id,
             command.lines,
             opening=command.type == InventoryTransactionType.OPENING_BALANCE,
-            include_inactive=command.type == InventoryTransactionType.SALE,
+            include_inactive=(
+                command.type == InventoryTransactionType.SALE or allow_inactive_items
+            ),
         )
         if not lines:
             raise InvalidInventoryOperation("At least one line is required")
@@ -483,6 +527,8 @@ class InventoryService:
         context: TenantContext,
         transaction_id: UUID,
         idempotency_key: str | None,
+        *,
+        allow_source_controlled: bool = False,
     ) -> StagedInventoryTransaction:
         key = _idempotency_key(idempotency_key)
         original = await self.repository.get_transaction(
@@ -491,6 +537,15 @@ class InventoryService:
         if original is None:
             raise InventoryNotFound
         await self._warehouse(context, original.warehouse_id)
+        if original.reference_type in {
+            "ORDER",
+            "GOODS_RECEIPT",
+            "WRITE_OFF",
+            "INVENTORY_COUNT",
+            "TRANSFER",
+            "SUPPLIER_RETURN",
+        } and not allow_source_controlled:
+            raise SourceControlledTransaction("SOURCE_CONTROLLED_TRANSACTION")
         if original.status == InventoryTransactionStatus.REVERSED:
             existing = await self.repository.get_reversal(context.organization_id, original.id)
             if (
@@ -643,11 +698,12 @@ class InventoryService:
                         balance.quantity,
                     )
                 )
+        posted_at = datetime.now(UTC)
         await self.repository.mark_status(
             context.organization_id,
             transaction.id,
             InventoryTransactionStatus.POSTED,
-            now,
+            posted_at,
         )
         events.insert(0, InventoryTransactionPosted(context.organization_id, transaction.id))
         events.append(
@@ -788,6 +844,10 @@ class InventoryService:
             if incoming_total is None:
                 raise ValueError("Purchase total acquisition cost is required")
             incoming_unit = None
+        elif transaction.type == InventoryTransactionType.TRANSFER_IN:
+            if incoming_total is None:
+                raise ValueError("Transfer total acquisition cost is required")
+            incoming_unit = None
         elif incoming_unit is None and incoming_total is None:
             raise ValueError("Incoming inventory cost is required")
         return self.costing.calculate(
@@ -834,6 +894,68 @@ class InventoryService:
         await self._warehouse(context, warehouse_id)
         return await self.repository.get_current_costs(
             context.organization_id, warehouse_id, item_ids
+        )
+
+    async def ensure_warehouse_access(
+        self, context: TenantContext, warehouse_id: UUID
+    ) -> Warehouse:
+        return await self._warehouse(context, warehouse_id)
+
+    async def accessible_location_ids(self, context: TenantContext) -> tuple[UUID, ...]:
+        return await self._accessible_location_ids(context)
+
+    async def get_item_for_operation(
+        self, organization_id: UUID, item_id: UUID, *, include_inactive: bool = False
+    ) -> InventoryItem:
+        return await self._item(
+            organization_id, item_id, include_inactive=include_inactive
+        )
+
+    async def lock_operation_balances(
+        self,
+        context: TenantContext,
+        warehouse_id: UUID,
+        item_ids: tuple[UUID, ...],
+        now: datetime,
+    ) -> dict[UUID, StockBalance]:
+        warehouse = await self._warehouse(context, warehouse_id)
+        return await self.repository.lock_balances(
+            context.organization_id,
+            warehouse.location_id,
+            warehouse.id,
+            item_ids,
+            now,
+        )
+
+    async def changed_items_since(
+        self,
+        context: TenantContext,
+        warehouse_id: UUID,
+        item_ids: tuple[UUID, ...],
+        since: datetime,
+    ) -> set[UUID]:
+        await self._warehouse(context, warehouse_id)
+        return await self.repository.changed_items_since(
+            context.organization_id, warehouse_id, item_ids, since
+        )
+
+    async def lock_transfer_balances(
+        self,
+        context: TenantContext,
+        source_warehouse_id: UUID,
+        destination_warehouse_id: UUID,
+        item_ids: tuple[UUID, ...],
+        now: datetime,
+    ) -> dict[tuple[UUID, UUID], StockBalance]:
+        source = await self._warehouse(context, source_warehouse_id)
+        destination = await self._warehouse(context, destination_warehouse_id)
+        pairs = tuple(
+            (warehouse.location_id, warehouse.id, item_id)
+            for warehouse in (source, destination)
+            for item_id in item_ids
+        )
+        return await self.repository.lock_balances_across_warehouses(
+            context.organization_id, pairs, now
         )
 
     async def _accessible_location_ids(self, context: TenantContext) -> tuple[UUID, ...]:
@@ -899,6 +1021,7 @@ def _reference(value: str | None, reference_id: UUID | None) -> tuple[str | None
         "INVENTORY_COUNT",
         "TRANSFER",
         "WRITE_OFF",
+        "SUPPLIER_RETURN",
     }:
         raise ValueError("Unsupported inventory reference type")
     return normalized, reference_id

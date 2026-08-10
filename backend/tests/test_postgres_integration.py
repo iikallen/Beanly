@@ -34,13 +34,21 @@ from beanly.modules.inventory.application.commands import (
     CreateDraftCommand,
     QuantityInput,
 )
+from beanly.modules.inventory.application.operations import (
+    InventoryOperationsService,
+    OperationLineInput,
+)
 from beanly.modules.inventory.application.services import InventoryService
-from beanly.modules.inventory.domain.enums import InventoryTransactionType
+from beanly.modules.inventory.domain.enums import InventoryCountType, InventoryTransactionType
 from beanly.modules.inventory.domain.exceptions import (
     IdempotencyConflict,
     InvalidInventoryOperation,
+    InventoryCountChanged,
 )
 from beanly.modules.inventory.domain.value_objects import UnitCode
+from beanly.modules.inventory.infrastructure.db.operation_repository import (
+    SqlAlchemyInventoryOperationsRepository,
+)
 from beanly.modules.inventory.infrastructure.db.repositories import (
     SqlAlchemyInventoryRepository,
 )
@@ -181,6 +189,17 @@ SALES_TABLES = {
 }
 PAYMENT_TABLES = {"payments", "payment_lines"}
 OUTBOX_TABLES = {"outbox_events"}
+INVENTORY_OPERATION_TABLES = {
+    "inventory_writeoff_reasons",
+    "inventory_writeoffs",
+    "inventory_writeoff_lines",
+    "inventory_counts",
+    "inventory_count_lines",
+    "inventory_transfers",
+    "inventory_transfer_lines",
+    "supplier_returns",
+    "supplier_return_lines",
+}
 APPLICATION_TABLES = (
     ORGANIZATION_TABLES
     | TEAM_TABLES
@@ -191,6 +210,7 @@ APPLICATION_TABLES = (
     | SALES_TABLES
     | PAYMENT_TABLES
     | OUTBOX_TABLES
+    | INVENTORY_OPERATION_TABLES
 )
 
 
@@ -1162,6 +1182,328 @@ async def test_postgres_inventory_concurrency_idempotency_and_reconciliation(
         assert ledger == await balance()
         assert failed_count == 0
         assert incomplete_snapshots == 0
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_postgres_inventory_transfer_global_locking_and_outbox_atomicity(
+    postgres_inventory_database,
+) -> None:
+    database_url = postgres_inventory_database
+    context, source_warehouse_id, item_id = await seed_inventory_context(database_url)
+    engine = create_async_engine(database_url)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    destination_location_id = uuid4()
+    destination_warehouse_id = uuid4()
+    second_item_id = uuid4()
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO locations (
+                        id, organization_id, name, timezone, address,
+                        is_active, is_primary, created_at, updated_at
+                    ) VALUES (
+                        :location_id, :organization_id, 'Airport', 'Asia/Almaty', NULL,
+                        true, false, now(), now()
+                    )
+                    """
+                ),
+                {
+                    "location_id": destination_location_id,
+                    "organization_id": context.organization_id,
+                },
+            )
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO inventory_items (
+                        id, organization_id, name, sku, base_unit, is_active,
+                        created_at, updated_at
+                    ) VALUES (
+                        :item_id, :organization_id, 'Milk', 'PG-MILK', 'g', true,
+                        now(), now()
+                    )
+                    """
+                ),
+                {
+                    "item_id": second_item_id,
+                    "organization_id": context.organization_id,
+                },
+            )
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO warehouses (
+                        id, organization_id, location_id, name, is_active,
+                        created_at, updated_at
+                    ) VALUES (
+                        :warehouse_id, :organization_id, :location_id,
+                        'Airport Warehouse', true, now(), now()
+                    )
+                    """
+                ),
+                {
+                    "warehouse_id": destination_warehouse_id,
+                    "organization_id": context.organization_id,
+                    "location_id": destination_location_id,
+                },
+            )
+
+        async def inventory_service(session, sink=None):
+            return InventoryService(
+                SqlAlchemyInventoryRepository(session),
+                OrganizationService(SqlAlchemyOrganizationRepository(session)),
+                sink or OutboxEventSink(OutboxRepository(session)),
+            )
+
+        async def operations_service(session, sink=None):
+            event_sink = sink or OutboxEventSink(OutboxRepository(session))
+            return InventoryOperationsService(
+                SqlAlchemyInventoryOperationsRepository(session),
+                await inventory_service(session, event_sink),
+                event_sink,
+            )
+
+        async with sessions() as session:
+            inventory = await inventory_service(session)
+            for warehouse_id, unit_cost, key in (
+                (source_warehouse_id, "8", "pg:transfer:source-opening"),
+                (destination_warehouse_id, "10", "pg:transfer:destination-opening"),
+            ):
+                await inventory.create_and_post(
+                    context,
+                    CreateAndPostCommand(
+                        context.organization_id,
+                        context.user_id,
+                        warehouse_id,
+                        InventoryTransactionType.OPENING_BALANCE,
+                        "Transfer opening",
+                        (
+                            QuantityInput(
+                                item_id, Decimal("1000"), UnitCode.G, Decimal(unit_cost)
+                            ),
+                            QuantityInput(
+                                second_item_id,
+                                Decimal("1000"),
+                                UnitCode.G,
+                                Decimal(unit_cost),
+                            ),
+                        ),
+                        key,
+                    ),
+                )
+
+        async def create_transfer(source_id, destination_id, lines):
+            async with sessions() as session:
+                return await (await operations_service(session)).create_transfer(
+                    context,
+                    source_id,
+                    destination_id,
+                    datetime.now(UTC),
+                    None,
+                    tuple(
+                        OperationLineInput(line_item_id, Decimal(quantity), UnitCode.G)
+                        for line_item_id, quantity in lines
+                    ),
+                )
+
+        transfer_a = await create_transfer(
+            source_warehouse_id,
+            destination_warehouse_id,
+            ((item_id, "100"), (second_item_id, "200")),
+        )
+        transfer_b = await create_transfer(
+            destination_warehouse_id,
+            source_warehouse_id,
+            ((second_item_id, "100"), (item_id, "50")),
+        )
+
+        async def post_transfer(transfer_id):
+            async with sessions() as session:
+                return await (await operations_service(session)).post_transfer(
+                    context, transfer_id
+                )
+
+        posted_a, posted_b = await asyncio.gather(
+            post_transfer(transfer_a.id), post_transfer(transfer_b.id)
+        )
+        assert posted_a.status.value == posted_b.status.value == "POSTED"
+
+        async with sessions() as session:
+            balances = dict(
+                (
+                    await session.execute(
+                        text(
+                            "SELECT warehouse_id, quantity FROM stock_balances "
+                            "WHERE organization_id=:organization_id "
+                            "AND inventory_item_id=:item_id"
+                        ),
+                        {
+                            "organization_id": context.organization_id,
+                            "item_id": item_id,
+                        },
+                    )
+                ).all()
+            )
+            assert balances == {
+                source_warehouse_id: Decimal("950.000000"),
+                destination_warehouse_id: Decimal("1050.000000"),
+            }
+            second_balances = dict(
+                (
+                    await session.execute(
+                        text(
+                            "SELECT warehouse_id, quantity FROM stock_balances "
+                            "WHERE organization_id=:organization_id "
+                            "AND inventory_item_id=:item_id"
+                        ),
+                        {
+                            "organization_id": context.organization_id,
+                            "item_id": second_item_id,
+                        },
+                    )
+                ).all()
+            )
+            assert second_balances == {
+                source_warehouse_id: Decimal("900.000000"),
+                destination_warehouse_id: Decimal("1100.000000"),
+            }
+            assert await session.scalar(
+                select(func.count(OutboxEventModel.id)).where(
+                    OutboxEventModel.event_name == "inventory.transfer_posted",
+                    OutboxEventModel.organization_id == context.organization_id,
+                )
+            ) == 2
+
+        failing = await create_transfer(
+            source_warehouse_id, destination_warehouse_id, ((item_id, "10"),)
+        )
+        async with sessions() as session:
+            failing_sink = OutboxEventSink(FailingOutboxRepository(session))
+            with pytest.raises(RuntimeError, match="forced outbox failure"):
+                await (await operations_service(session, failing_sink)).post_transfer(
+                    context, failing.id
+                )
+        async with sessions() as session:
+            status_and_transactions = (
+                await session.execute(
+                    text(
+                        "SELECT status, out_transaction_id, in_transaction_id "
+                        "FROM inventory_transfers WHERE id=:transfer_id"
+                    ),
+                    {"transfer_id": failing.id},
+                )
+            ).one()
+            assert status_and_transactions == ("DRAFT", None, None)
+            balances_after_failure = dict(
+                (
+                    await session.execute(
+                        text(
+                            "SELECT warehouse_id, quantity FROM stock_balances "
+                            "WHERE organization_id=:organization_id "
+                            "AND inventory_item_id=:item_id"
+                        ),
+                        {
+                            "organization_id": context.organization_id,
+                            "item_id": item_id,
+                        },
+                    )
+                ).all()
+            )
+            assert balances_after_failure == balances
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.anyio
+async def test_postgres_count_detects_net_zero_movement_during_snapshot(
+    postgres_inventory_database,
+) -> None:
+    database_url = postgres_inventory_database
+    context, warehouse_id, item_id = await seed_inventory_context(database_url)
+    engine = create_async_engine(database_url)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    snapshot_started = asyncio.Event()
+    release_snapshot = asyncio.Event()
+
+    def inventory_service(session, sink=None):
+        return InventoryService(
+            SqlAlchemyInventoryRepository(session),
+            OrganizationService(SqlAlchemyOrganizationRepository(session)),
+            sink or OutboxEventSink(OutboxRepository(session)),
+        )
+
+    try:
+        async with sessions() as session:
+            await inventory_service(session).create_and_post(
+                context,
+                CreateAndPostCommand(
+                    context.organization_id,
+                    context.user_id,
+                    warehouse_id,
+                    InventoryTransactionType.OPENING_BALANCE,
+                    "Count opening",
+                    (QuantityInput(item_id, Decimal("1000"), UnitCode.G, Decimal("8")),),
+                    "pg:count:opening",
+                ),
+            )
+
+        async with sessions() as count_session:
+            repository = SqlAlchemyInventoryOperationsRepository(count_session)
+            original_snapshots = repository.count_snapshots
+
+            async def delayed_snapshots(organization_id, target_warehouse_id, item_ids):
+                snapshot_started.set()
+                await release_snapshot.wait()
+                return await original_snapshots(
+                    organization_id, target_warehouse_id, item_ids
+                )
+
+            repository.count_snapshots = delayed_snapshots
+            sink = OutboxEventSink(OutboxRepository(count_session))
+            operations = InventoryOperationsService(
+                repository, inventory_service(count_session, sink), sink
+            )
+            create_task = asyncio.create_task(
+                operations.create_count(
+                    context,
+                    warehouse_id,
+                    InventoryCountType.PARTIAL,
+                    (item_id,),
+                    "Snapshot race",
+                )
+            )
+            await snapshot_started.wait()
+            for quantity, key in (
+                (Decimal("-100"), "pg:count:out"),
+                (Decimal("100"), "pg:count:in"),
+            ):
+                async with sessions() as movement_session:
+                    await inventory_service(movement_session).create_and_post(
+                        context,
+                        CreateAndPostCommand(
+                            context.organization_id,
+                            context.user_id,
+                            warehouse_id,
+                            InventoryTransactionType.ADJUSTMENT,
+                            "Movement during count snapshot",
+                            (QuantityInput(item_id, quantity, UnitCode.G),),
+                            key,
+                        ),
+                    )
+            release_snapshot.set()
+            count = await create_task
+            await operations.update_count_lines(
+                context,
+                count.id,
+                (OperationLineInput(item_id, Decimal("1000"), UnitCode.G),),
+                {},
+            )
+            with pytest.raises(InventoryCountChanged):
+                await operations.post_count(context, count.id, False)
     finally:
         await engine.dispose()
 
@@ -3068,7 +3410,73 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
             "alembic_version",
             *APPLICATION_TABLES,
         } <= upgraded["tables"]
-        assert upgraded["revision"] == "0013_transactional_outbox"
+        assert upgraded["revision"] == "0014_inventory_operations"
+        assert INVENTORY_OPERATION_TABLES <= upgraded["tables"]
+        assert {
+            "inventory_writeoff_number_seq",
+            "inventory_count_number_seq",
+            "inventory_transfer_number_seq",
+            "supplier_return_number_seq",
+        } <= upgraded["sequences"]
+        assert {
+            "organization_id",
+            "location_id",
+            "warehouse_id",
+            "number",
+            "reason_id",
+            "status",
+            "occurred_at",
+            "inventory_transaction_id",
+            "total_cost_amount",
+        } <= set(upgraded["columns"]["inventory_writeoffs"])
+        assert str(upgraded["columns"]["inventory_count_lines"]["counted_quantity"]["type"]) == (
+            "NUMERIC(20, 6)"
+        )
+        assert {
+            "ck_inventory_transfer_status",
+            "ck_inventory_transfer_distinct_warehouses",
+        } <= upgraded["check_constraints"]["inventory_transfers"]
+        assert {
+            "ck_inventory_count_type",
+            "ck_inventory_count_status",
+        } <= upgraded["check_constraints"]["inventory_counts"]
+        assert (
+            "organization_id",
+            "number",
+        ) in upgraded["unique_constraints"]["inventory_writeoffs"]
+        assert (
+            "organization_id",
+            "number",
+        ) in upgraded["unique_constraints"]["inventory_counts"]
+        assert (
+            "organization_id",
+            "number",
+        ) in upgraded["unique_constraints"]["inventory_transfers"]
+        assert (
+            "organization_id",
+            "number",
+        ) in upgraded["unique_constraints"]["supplier_returns"]
+        assert {
+            "ix_inventory_writeoffs_organization_status_occurred",
+        } <= upgraded["indexes"]["inventory_writeoffs"]
+        assert {
+            "ix_inventory_counts_organization_status_snapshot",
+        } <= upgraded["indexes"]["inventory_counts"]
+        assert {
+            "ix_inventory_transfers_organization_status_occurred",
+        } <= upgraded["indexes"]["inventory_transfers"]
+        assert {
+            "ix_supplier_returns_organization_status_returned",
+        } <= upgraded["indexes"]["supplier_returns"]
+
+        await asyncio.to_thread(
+            command.downgrade, config, "0013_transactional_outbox"
+        )
+        inventory_operations_downgraded = await database_snapshot(test_url)
+        assert not INVENTORY_OPERATION_TABLES & inventory_operations_downgraded["tables"]
+        assert inventory_operations_downgraded["revision"] == "0013_transactional_outbox"
+        await asyncio.to_thread(command.upgrade, config, "head")
+        await asyncio.to_thread(command.check, config)
         assert await membership_state(test_url, legacy_membership_id) == ("ACTIVE", "ALL")
         assert set(upgraded["columns"]["organizations"]) == {
             "id",
@@ -3665,7 +4073,10 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
         sales_downgraded = await database_snapshot(test_url)
         assert not (SALES_TABLES | PAYMENT_TABLES) & sales_downgraded["tables"]
         assert APPLICATION_TABLES - (
-            SALES_TABLES | PAYMENT_TABLES | OUTBOX_TABLES
+            SALES_TABLES
+            | PAYMENT_TABLES
+            | OUTBOX_TABLES
+            | INVENTORY_OPERATION_TABLES
         ) <= sales_downgraded["tables"]
         assert "sales_order_number_seq" not in sales_downgraded["sequences"]
         assert sales_downgraded["revision"] == "0009_modifiers"
@@ -3829,7 +4240,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
         await asyncio.to_thread(command.upgrade, config, "head")
         reupgraded = await database_snapshot(test_url)
         assert APPLICATION_TABLES <= reupgraded["tables"]
-        assert reupgraded["revision"] == "0013_transactional_outbox"
+        assert reupgraded["revision"] == "0014_inventory_operations"
         assert await membership_state(test_url, legacy_membership_id) == ("ACTIVE", "ALL")
     finally:
         await admin_engine.dispose()

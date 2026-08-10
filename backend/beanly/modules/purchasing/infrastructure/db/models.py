@@ -182,3 +182,77 @@ class GoodsReceiptLineModel(Base):
     unit_price: Mapped[Decimal] = mapped_column(Numeric(20, 6))
     line_total_minor: Mapped[int] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class SupplierReturnModel(Base):
+    __tablename__ = "supplier_returns"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "number"),
+        UniqueConstraint("inventory_transaction_id"),
+        CheckConstraint(
+            "status IN ('DRAFT', 'POSTED', 'REVERSED')",
+            name="ck_supplier_return_status",
+        ),
+        Index(
+            "ix_supplier_returns_organization_status_returned",
+            "organization_id",
+            "status",
+            "returned_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    organization_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("organizations.id"), index=True)
+    location_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("locations.id"), index=True)
+    warehouse_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("warehouses.id"), index=True)
+    supplier_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("suppliers.id"), index=True)
+    goods_receipt_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("goods_receipts.id"), nullable=True, index=True
+    )
+    number: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    document_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    returned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id"))
+    posted_by: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey("users.id"), nullable=True)
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reversed_by: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey("users.id"), nullable=True)
+    reversed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    inventory_transaction_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("inventory_transactions.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class SupplierReturnLineModel(Base):
+    __tablename__ = "supplier_return_lines"
+    __table_args__ = (
+        UniqueConstraint("supplier_return_id", "inventory_item_id"),
+        CheckConstraint("return_quantity > 0", name="ck_supplier_return_line_quantity"),
+        CheckConstraint("base_quantity > 0", name="ck_supplier_return_line_base_quantity"),
+        CheckConstraint("unit_multiplier > 0", name="ck_supplier_return_line_multiplier"),
+        CheckConstraint("unit_price >= 0", name="ck_supplier_return_line_unit_price"),
+        CheckConstraint("line_total_minor >= 0", name="ck_supplier_return_line_total"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    supplier_return_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("supplier_returns.id", ondelete="CASCADE"), index=True
+    )
+    goods_receipt_line_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("goods_receipt_lines.id"), nullable=True, index=True
+    )
+    inventory_item_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("inventory_items.id"), index=True
+    )
+    return_quantity: Mapped[Decimal] = mapped_column(Numeric(20, 6))
+    base_quantity: Mapped[Decimal] = mapped_column(Numeric(20, 6))
+    purchase_unit: Mapped[str] = mapped_column(String(50))
+    unit_multiplier: Mapped[Decimal] = mapped_column(Numeric(20, 6))
+    unit_price: Mapped[Decimal] = mapped_column(Numeric(20, 6))
+    line_total_minor: Mapped[int] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

@@ -4,6 +4,7 @@ from typing import Protocol
 from uuid import UUID
 
 from beanly.modules.inventory.domain.entities import (
+    GlobalMovementRow,
     InventoryItem,
     InventoryTransaction,
     InventoryTransactionLine,
@@ -37,6 +38,13 @@ class InventoryRepository(Protocol):
     async def get_current_costs(
         self, organization_id: UUID, warehouse_id: UUID, item_ids: tuple[UUID, ...]
     ) -> dict[UUID, Decimal]: ...
+    async def changed_items_since(
+        self,
+        organization_id: UUID,
+        warehouse_id: UUID,
+        item_ids: tuple[UUID, ...],
+        since: datetime,
+    ) -> set[UUID]: ...
     async def add_transaction(self, transaction: InventoryTransaction) -> InventoryTransaction: ...
     async def add_lines(self, lines: tuple[InventoryTransactionLine, ...]) -> None: ...
     async def get_transaction(
@@ -66,6 +74,12 @@ class InventoryRepository(Protocol):
         item_ids: tuple[UUID, ...],
         now: datetime,
     ) -> dict[UUID, StockBalance]: ...
+    async def lock_balances_across_warehouses(
+        self,
+        organization_id: UUID,
+        warehouse_item_pairs: tuple[tuple[UUID, UUID, UUID], ...],
+        now: datetime,
+    ) -> dict[tuple[UUID, UUID], StockBalance]: ...
     async def update_balance(
         self,
         organization_id: UUID,
@@ -101,6 +115,18 @@ class InventoryRepository(Protocol):
         location_ids: tuple[UUID, ...],
         warehouse_id: UUID | None,
     ) -> list[MovementRow]: ...
+    async def list_global_movements(
+        self,
+        organization_id: UUID,
+        location_ids: tuple[UUID, ...],
+        warehouse_id: UUID | None,
+        location_id: UUID | None,
+        item_id: UUID | None,
+        type_: str | None,
+        date_from: datetime | None,
+        date_to: datetime | None,
+        reference_type: str | None,
+    ) -> list[GlobalMovementRow]: ...
     async def list_transactions(
         self, organization_id: UUID, location_ids: tuple[UUID, ...]
     ) -> list[InventoryTransaction]: ...

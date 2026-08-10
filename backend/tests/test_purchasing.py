@@ -3,7 +3,10 @@ from uuid import UUID
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 
+from beanly.core.events.outbox.models import OutboxEventModel
+from beanly.core.events.outbox.repositories import OutboxRepository
 from beanly.modules.purchasing.infrastructure.inventory_gateway import (
     InventoryApplicationGateway,
 )
@@ -210,9 +213,7 @@ async def test_supplier_order_partial_receipts_idempotency_and_reversal(app_clie
             json={"note": "mutate posted"},
         )
     ).status_code == 409
-    partial = await client.get(
-        f"/api/v1/purchasing/orders/{order_body['id']}", headers=headers
-    )
+    partial = await client.get(f"/api/v1/purchasing/orders/{order_body['id']}", headers=headers)
     assert partial.json()["status"] == "PARTIALLY_RECEIVED"
     assert partial.json()["lines"][0]["remaining_base_quantity"] == "4000"
 
@@ -223,14 +224,10 @@ async def test_supplier_order_partial_receipts_idempotency_and_reversal(app_clie
         json={"confirm_over_receipt": False},
     )
     assert posted_second.status_code == 200, posted_second.text
-    received = await client.get(
-        f"/api/v1/purchasing/orders/{order_body['id']}", headers=headers
-    )
+    received = await client.get(f"/api/v1/purchasing/orders/{order_body['id']}", headers=headers)
     assert received.json()["status"] == "RECEIVED"
     assert (
-        await client.post(
-            f"/api/v1/purchasing/orders/{order_body['id']}/cancel", headers=headers
-        )
+        await client.post(f"/api/v1/purchasing/orders/{order_body['id']}/cancel", headers=headers)
     ).status_code == 409
     stock = await client.get(
         f"/api/v1/inventory/items/{item_id}/stock",
@@ -252,9 +249,7 @@ async def test_supplier_order_partial_receipts_idempotency_and_reversal(app_clie
     assert reversed_response.status_code == 200, reversed_response.text
     assert reversed_response.json()["status"] == "REVERSED"
     assert (
-        await client.post(
-            f"/api/v1/purchasing/receipts/{second['id']}/reverse", headers=headers
-        )
+        await client.post(f"/api/v1/purchasing/receipts/{second['id']}/reverse", headers=headers)
     ).status_code == 409
     order_after_reverse = await client.get(
         f"/api/v1/purchasing/orders/{order_body['id']}", headers=headers
@@ -282,18 +277,14 @@ async def test_supplier_order_partial_receipts_idempotency_and_reversal(app_clie
     assert cancelled.status_code == 200
     assert cancelled.json()["status"] == "CANCELLED"
     assert (
-        await client.post(
-            f"/api/v1/purchasing/orders/{cancellable['id']}/submit", headers=headers
-        )
+        await client.post(f"/api/v1/purchasing/orders/{cancellable['id']}/submit", headers=headers)
     ).status_code == 409
 
     deactivated = await client.post(
         f"/api/v1/suppliers/{supplier_body['id']}/deactivate", headers=headers
     )
     assert deactivated.json()["is_active"] is False
-    history = await client.get(
-        f"/api/v1/purchasing/orders/{order_body['id']}", headers=headers
-    )
+    history = await client.get(f"/api/v1/purchasing/orders/{order_body['id']}", headers=headers)
     assert history.json()["supplier_name"] == "Coffee Import KZ"
 
 
@@ -315,9 +306,7 @@ async def test_quick_receive_over_receipt_tenant_isolation_and_atomic_rollback(
         item_a,
         "1",
     )
-    await client.post(
-        f"/api/v1/purchasing/orders/{order_a['id']}/submit", headers=headers_a
-    )
+    await client.post(f"/api/v1/purchasing/orders/{order_a['id']}/submit", headers=headers_a)
     order_a = (
         await client.get(f"/api/v1/purchasing/orders/{order_a['id']}", headers=headers_a)
     ).json()
@@ -369,9 +358,7 @@ async def test_quick_receive_over_receipt_tenant_isolation_and_atomic_rollback(
         payload = {**base_payload, **{k: v for k, v in changed.items() if k != "inventory_item_id"}}
         if "inventory_item_id" in changed:
             payload["lines"] = [{**base_payload["lines"][0], **changed}]
-        rejected = await client.post(
-            "/api/v1/purchasing/orders", headers=headers_a, json=payload
-        )
+        rejected = await client.post("/api/v1/purchasing/orders", headers=headers_a, json=payload)
         assert rejected.status_code == 404, rejected.text
 
     milk_warehouse, milk_item = await inventory_resources(
@@ -454,3 +441,237 @@ async def test_quick_receive_over_receipt_tenant_isolation_and_atomic_rollback(
         params={"warehouse_id": warehouse_a},
     )
     assert stock.json()["quantity"] == "1100"
+
+
+@pytest.mark.anyio
+async def test_linked_supplier_return_uses_wac_limits_cumulative_and_reverses(
+    app_client, monkeypatch
+) -> None:
+    client, sessions = app_client
+    auth = await authenticated_user(client, "supplier-return@example.com")
+    headers, _, location_id = await workspace(client, auth, "Supplier Return")
+    warehouse_id, item_id = await inventory_resources(client, headers, location_id)
+    supplier_body = await supplier(client, headers, "Coffee Supplier")
+    order_body = await order(
+        client,
+        headers,
+        supplier_body["id"],
+        location_id,
+        warehouse_id,
+        item_id,
+    )
+    order_body = (
+        await client.post(f"/api/v1/purchasing/orders/{order_body['id']}/submit", headers=headers)
+    ).json()
+    receipt = await receipt_for_order(client, headers, order_body, "10", "8100")
+    receipt = (
+        await client.post(
+            f"/api/v1/purchasing/receipts/{receipt['id']}/post",
+            headers=headers,
+            json={"confirm_over_receipt": False},
+        )
+    ).json()
+
+    wrong_supplier = await supplier(client, headers, "Wrong Supplier")
+    mismatch = await client.post(
+        "/api/v1/purchasing/returns",
+        headers=headers,
+        json={
+            "supplier_id": wrong_supplier["id"],
+            "location_id": str(location_id),
+            "warehouse_id": warehouse_id,
+            "goods_receipt_id": receipt["id"],
+            "returned_at": datetime.now(UTC).isoformat(),
+            "lines": [
+                {
+                    "goods_receipt_line_id": receipt["lines"][0]["id"],
+                    "inventory_item_id": item_id,
+                    "quantity": "1",
+                }
+            ],
+        },
+    )
+    assert mismatch.status_code == 409
+
+    created = await client.post(
+        "/api/v1/purchasing/returns",
+        headers=headers,
+        json={
+            "supplier_id": supplier_body["id"],
+            "location_id": str(location_id),
+            "warehouse_id": warehouse_id,
+            "goods_receipt_id": receipt["id"],
+            "returned_at": datetime.now(UTC).isoformat(),
+            "lines": [
+                {
+                    "goods_receipt_line_id": receipt["lines"][0]["id"],
+                    "inventory_item_id": item_id,
+                    "quantity": "3",
+                }
+            ],
+        },
+    )
+    assert created.status_code == 201, created.text
+    draft = created.json()
+    assert draft["number"].startswith("SR-")
+    assert draft["status"] == "DRAFT"
+    assert draft["lines"][0]["unit_price"] == "8100"
+    assert draft["lines"][0]["line_total_minor"] == "2430000"
+    updated = await client.patch(
+        f"/api/v1/purchasing/returns/{draft['id']}",
+        headers=headers,
+        json={"document_number": "SUP-CREDIT-1", "note": "Damaged bags"},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["document_number"] == "SUP-CREDIT-1"
+    listed = await client.get("/api/v1/purchasing/returns", headers=headers)
+    assert listed.status_code == 200
+    assert listed.json()[0]["goods_receipt_number"] == receipt["number"]
+
+    posted = await client.post(f"/api/v1/purchasing/returns/{draft['id']}/post", headers=headers)
+    assert posted.status_code == 200, posted.text
+    posted_body = posted.json()
+    assert posted_body["status"] == "POSTED"
+    assert posted_body["lines"][0]["cumulative_returned_base_quantity"] == "3000"
+    transaction = await client.get(
+        f"/api/v1/inventory/transactions/{posted_body['inventory_transaction_id']}",
+        headers=headers,
+    )
+    assert transaction.status_code == 200
+    transaction_body = transaction.json()
+    assert transaction_body["type"] == "RETURN_OUT"
+    assert transaction_body["reference_type"] == "SUPPLIER_RETURN"
+    assert transaction_body["reference_id"] == draft["id"]
+    assert transaction_body["lines"][0]["quantity_delta"] == "-3000"
+    assert transaction_body["lines"][0]["unit_cost_amount"] == "8.1"
+    receipt_availability = await client.get(
+        f"/api/v1/purchasing/receipts/{receipt['id']}", headers=headers
+    )
+    assert receipt_availability.json()["lines"][0]["returned_base_quantity"] == "3000"
+    assert receipt_availability.json()["lines"][0]["returnable_base_quantity"] == "7000"
+    assert (
+        await client.patch(
+            f"/api/v1/purchasing/returns/{draft['id']}",
+            headers=headers,
+            json={"note": "late edit"},
+        )
+    ).status_code == 409
+    assert (
+        await client.post(f"/api/v1/purchasing/receipts/{receipt['id']}/reverse", headers=headers)
+    ).status_code == 409
+
+    excessive = await client.post(
+        "/api/v1/purchasing/returns",
+        headers=headers,
+        json={
+            "supplier_id": supplier_body["id"],
+            "location_id": str(location_id),
+            "warehouse_id": warehouse_id,
+            "goods_receipt_id": receipt["id"],
+            "returned_at": datetime.now(UTC).isoformat(),
+            "lines": [
+                {
+                    "goods_receipt_line_id": receipt["lines"][0]["id"],
+                    "inventory_item_id": item_id,
+                    "quantity": "8",
+                }
+            ],
+        },
+    )
+    assert excessive.status_code == 409
+
+    reversed_response = await client.post(
+        f"/api/v1/purchasing/returns/{draft['id']}/reverse", headers=headers
+    )
+    assert reversed_response.status_code == 200, reversed_response.text
+    assert reversed_response.json()["status"] == "REVERSED"
+    stock = await client.get(
+        f"/api/v1/inventory/items/{item_id}/stock",
+        headers=headers,
+        params={"warehouse_id": warehouse_id},
+    )
+    assert stock.json()["quantity"] == "10000"
+    receipt_availability = await client.get(
+        f"/api/v1/purchasing/receipts/{receipt['id']}", headers=headers
+    )
+    assert receipt_availability.json()["lines"][0]["returned_base_quantity"] == "0"
+    assert (
+        await client.post(f"/api/v1/purchasing/returns/{draft['id']}/reverse", headers=headers)
+    ).status_code == 409
+
+    other_auth = await authenticated_user(client, "supplier-return-other@example.com")
+    other_headers, _, _ = await workspace(client, other_auth, "Other Return Tenant")
+    assert (
+        await client.get(f"/api/v1/purchasing/returns/{draft['id']}", headers=other_headers)
+    ).status_code == 404
+    async with sessions() as session:
+        names = (
+            await session.scalars(
+                select(OutboxEventModel.event_name)
+                .where(OutboxEventModel.aggregate_id == UUID(draft["id"]))
+                .order_by(OutboxEventModel.created_at, OutboxEventModel.id)
+            )
+        ).all()
+    assert len(names) == 3
+    assert set(names) == {
+        "purchasing.supplier_return_created",
+        "purchasing.supplier_return_posted",
+        "purchasing.supplier_return_reversed",
+    }
+
+    overflow = await client.post(
+        "/api/v1/purchasing/returns",
+        headers=headers,
+        json={
+            "supplier_id": supplier_body["id"],
+            "location_id": str(location_id),
+            "warehouse_id": warehouse_id,
+            "returned_at": datetime.now(UTC).isoformat(),
+            "lines": [
+                {
+                    "inventory_item_id": item_id,
+                    "quantity": "10000000000000",
+                    "purchase_unit": "g",
+                    "unit_price": "10000000000000",
+                }
+            ],
+        },
+    )
+    assert overflow.status_code == 422
+
+    atomic = await client.post(
+        "/api/v1/purchasing/returns",
+        headers=headers,
+        json={
+            "supplier_id": supplier_body["id"],
+            "location_id": str(location_id),
+            "warehouse_id": warehouse_id,
+            "goods_receipt_id": receipt["id"],
+            "returned_at": datetime.now(UTC).isoformat(),
+            "lines": [
+                {
+                    "goods_receipt_line_id": receipt["lines"][0]["id"],
+                    "inventory_item_id": item_id,
+                    "quantity": "1",
+                }
+            ],
+        },
+    )
+    assert atomic.status_code == 201
+
+    async def fail_outbox(*args, **kwargs):
+        raise RuntimeError("forced outbox failure")
+
+    monkeypatch.setattr(OutboxRepository, "add_many", fail_outbox)
+    with pytest.raises(RuntimeError, match="forced outbox failure"):
+        await client.post(f"/api/v1/purchasing/returns/{atomic.json()['id']}/post", headers=headers)
+    unchanged = await client.get(
+        f"/api/v1/purchasing/returns/{atomic.json()['id']}", headers=headers
+    )
+    assert unchanged.json()["status"] == "DRAFT"
+    stock = await client.get(
+        f"/api/v1/inventory/items/{item_id}/stock",
+        headers=headers,
+        params={"warehouse_id": warehouse_id},
+    )
+    assert stock.json()["quantity"] == "10000"

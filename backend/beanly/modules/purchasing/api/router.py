@@ -16,6 +16,7 @@ from beanly.modules.purchasing.api.dependencies import (
     PurchasingCreateDep,
     PurchasingReadDep,
     PurchasingReceiveDep,
+    PurchasingReturnDep,
     PurchasingServiceDep,
     PurchasingUpdateDep,
 )
@@ -23,25 +24,36 @@ from beanly.modules.purchasing.api.schemas import (
     CreateOrderReceiptRequest,
     CreateOrderRequest,
     CreateReceiptRequest,
+    CreateSupplierReturnRequest,
     OrderResponse,
     PostReceiptRequest,
     ReceiptLineRequest,
     ReceiptResponse,
     SupplierRequest,
     SupplierResponse,
+    SupplierReturnLineRequest,
+    SupplierReturnResponse,
     UpdateOrderRequest,
     UpdateReceiptRequest,
+    UpdateSupplierReturnRequest,
 )
 from beanly.modules.purchasing.application.commands import (
     CreateGoodsReceiptCommand,
     CreatePurchaseOrderCommand,
+    CreateSupplierReturnCommand,
     PurchaseLineInput,
     ReceiptLineInput,
     SupplierInput,
+    SupplierReturnLineInput,
     UpdateGoodsReceiptCommand,
     UpdatePurchaseOrderCommand,
+    UpdateSupplierReturnCommand,
 )
-from beanly.modules.purchasing.domain.enums import GoodsReceiptStatus, PurchaseOrderStatus
+from beanly.modules.purchasing.domain.enums import (
+    GoodsReceiptStatus,
+    PurchaseOrderStatus,
+    SupplierReturnStatus,
+)
 from beanly.modules.purchasing.domain.exceptions import (
     DuplicatePurchasingResource,
     InvalidPurchaseQuantity,
@@ -384,6 +396,127 @@ async def reverse_receipt(
     return ReceiptResponse.from_detail(detail)
 
 
+@router.post(
+    "/purchasing/returns",
+    response_model=SupplierReturnResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_supplier_return(
+    payload: CreateSupplierReturnRequest,
+    context: PurchasingReturnDep,
+    service: PurchasingServiceDep,
+) -> SupplierReturnResponse:
+    try:
+        detail = await service.create_supplier_return(
+            context,
+            CreateSupplierReturnCommand(
+                payload.supplier_id,
+                payload.location_id,
+                payload.warehouse_id,
+                payload.goods_receipt_id,
+                payload.document_number,
+                payload.returned_at,
+                payload.note,
+                tuple(_supplier_return_line(line) for line in payload.lines),
+            ),
+        )
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return SupplierReturnResponse.from_detail(detail)
+
+
+@router.get("/purchasing/returns", response_model=list[SupplierReturnResponse])
+async def list_supplier_returns(
+    context: PurchasingReadDep,
+    service: PurchasingServiceDep,
+    supplier_id: UUID | None = None,
+    warehouse_id: UUID | None = None,
+    goods_receipt_id: UUID | None = None,
+    status_filter: Annotated[SupplierReturnStatus | None, Query(alias="status")] = None,
+) -> list[SupplierReturnResponse]:
+    try:
+        rows = await service.list_supplier_returns(
+            context, supplier_id, warehouse_id, goods_receipt_id, status_filter
+        )
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return [SupplierReturnResponse.from_row(row) for row in rows]
+
+
+@router.get("/purchasing/returns/{return_id}", response_model=SupplierReturnResponse)
+async def get_supplier_return(
+    return_id: UUID,
+    context: PurchasingReadDep,
+    service: PurchasingServiceDep,
+) -> SupplierReturnResponse:
+    try:
+        detail = await service.get_supplier_return(context, return_id)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return SupplierReturnResponse.from_detail(detail)
+
+
+@router.patch("/purchasing/returns/{return_id}", response_model=SupplierReturnResponse)
+async def update_supplier_return(
+    return_id: UUID,
+    payload: UpdateSupplierReturnRequest,
+    context: PurchasingReturnDep,
+    service: PurchasingServiceDep,
+) -> SupplierReturnResponse:
+    fields = payload.model_fields_set
+    try:
+        detail = await service.update_supplier_return(
+            context,
+            return_id,
+            UpdateSupplierReturnCommand(
+                payload.supplier_id,
+                payload.location_id,
+                payload.warehouse_id,
+                payload.goods_receipt_id,
+                "goods_receipt_id" in fields,
+                payload.document_number,
+                "document_number" in fields,
+                payload.returned_at,
+                payload.note,
+                "note" in fields,
+                (
+                    tuple(_supplier_return_line(line) for line in payload.lines)
+                    if payload.lines is not None
+                    else None
+                ),
+            ),
+        )
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return SupplierReturnResponse.from_detail(detail)
+
+
+@router.post("/purchasing/returns/{return_id}/post", response_model=SupplierReturnResponse)
+async def post_supplier_return(
+    return_id: UUID,
+    context: PurchasingReturnDep,
+    service: PurchasingServiceDep,
+) -> SupplierReturnResponse:
+    try:
+        detail = await service.post_supplier_return(context, return_id)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return SupplierReturnResponse.from_detail(detail)
+
+
+@router.post("/purchasing/returns/{return_id}/reverse", response_model=SupplierReturnResponse)
+async def reverse_supplier_return(
+    return_id: UUID,
+    context: PurchasingReturnDep,
+    service: PurchasingServiceDep,
+) -> SupplierReturnResponse:
+    try:
+        detail = await service.reverse_supplier_return(context, return_id)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return SupplierReturnResponse.from_detail(detail)
+
+
 def _supplier_input(payload: SupplierRequest) -> SupplierInput:
     return SupplierInput(**payload.model_dump())
 
@@ -406,6 +539,17 @@ def _receipt_line(line: ReceiptLineRequest) -> ReceiptLineInput:
         line.unit_multiplier,
         line.unit_price,
         line.purchase_order_line_id,
+    )
+
+
+def _supplier_return_line(line: SupplierReturnLineRequest) -> SupplierReturnLineInput:
+    return SupplierReturnLineInput(
+        line.inventory_item_id,
+        line.quantity,
+        line.goods_receipt_line_id,
+        line.purchase_unit,
+        line.unit_multiplier,
+        line.unit_price,
     )
 
 

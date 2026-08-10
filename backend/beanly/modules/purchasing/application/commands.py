@@ -79,3 +79,40 @@ class UpdateGoodsReceiptCommand:
     note: str | None = None
     note_set: bool = False
     lines: tuple[ReceiptLineInput, ...] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SupplierReturnLineInput:
+    inventory_item_id: UUID
+    quantity: Decimal
+    goods_receipt_line_id: UUID | None = None
+    purchase_unit: str | None = None
+    unit_multiplier: Decimal | None = None
+    unit_price: Decimal | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CreateSupplierReturnCommand:
+    supplier_id: UUID
+    location_id: UUID
+    warehouse_id: UUID
+    goods_receipt_id: UUID | None
+    document_number: str | None
+    returned_at: datetime
+    note: str | None
+    lines: tuple[SupplierReturnLineInput, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateSupplierReturnCommand:
+    supplier_id: UUID | None = None
+    location_id: UUID | None = None
+    warehouse_id: UUID | None = None
+    goods_receipt_id: UUID | None = None
+    goods_receipt_id_set: bool = False
+    document_number: str | None = None
+    document_number_set: bool = False
+    returned_at: datetime | None = None
+    note: str | None = None
+    note_set: bool = False
+    lines: tuple[SupplierReturnLineInput, ...] | None = None

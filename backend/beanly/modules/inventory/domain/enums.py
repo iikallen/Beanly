@@ -18,3 +18,26 @@ class InventoryTransactionStatus(StrEnum):
     DRAFT = "DRAFT"
     POSTED = "POSTED"
     REVERSED = "REVERSED"
+
+
+class WriteOffStatus(StrEnum):
+    DRAFT = "DRAFT"
+    POSTED = "POSTED"
+    REVERSED = "REVERSED"
+
+
+class InventoryCountType(StrEnum):
+    FULL = "FULL"
+    PARTIAL = "PARTIAL"
+
+
+class InventoryCountStatus(StrEnum):
+    COUNTING = "COUNTING"
+    POSTED = "POSTED"
+    CANCELLED = "CANCELLED"
+
+
+class InventoryTransferStatus(StrEnum):
+    DRAFT = "DRAFT"
+    POSTED = "POSTED"
+    REVERSED = "REVERSED"

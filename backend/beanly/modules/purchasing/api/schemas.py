@@ -18,8 +18,14 @@ from beanly.modules.purchasing.application.dto import (
     OrderListRow,
     PurchaseOrderDetail,
     ReceiptListRow,
+    SupplierReturnDetail,
+    SupplierReturnListRow,
 )
-from beanly.modules.purchasing.domain.enums import GoodsReceiptStatus, PurchaseOrderStatus
+from beanly.modules.purchasing.domain.enums import (
+    GoodsReceiptStatus,
+    PurchaseOrderStatus,
+    SupplierReturnStatus,
+)
 
 
 def _decimal_string(value: object) -> object:
@@ -233,6 +239,8 @@ class ReceiptLineResponse(BaseModel):
     unit_multiplier: str
     unit_price: str
     line_total_minor: str
+    returned_base_quantity: str
+    returnable_base_quantity: str
     created_at: datetime
 
 
@@ -281,6 +289,13 @@ class ReceiptResponse(BaseModel):
                     unit_multiplier=decimal_string(line.unit_multiplier),
                     unit_price=decimal_string(line.unit_price),
                     line_total_minor=str(line.line_total_minor),
+                    returned_base_quantity=decimal_string(
+                        detail.returned_base_quantities.get(line.id, Decimal(0))
+                    ),
+                    returnable_base_quantity=decimal_string(
+                        line.base_quantity
+                        - detail.returned_base_quantities.get(line.id, Decimal(0))
+                    ),
                     created_at=line.created_at,
                 )
                 for line in detail.lines
@@ -293,6 +308,131 @@ class ReceiptResponse(BaseModel):
             **asdict(row.receipt),
             supplier_name=row.supplier_name,
             purchase_order_number=None,
+            total_minor=str(row.total_minor),
+        )
+
+
+class SupplierReturnLineRequest(BaseModel):
+    goods_receipt_line_id: UUID | None = None
+    inventory_item_id: UUID
+    quantity: Decimal
+    purchase_unit: Annotated[
+        str | None,
+        Field(
+            min_length=1,
+            max_length=50,
+            validation_alias=AliasChoices("purchase_unit", "unit"),
+        ),
+    ] = None
+    unit_multiplier: Decimal | None = None
+    unit_price: Decimal | None = None
+
+    _quantity_string = field_validator("quantity", mode="before")(_decimal_string)
+    _multiplier_string = field_validator("unit_multiplier", mode="before")(
+        lambda value: None if value is None else _decimal_string(value)
+    )
+    _price_string = field_validator("unit_price", mode="before")(
+        lambda value: None if value is None else _decimal_string(value)
+    )
+
+
+class CreateSupplierReturnRequest(BaseModel):
+    supplier_id: UUID
+    location_id: UUID
+    warehouse_id: UUID
+    goods_receipt_id: UUID | None = None
+    document_number: Annotated[str | None, Field(max_length=100)] = None
+    returned_at: datetime
+    note: Annotated[str | None, Field(max_length=2000)] = None
+    lines: Annotated[list[SupplierReturnLineRequest], Field(min_length=1, max_length=500)]
+
+
+class UpdateSupplierReturnRequest(BaseModel):
+    supplier_id: UUID | None = None
+    location_id: UUID | None = None
+    warehouse_id: UUID | None = None
+    goods_receipt_id: UUID | None = None
+    document_number: Annotated[str | None, Field(max_length=100)] = None
+    returned_at: datetime | None = None
+    note: Annotated[str | None, Field(max_length=2000)] = None
+    lines: Annotated[list[SupplierReturnLineRequest] | None, Field(max_length=500)] = None
+
+
+class SupplierReturnLineResponse(BaseModel):
+    id: UUID
+    supplier_return_id: UUID
+    goods_receipt_line_id: UUID | None
+    inventory_item_id: UUID
+    return_quantity: str
+    base_quantity: str
+    purchase_unit: str
+    unit_multiplier: str
+    unit_price: str
+    line_total_minor: str
+    cumulative_returned_base_quantity: str
+    created_at: datetime
+
+
+class SupplierReturnResponse(BaseModel):
+    id: UUID
+    organization_id: UUID
+    location_id: UUID
+    warehouse_id: UUID
+    supplier_id: UUID
+    supplier_name: str
+    goods_receipt_id: UUID | None
+    goods_receipt_number: str | None
+    number: str
+    status: SupplierReturnStatus
+    document_number: str | None
+    returned_at: datetime
+    note: str | None
+    created_by: UUID
+    posted_by: UUID | None
+    posted_at: datetime | None
+    reversed_by: UUID | None
+    reversed_at: datetime | None
+    inventory_transaction_id: UUID | None
+    created_at: datetime
+    updated_at: datetime
+    total_minor: str
+    lines: list[SupplierReturnLineResponse] = Field(default_factory=list)
+
+    @classmethod
+    def from_detail(cls, detail: SupplierReturnDetail) -> "SupplierReturnResponse":
+        value = detail.supplier_return
+        return cls(
+            **asdict(value),
+            supplier_name=detail.supplier_name,
+            goods_receipt_number=detail.goods_receipt_number,
+            total_minor=str(sum(line.line_total_minor for line in detail.lines)),
+            lines=[
+                SupplierReturnLineResponse(
+                    id=line.id,
+                    supplier_return_id=line.supplier_return_id,
+                    goods_receipt_line_id=line.goods_receipt_line_id,
+                    inventory_item_id=line.inventory_item_id,
+                    return_quantity=decimal_string(line.return_quantity),
+                    base_quantity=decimal_string(line.base_quantity),
+                    purchase_unit=line.purchase_unit,
+                    unit_multiplier=decimal_string(line.unit_multiplier),
+                    unit_price=decimal_string(line.unit_price),
+                    line_total_minor=str(line.line_total_minor),
+                    cumulative_returned_base_quantity=decimal_string(
+                        detail.returned_base_quantities.get(line.goods_receipt_line_id, Decimal(0))
+                    ),
+                    created_at=line.created_at,
+                )
+                for line in detail.lines
+            ],
+        )
+
+    @classmethod
+    def from_row(cls, row: SupplierReturnListRow) -> "SupplierReturnResponse":
+        return cls(
+            **asdict(row.supplier_return),
+            supplier_name=row.supplier_name,
+            goods_receipt_number=row.goods_receipt_number,
             total_minor=str(row.total_minor),
         )
 

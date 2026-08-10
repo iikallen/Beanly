@@ -19,10 +19,10 @@ export function usePurchasingPermissions() {
       setPermissions([]);
       setLoading(true);
       if (!accessToken || !currentOrganization) return null;
-      return api.getTeam(currentOrganization.id, accessToken);
+      return api.getOrganizationContext(currentOrganization.id, accessToken);
     })
-      .then((team) => {
-        if (!cancelled && team) setPermissions(team.permissions);
+      .then((context) => {
+        if (!cancelled && context) setPermissions(context.permissions);
       })
       .catch(() => {
         if (!cancelled) setPermissions([]);
@@ -40,5 +40,6 @@ export function usePurchasingPermissions() {
     canUpdate: permissions.includes("purchasing.update"),
     canReceive: permissions.includes("purchasing.receive"),
     canCancel: permissions.includes("purchasing.cancel"),
+    canReturn: permissions.includes("purchasing.return"),
   };
 }

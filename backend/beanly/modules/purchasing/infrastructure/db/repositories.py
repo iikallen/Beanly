@@ -11,13 +11,21 @@ from beanly.modules.purchasing.domain.entities import (
     PurchaseOrder,
     PurchaseOrderLine,
     Supplier,
+    SupplierReturn,
+    SupplierReturnLine,
 )
-from beanly.modules.purchasing.domain.enums import GoodsReceiptStatus, PurchaseOrderStatus
+from beanly.modules.purchasing.domain.enums import (
+    GoodsReceiptStatus,
+    PurchaseOrderStatus,
+    SupplierReturnStatus,
+)
 from beanly.modules.purchasing.infrastructure.db.mappers import (
     to_order,
     to_order_line,
     to_receipt,
     to_receipt_line,
+    to_return,
+    to_return_line,
     to_supplier,
 )
 from beanly.modules.purchasing.infrastructure.db.models import (
@@ -26,6 +34,8 @@ from beanly.modules.purchasing.infrastructure.db.models import (
     PurchaseOrderLineModel,
     PurchaseOrderModel,
     SupplierModel,
+    SupplierReturnLineModel,
+    SupplierReturnModel,
 )
 
 
@@ -99,6 +109,10 @@ class SqlAlchemyPurchasingRepository:
     async def next_receipt_number(self) -> str:
         value = await self._next_number("goods_receipt_number_seq", GoodsReceiptModel)
         return f"GR-{value:06d}"
+
+    async def next_return_number(self) -> str:
+        value = await self._next_number("supplier_return_number_seq", SupplierReturnModel)
+        return f"SR-{value:06d}"
 
     async def _next_number(self, sequence: str, model) -> int:
         if self.session.get_bind().dialect.name == "postgresql":
@@ -415,6 +429,178 @@ class SqlAlchemyPurchasingRepository:
             )
         )
         return int(value or 0)
+
+    async def add_return(self, value: SupplierReturn) -> SupplierReturn:
+        model = SupplierReturnModel(
+            id=value.id,
+            organization_id=value.organization_id,
+            location_id=value.location_id,
+            warehouse_id=value.warehouse_id,
+            supplier_id=value.supplier_id,
+            goods_receipt_id=value.goods_receipt_id,
+            number=value.number,
+            status=value.status.value,
+            document_number=value.document_number,
+            returned_at=value.returned_at,
+            note=value.note,
+            created_by=value.created_by,
+            posted_by=value.posted_by,
+            posted_at=value.posted_at,
+            reversed_by=value.reversed_by,
+            reversed_at=value.reversed_at,
+            inventory_transaction_id=value.inventory_transaction_id,
+            created_at=value.created_at,
+            updated_at=value.updated_at,
+        )
+        self.session.add(model)
+        await self.session.flush()
+        return to_return(model)
+
+    async def update_return(self, value: SupplierReturn) -> SupplierReturn:
+        await self.session.execute(
+            update(SupplierReturnModel)
+            .where(
+                SupplierReturnModel.organization_id == value.organization_id,
+                SupplierReturnModel.id == value.id,
+            )
+            .values(
+                location_id=value.location_id,
+                warehouse_id=value.warehouse_id,
+                supplier_id=value.supplier_id,
+                goods_receipt_id=value.goods_receipt_id,
+                status=value.status.value,
+                document_number=value.document_number,
+                returned_at=value.returned_at,
+                note=value.note,
+                posted_by=value.posted_by,
+                posted_at=value.posted_at,
+                reversed_by=value.reversed_by,
+                reversed_at=value.reversed_at,
+                inventory_transaction_id=value.inventory_transaction_id,
+                updated_at=value.updated_at,
+            )
+        )
+        await self.session.flush()
+        return value
+
+    async def get_return(
+        self, organization_id: UUID, return_id: UUID, *, lock: bool = False
+    ) -> SupplierReturn | None:
+        statement = select(SupplierReturnModel).where(
+            SupplierReturnModel.organization_id == organization_id,
+            SupplierReturnModel.id == return_id,
+        )
+        if lock:
+            statement = statement.with_for_update()
+        model = await self.session.scalar(statement)
+        return to_return(model) if model else None
+
+    async def list_returns(
+        self,
+        organization_id: UUID,
+        location_ids: tuple[UUID, ...],
+        supplier_id: UUID | None,
+        warehouse_id: UUID | None,
+        goods_receipt_id: UUID | None,
+        status: SupplierReturnStatus | None,
+    ) -> list[SupplierReturn]:
+        if not location_ids:
+            return []
+        statement = select(SupplierReturnModel).where(
+            SupplierReturnModel.organization_id == organization_id,
+            SupplierReturnModel.location_id.in_(location_ids),
+        )
+        for column, filter_value in (
+            (SupplierReturnModel.supplier_id, supplier_id),
+            (SupplierReturnModel.warehouse_id, warehouse_id),
+            (SupplierReturnModel.goods_receipt_id, goods_receipt_id),
+            (SupplierReturnModel.status, status.value if status else None),
+        ):
+            if filter_value is not None:
+                statement = statement.where(column == filter_value)
+        models = await self.session.scalars(
+            statement.order_by(SupplierReturnModel.returned_at.desc(), SupplierReturnModel.id)
+        )
+        return [to_return(model) for model in models]
+
+    async def add_return_lines(self, lines: tuple[SupplierReturnLine, ...]) -> None:
+        self.session.add_all(
+            SupplierReturnLineModel(
+                id=line.id,
+                supplier_return_id=line.supplier_return_id,
+                goods_receipt_line_id=line.goods_receipt_line_id,
+                inventory_item_id=line.inventory_item_id,
+                return_quantity=line.return_quantity,
+                base_quantity=line.base_quantity,
+                purchase_unit=line.purchase_unit,
+                unit_multiplier=line.unit_multiplier,
+                unit_price=line.unit_price,
+                line_total_minor=line.line_total_minor,
+                created_at=line.created_at,
+            )
+            for line in lines
+        )
+        await self.session.flush()
+
+    async def replace_return_lines(
+        self,
+        organization_id: UUID,
+        return_id: UUID,
+        lines: tuple[SupplierReturnLine, ...],
+    ) -> None:
+        owned = select(SupplierReturnModel.id).where(
+            SupplierReturnModel.organization_id == organization_id,
+            SupplierReturnModel.id == return_id,
+        )
+        await self.session.execute(
+            delete(SupplierReturnLineModel).where(
+                SupplierReturnLineModel.supplier_return_id.in_(owned)
+            )
+        )
+        await self.add_return_lines(lines)
+
+    async def get_return_lines(
+        self, organization_id: UUID, return_id: UUID
+    ) -> tuple[SupplierReturnLine, ...]:
+        models = await self.session.scalars(
+            select(SupplierReturnLineModel)
+            .join(SupplierReturnModel)
+            .where(
+                SupplierReturnModel.organization_id == organization_id,
+                SupplierReturnLineModel.supplier_return_id == return_id,
+            )
+            .order_by(SupplierReturnLineModel.created_at, SupplierReturnLineModel.id)
+        )
+        return tuple(to_return_line(model) for model in models)
+
+    async def returned_totals(
+        self,
+        organization_id: UUID,
+        goods_receipt_id: UUID,
+        *,
+        exclude_return_id: UUID | None = None,
+    ) -> dict[UUID, Decimal]:
+        statement = (
+            select(
+                SupplierReturnLineModel.goods_receipt_line_id,
+                func.sum(SupplierReturnLineModel.base_quantity),
+            )
+            .join(SupplierReturnModel)
+            .where(
+                SupplierReturnModel.organization_id == organization_id,
+                SupplierReturnModel.goods_receipt_id == goods_receipt_id,
+                SupplierReturnModel.status == SupplierReturnStatus.POSTED.value,
+                SupplierReturnLineModel.goods_receipt_line_id.is_not(None),
+            )
+        )
+        if exclude_return_id is not None:
+            statement = statement.where(SupplierReturnModel.id != exclude_return_id)
+        rows = (
+            await self.session.execute(
+                statement.group_by(SupplierReturnLineModel.goods_receipt_line_id)
+            )
+        ).all()
+        return {line_id: total for line_id, total in rows if line_id is not None}
 
     async def commit(self) -> None:
         await self.session.commit()

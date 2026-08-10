@@ -9,8 +9,14 @@ from beanly.modules.purchasing.domain.entities import (
     PurchaseOrder,
     PurchaseOrderLine,
     Supplier,
+    SupplierReturn,
+    SupplierReturnLine,
 )
-from beanly.modules.purchasing.domain.enums import GoodsReceiptStatus, PurchaseOrderStatus
+from beanly.modules.purchasing.domain.enums import (
+    GoodsReceiptStatus,
+    PurchaseOrderStatus,
+    SupplierReturnStatus,
+)
 
 
 class PurchasingRepository(Protocol):
@@ -75,5 +81,37 @@ class PurchasingRepository(Protocol):
         self, organization_id: UUID, receipt_id: UUID
     ) -> tuple[GoodsReceiptLine, ...]: ...
     async def posted_receipt_count(self, organization_id: UUID, order_id: UUID) -> int: ...
+    async def next_return_number(self) -> str: ...
+    async def add_return(self, value: SupplierReturn) -> SupplierReturn: ...
+    async def update_return(self, value: SupplierReturn) -> SupplierReturn: ...
+    async def get_return(
+        self, organization_id: UUID, return_id: UUID, *, lock: bool = False
+    ) -> SupplierReturn | None: ...
+    async def list_returns(
+        self,
+        organization_id: UUID,
+        location_ids: tuple[UUID, ...],
+        supplier_id: UUID | None,
+        warehouse_id: UUID | None,
+        goods_receipt_id: UUID | None,
+        status: SupplierReturnStatus | None,
+    ) -> list[SupplierReturn]: ...
+    async def add_return_lines(self, lines: tuple[SupplierReturnLine, ...]) -> None: ...
+    async def replace_return_lines(
+        self,
+        organization_id: UUID,
+        return_id: UUID,
+        lines: tuple[SupplierReturnLine, ...],
+    ) -> None: ...
+    async def get_return_lines(
+        self, organization_id: UUID, return_id: UUID
+    ) -> tuple[SupplierReturnLine, ...]: ...
+    async def returned_totals(
+        self,
+        organization_id: UUID,
+        goods_receipt_id: UUID,
+        *,
+        exclude_return_id: UUID | None = None,
+    ) -> dict[UUID, Decimal]: ...
     async def commit(self) -> None: ...
     async def rollback(self) -> None: ...
