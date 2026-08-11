@@ -453,7 +453,7 @@ async def test_postgres_finance_projection_idempotency_noops_and_backfill_rerun(
     try:
         async with admin_engine.connect() as connection:
             await connection.execute(text(f'CREATE DATABASE "{database_name}"'))
-        await asyncio.to_thread(command.upgrade, _config(test_url), "0015_finance")
+        await asyncio.to_thread(command.upgrade, _config(test_url), "head")
 
         async def override_session():
             async with sessions() as session:
