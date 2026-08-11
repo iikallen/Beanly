@@ -53,6 +53,8 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.INTEGRATIONS_READ,
                 Permission.INTEGRATIONS_WRITE,
                 Permission.POS_DEVICE_MANAGE,
+                Permission.FISCAL_READ,
+                Permission.FISCAL_WRITE,
             }
         ),
         MembershipRole.MANAGER: frozenset(
@@ -83,6 +85,7 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.MENU_PRICE_WRITE,
                 Permission.MENU_MODIFIER_WRITE,
                 Permission.SALES_READ,
+                Permission.SALES_REFUND,
                 Permission.SALES_REGISTER_MANAGE,
                 Permission.SALES_SHIFT_MANAGE,
                 Permission.SALES_CANCEL,
@@ -92,6 +95,7 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.ANALYTICS_READ,
                 Permission.INTEGRATIONS_READ,
                 Permission.POS_DEVICE_MANAGE,
+                Permission.FISCAL_READ,
             }
         ),
         MembershipRole.ACCOUNTANT: frozenset(
@@ -107,6 +111,8 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.FINANCE_WRITE,
                 Permission.ANALYTICS_READ,
                 Permission.INTEGRATIONS_READ,
+                Permission.FISCAL_READ,
+                Permission.FISCAL_WRITE,
             }
         ),
         MembershipRole.CASHIER: frozenset(
@@ -147,3 +153,10 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
         assert Permission.POS_DEVICE_MANAGE not in permissions_for(role)
     for role in (MembershipRole.CASHIER, MembershipRole.BARISTA):
         assert Permission.SALES_CREATE in permissions_for(role)
+    for role in (MembershipRole.OWNER, MembershipRole.ADMIN, MembershipRole.ACCOUNTANT):
+        assert Permission.FISCAL_WRITE in permissions_for(role)
+    assert Permission.FISCAL_READ in permissions_for(MembershipRole.MANAGER)
+    assert Permission.FISCAL_WRITE not in permissions_for(MembershipRole.MANAGER)
+    for role in (MembershipRole.CASHIER, MembershipRole.BARISTA):
+        assert Permission.FISCAL_READ not in permissions_for(role)
+        assert Permission.FISCAL_WRITE not in permissions_for(role)

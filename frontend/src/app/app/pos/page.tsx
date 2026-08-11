@@ -11,6 +11,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAuth } from "@/components/auth-provider";
@@ -119,6 +120,7 @@ export default function PosPage() {
   const canManageDevice = permissions.includes("pos.device.manage");
   const canCancel = permissions.includes("sales.cancel");
   const canPay = permissions.includes("payments.create");
+  const canReadRefunds = permissions.includes("sales.read") && permissions.includes("payments.read");
   const orders = offline.orders.filter((order) => !order.status.startsWith("SYNCED_CANCELLED") && !order.status.startsWith("SYNCED_PAID"));
   const selectedOrder = orders.find((order) => order.id === currentOrderId)
     ?? orders.find((order) => order.status === "OPEN" || order.status === "SYNCED_OPEN")
@@ -709,6 +711,7 @@ export default function PosPage() {
           <strong><Clock3 aria-hidden="true" /> Shift opened {formatTime(shift.opened_at)}</strong>
         </div>
         <div className="pos-header-actions">
+          {canReadRefunds && <Link className="secondary-button" href="/app/pos/refunds">Order history</Link>}
           <button className="secondary-button" type="button" onClick={() => setShowOrders((current) => !current)}>Orders ({orders.length})</button>
           {offlineSession && canManageDevice && <button className="secondary-button" disabled={busy || !accessToken || hasOpenOrders || offline.unresolvedCount > 0 || offline.networkStatus !== "ONLINE"} type="button" onClick={disableOffline}>Disable offline</button>}
           <button className="secondary-button" disabled={busy || hasOpenOrders || offline.unresolvedCount > 0 || offline.networkStatus !== "ONLINE" || !accessToken} type="button" onClick={closeShift}>Close shift</button>

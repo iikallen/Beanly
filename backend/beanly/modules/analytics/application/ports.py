@@ -22,6 +22,7 @@ class OverviewAggregate:
     cogs: Decimal
     inventory_losses: Decimal
     incomplete_cogs_orders: int
+    refund_amount: Decimal = Decimal(0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +36,9 @@ class ProductAggregate:
     orders: int
     cogs: Decimal
     incomplete_cogs_orders: int
+    refund_amount: Decimal = Decimal(0)
+    refunded_quantity: int = 0
+    refund_orders: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +73,7 @@ class LocationAggregate:
     operating_expenses: Decimal
     inventory_losses: Decimal
     inventory_gains: Decimal
+    refund_amount: Decimal = Decimal(0)
 
 
 class AnalyticsRepository(Protocol):
@@ -90,9 +95,7 @@ class AnalyticsRepository(Protocol):
 
     async def upsert_location(self, delta: LocationMetricsDailyDelta) -> None: ...
 
-    async def upsert_consumption(
-        self, delta: InventoryConsumptionDailyDelta
-    ) -> None: ...
+    async def upsert_consumption(self, delta: InventoryConsumptionDailyDelta) -> None: ...
 
     async def organization_currency(self, organization_id: UUID) -> str: ...
 

@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 from beanly.modules.integrations.domain.enums import (
@@ -21,10 +22,20 @@ class ProviderDescriptor:
 
 @dataclass(frozen=True, slots=True)
 class FiscalItem:
-    name: str
+    fiscal_name: str
     quantity: int
     unit_price_minor: int
     total_minor: int
+    nkt_code: str | None = None
+    nkt_code_type: str | None = None
+    unit_code: str = "pcs"
+    vat_rate: Decimal | None = None
+    vat_amount_minor: int = 0
+    marking_codes: tuple[str, ...] = ()
+
+    @property
+    def name(self) -> str:
+        return self.fiscal_name
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +53,19 @@ class FiscalSaleCommand:
     items: tuple[FiscalItem, ...]
     payment_lines: tuple[FiscalPaymentLine, ...]
     total_minor: int
+
+
+@dataclass(frozen=True, slots=True)
+class FiscalRefundCommand:
+    refund_id: UUID
+    original_payment_id: UUID
+    original_external_receipt_id: str
+    occurred_at: datetime
+    currency: str
+    items: tuple[FiscalItem, ...]
+    payment_lines: tuple[FiscalPaymentLine, ...]
+    total_minor: int
+    reason: str
 
 
 @dataclass(frozen=True, slots=True)

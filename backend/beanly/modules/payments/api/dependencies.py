@@ -4,6 +4,9 @@ from fastapi import Depends, HTTPException, status
 
 from beanly.core.events.outbox.repositories import OutboxRepository
 from beanly.core.events.outbox.writer import OutboxEventSink
+from beanly.modules.fiscal.application.service import FiscalService
+from beanly.modules.fiscal.infrastructure.operations import SqlAlchemyFiscalOperations
+from beanly.modules.fiscal.infrastructure.payment_gateway import FiscalPaymentSnapshotGateway
 from beanly.modules.identity.api.dependencies import SessionDep
 from beanly.modules.inventory.application.services import InventoryService
 from beanly.modules.inventory.infrastructure.db.repositories import (
@@ -43,6 +46,7 @@ def payment_service(session: SessionDep) -> PaymentService:
         SalesSettlementGateway(sales_repository, organizations),
         InventorySaleGateway(inventory, session),
         OutboxEventSink(OutboxRepository(session)),
+        FiscalPaymentSnapshotGateway(FiscalService(SqlAlchemyFiscalOperations(session))),
     )
 
 
@@ -58,12 +62,8 @@ def _permission(*required: Permission):
     return dependency
 
 
-PaymentCreateDep = Annotated[
-    TenantContext, Depends(_permission(Permission.PAYMENTS_CREATE))
-]
-PaymentReadDep = Annotated[
-    TenantContext, Depends(_permission(Permission.PAYMENTS_READ))
-]
+PaymentCreateDep = Annotated[TenantContext, Depends(_permission(Permission.PAYMENTS_CREATE))]
+PaymentReadDep = Annotated[TenantContext, Depends(_permission(Permission.PAYMENTS_READ))]
 PaymentAccessDep = Annotated[
     TenantContext,
     Depends(_permission(Permission.PAYMENTS_READ, Permission.PAYMENTS_CREATE)),

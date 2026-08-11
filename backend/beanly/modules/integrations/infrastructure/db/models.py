@@ -158,6 +158,8 @@ class IntegrationJobModel(Base):
     locked_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    external_number: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    external_url: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     dead_lettered_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

@@ -1,6 +1,6 @@
 import asyncio
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from hashlib import sha256
 from uuid import UUID, uuid4
 
@@ -17,6 +17,7 @@ from beanly.core.database.session import get_session
 from beanly.core.events.outbox.models import OutboxEventModel
 from beanly.core.security.audit import SecurityAuditEventModel
 from beanly.main import app
+from beanly.modules.fiscal.infrastructure.db.models import FiscalSaleSnapshotModel
 from beanly.modules.identity.api.dependencies import SessionDep
 from beanly.modules.inventory.infrastructure.db.models import (
     InventoryTransactionModel,
@@ -215,6 +216,141 @@ def _keys(value: object) -> set[str]:
 
 def _utc(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.utcoffset() is None else value.astimezone(UTC)
+
+
+@pytest.mark.anyio
+async def test_offline_sale_fiscal_snapshot_uses_downloaded_profile_not_current_profile(
+    app_client,
+) -> None:
+    client, sessions = app_client
+    headers, _, location_id, warehouse_id = await _workspace(
+        client, "offline-fiscal@example.com", "Offline fiscal"
+    )
+    register, shift = await _register_shift(client, headers, location_id, warehouse_id)
+    variant_id, _ = await _catalog(client, headers)
+    tax = await client.put(
+        "/api/v1/fiscal/tax-profile",
+        headers=headers,
+        json={
+            "country_code": "KZ",
+            "tax_regime_code": "VAT",
+            "vat_registered": True,
+            "default_vat_rate": "16",
+            "effective_from": date.today().isoformat(),
+        },
+    )
+    assert tax.status_code == 200, tax.text
+    fiscal_a = {
+        "fiscal_name": "Offline fiscal A",
+        "nkt_code": "NKT-A",
+        "nkt_code_type": "NKT",
+        "fiscal_unit_code": "pcs",
+        "vat_rate_override": "12",
+        "requires_marking": False,
+    }
+    configured = await client.put(
+        f"/api/v1/fiscal/variants/{variant_id}", headers=headers, json=fiscal_a
+    )
+    assert configured.status_code == 200, configured.text
+    paired = await client.post(
+        "/api/v1/pos/offline/devices/pair",
+        headers=headers,
+        json={"register_id": register["id"], "name": "Fiscal offline device"},
+    )
+    assert paired.status_code == 201, paired.text
+    _, cookie = _cookie(paired)
+    started = await client.post(
+        "/api/v1/pos/offline/sessions/start",
+        headers={**headers, "cookie": cookie},
+        json={"shift_id": shift["id"]},
+    )
+    assert started.status_code == 201, started.text
+    offline_session = started.json()
+    boundary = datetime.combine(
+        date.today() - timedelta(days=1), time(19, 30), tzinfo=UTC
+    )
+    async with sessions() as session:
+        session_model = await session.get(
+            PosOfflineSessionModel, UUID(offline_session["id"])
+        )
+        assert session_model is not None
+        session_model.started_at = boundary - timedelta(minutes=1)
+        await session.commit()
+        catalog = await session.get(
+            PosCatalogSnapshotModel, UUID(offline_session["catalog_snapshot"]["id"])
+        )
+        assert catalog is not None
+        assert catalog.private_payload["variants"][str(variant_id)]["fiscal"][
+            "fiscal_name"
+        ] == "Offline fiscal A"
+
+    changed = await client.put(
+        f"/api/v1/fiscal/variants/{variant_id}",
+        headers=headers,
+        json={**fiscal_a, "fiscal_name": "Offline fiscal B", "nkt_code": "NKT-B"},
+    )
+    assert changed.status_code == 200, changed.text
+    completed_at = boundary.isoformat()
+    client_payment_id = uuid4()
+    synced = await client.post(
+        "/api/v1/pos/offline/sync",
+        headers={"cookie": cookie},
+        json={
+            "session_id": offline_session["id"],
+            "orders": [
+                {
+                    "client_order_id": str(uuid4()),
+                    "revision": 1,
+                    "base_server_version": None,
+                    "catalog_snapshot_id": offline_session["catalog_snapshot"]["id"],
+                    "offline_display_number": 1,
+                    "created_at": completed_at,
+                    "updated_at": completed_at,
+                    "order_type": "TAKEAWAY",
+                    "status": "PAID",
+                    "items": [
+                        {
+                            "client_item_id": str(uuid4()),
+                            "variant_id": str(variant_id),
+                            "selected_option_ids": [],
+                            "quantity": 1,
+                        }
+                    ],
+                    "payment": {
+                        "client_payment_id": str(client_payment_id),
+                        "completed_at": completed_at,
+                        "lines": [
+                            {
+                                "method": "CASH",
+                                "amount_minor": "180000",
+                                "cash_received_minor": "180000",
+                            }
+                        ],
+                    },
+                }
+            ],
+        },
+    )
+    assert synced.status_code == 200, synced.text
+    assert synced.json()["results"][0]["status"] == "SYNCED"
+    async with sessions() as session:
+        payment_id = await session.scalar(
+            select(PaymentModel.id).where(
+                PaymentModel.client_payment_id == client_payment_id
+            )
+        )
+        snapshot = await session.scalar(
+            select(FiscalSaleSnapshotModel).where(
+                FiscalSaleSnapshotModel.payment_id == payment_id
+            )
+        )
+        assert snapshot is not None
+        await session.refresh(snapshot, ["lines"])
+        assert snapshot.tax_profile_id == UUID(tax.json()["id"])
+        assert snapshot.compliance_status == "COMPLETE"
+        assert snapshot.lines[0].fiscal_name == "Offline fiscal A"
+        assert snapshot.lines[0].nkt_code == "NKT-A"
+        assert snapshot.lines[0].vat_rate == 12
 
 
 @pytest.mark.anyio
@@ -888,7 +1024,7 @@ async def test_postgres_offline_migration_maps_estimated_on_downgrade_and_reupgr
     await asyncio.to_thread(command.check, config)
     async with sessions() as database:
         assert await database.scalar(text("SELECT version_num FROM alembic_version")) == (
-            "0020_offline_pos"
+            "0021_refunds_fiscal_tax"
         )
         assert await database.scalar(text("SELECT to_regclass('public.pos_devices')")) == (
             "pos_devices"

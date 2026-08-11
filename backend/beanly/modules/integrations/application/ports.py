@@ -5,6 +5,7 @@ from uuid import UUID
 
 from beanly.modules.integrations.application.dto import (
     FiscalReceiptResult,
+    FiscalRefundCommand,
     FiscalSaleCommand,
     NormalizedWebhookEvent,
     OAuthSession,
@@ -36,6 +37,14 @@ class FiscalProvider(Protocol):
     async def fiscalize_sale(
         self,
         command: FiscalSaleCommand,
+        *,
+        credentials: Mapping[str, object],
+        idempotency_key: str,
+    ) -> FiscalReceiptResult: ...
+
+    async def fiscalize_refund(
+        self,
+        command: FiscalRefundCommand,
         *,
         credentials: Mapping[str, object],
         idempotency_key: str,
@@ -91,17 +100,11 @@ class IntegrationRepository(Protocol):
         self, organization_id: UUID, connection_id: UUID
     ) -> IntegrationConnection | None: ...
 
-    async def get_connection_by_id(
-        self, connection_id: UUID
-    ) -> IntegrationConnection | None: ...
+    async def get_connection_by_id(self, connection_id: UUID) -> IntegrationConnection | None: ...
 
-    async def list_connections(
-        self, organization_id: UUID
-    ) -> list[IntegrationConnection]: ...
+    async def list_connections(self, organization_id: UUID) -> list[IntegrationConnection]: ...
 
-    async def update_connection(
-        self, value: IntegrationConnection
-    ) -> IntegrationConnection: ...
+    async def update_connection(self, value: IntegrationConnection) -> IntegrationConnection: ...
 
     async def active_connections(
         self,
@@ -124,9 +127,7 @@ class IntegrationRepository(Protocol):
 
     async def add_job(self, value: IntegrationJob) -> IntegrationJob: ...
 
-    async def get_job(
-        self, organization_id: UUID, job_id: UUID
-    ) -> IntegrationJob | None: ...
+    async def get_job(self, organization_id: UUID, job_id: UUID) -> IntegrationJob | None: ...
 
     async def mark_job_succeeded(
         self,
@@ -137,6 +138,8 @@ class IntegrationRepository(Protocol):
         provider_request_id: str | None,
         started_at: datetime,
         duration_ms: int,
+        external_number: str | None = None,
+        external_url: str | None = None,
         now: datetime | None = None,
     ) -> None: ...
 

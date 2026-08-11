@@ -1,0 +1,1 @@
+"""Fiscal persistence adapters."""

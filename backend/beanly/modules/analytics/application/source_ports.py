@@ -42,6 +42,28 @@ class AnalyticsSaleSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class AnalyticsRefundItemSnapshot:
+    product_id: UUID
+    product_variant_id: UUID
+    product_name: str
+    variant_name: str
+    quantity: int
+    amount: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class AnalyticsRefundSnapshot:
+    refund_id: UUID
+    organization_id: UUID
+    location_id: UUID
+    completed_at: datetime
+    timezone: str
+    currency_code: str
+    amount: Decimal
+    items: tuple[AnalyticsRefundItemSnapshot, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class AnalyticsInventoryLineSnapshot:
     inventory_item_id: UUID
     inventory_item_name: str
@@ -82,9 +104,9 @@ class AnalyticsBackfillSource:
 
 
 class AnalyticsSourceReader(Protocol):
-    async def sale(
-        self, organization_id: UUID, payment_id: UUID
-    ) -> AnalyticsSaleSnapshot: ...
+    async def sale(self, organization_id: UUID, payment_id: UUID) -> AnalyticsSaleSnapshot: ...
+
+    async def refund(self, organization_id: UUID, refund_id: UUID) -> AnalyticsRefundSnapshot: ...
 
     async def inventory_transaction(
         self, organization_id: UUID, transaction_id: UUID

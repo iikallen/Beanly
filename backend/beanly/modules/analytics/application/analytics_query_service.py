@@ -49,9 +49,7 @@ _HUNDRED = Decimal(100)
 
 
 class AnalyticsQueryService:
-    def __init__(
-        self, repository: AnalyticsRepository, organizations: OrganizationService
-    ) -> None:
+    def __init__(self, repository: AnalyticsRepository, organizations: OrganizationService) -> None:
         self.repository = repository
         self.organizations = organizations
 
@@ -69,25 +67,29 @@ class AnalyticsQueryService:
         )
         currency = await self.repository.organization_currency(context.organization_id)
         data_as_of = await self.repository.data_as_of(context.organization_id)
-        average_check = _divide(aggregate.revenue, aggregate.paid_orders) or Decimal(0)
+        net_revenue = aggregate.revenue - aggregate.refund_amount
+        average_check = _divide(net_revenue, aggregate.paid_orders) or Decimal(0)
         finance = Permission.FINANCE_READ in context.permissions
-        gross_profit = aggregate.revenue - aggregate.cogs
+        gross_profit = net_revenue - aggregate.cogs
         return AnalyticsOverview(
             context.organization_id,
             location_id,
             date_from,
             date_to,
             currency,
-            _amount(aggregate.revenue),
+            _amount(net_revenue),
             aggregate.paid_orders,
             aggregate.items_sold,
             average_check,
             _amount(aggregate.cogs) if finance else None,
             _amount(gross_profit) if finance else None,
-            _percent(gross_profit, aggregate.revenue) if finance else None,
+            _percent(gross_profit, net_revenue) if finance else None,
             _amount(aggregate.inventory_losses) if finance else None,
             aggregate.incomplete_cogs_orders if finance else None,
             data_as_of,
+            _amount(aggregate.revenue),
+            _amount(aggregate.refund_amount),
+            _amount(net_revenue),
         )
 
     async def products(
@@ -140,11 +142,12 @@ class AnalyticsQueryService:
             ProductSort.REVENUE,
             None,
         )
-        total = sum((row.revenue for row in products), Decimal(0))
+        total = sum((row.revenue - row.refund_amount for row in products), Decimal(0))
         cumulative = Decimal(0)
         rows: list[ABCRow] = []
         for product in products:
-            share = _percent(product.revenue, total) or Decimal(0)
+            net_revenue = product.revenue - product.refund_amount
+            share = _percent(net_revenue, total) or Decimal(0)
             cumulative = _amount(cumulative + share)
             class_ = (
                 ABCClass.A
@@ -157,7 +160,7 @@ class AnalyticsQueryService:
                 ABCRow(
                     product.product_id,
                     product.name,
-                    _amount(product.revenue),
+                    _amount(net_revenue),
                     share,
                     cumulative,
                     class_,
@@ -178,9 +181,7 @@ class AnalyticsQueryService:
     ) -> MenuEngineeringAnalytics:
         _range(date_from, date_to)
         if Permission.FINANCE_READ not in context.permissions:
-            raise AnalyticsFinancialAccessDenied(
-                "finance.read is required for menu engineering"
-            )
+            raise AnalyticsFinancialAccessDenied("finance.read is required for menu engineering")
         scope = await self._scope(context, location_id)
         products = tuple(
             row
@@ -197,7 +198,8 @@ class AnalyticsQueryService:
         )
         total_quantity = sum(row.quantity_sold for row in products)
         total_profit = sum(
-            (row.revenue - row.cogs for row in products), Decimal(0)
+            (row.revenue - row.refund_amount - row.cogs for row in products),
+            Decimal(0),
         )
         count = len(products)
         expected = _amount(_HUNDRED / count) if count else Decimal(0)
@@ -230,9 +232,7 @@ class AnalyticsQueryService:
     ) -> HourAnalytics:
         _range(date_from, date_to)
         scope = await self._scope(context, location_id)
-        raw = await self.repository.hours(
-            context.organization_id, date_from, date_to, scope
-        )
+        raw = await self.repository.hours(context.organization_id, date_from, date_to, scope)
         values: defaultdict[tuple[int, int], Decimal] = defaultdict(Decimal)
         for row in raw:
             value = {
@@ -299,20 +299,20 @@ class AnalyticsQueryService:
         _range(date_from, date_to)
         scope = await self._scope(context, None)
         finance = Permission.FINANCE_READ in context.permissions
-        values = await self.repository.locations(
-            context.organization_id, date_from, date_to, scope
-        )
-        revenues = _ranks({row.location_id: row.revenue for row in values})
+        values = await self.repository.locations(context.organization_id, date_from, date_to, scope)
+        revenues = _ranks({row.location_id: row.revenue - row.refund_amount for row in values})
         orders = _ranks({row.location_id: Decimal(row.paid_orders) for row in values})
         averages = _ranks(
             {
-                row.location_id: _divide(row.revenue, row.paid_orders) or Decimal(0)
+                row.location_id: _divide(row.revenue - row.refund_amount, row.paid_orders)
+                or Decimal(0)
                 for row in values
             }
         )
         profits = {
             row.location_id: (
                 row.revenue
+                - row.refund_amount
                 - row.cogs
                 - row.operating_expenses
                 - row.inventory_losses
@@ -321,7 +321,10 @@ class AnalyticsQueryService:
             for row in values
         }
         margins = {
-            row.location_id: _percent(row.revenue - row.cogs, row.revenue)
+            row.location_id: _percent(
+                row.revenue - row.refund_amount - row.cogs,
+                row.revenue - row.refund_amount,
+            )
             or Decimal(0)
             for row in values
         }
@@ -331,12 +334,12 @@ class AnalyticsQueryService:
             LocationAnalyticsRow(
                 row.location_id,
                 row.location_name,
-                _amount(row.revenue),
+                _amount(row.revenue - row.refund_amount),
                 row.paid_orders,
                 row.items_sold,
-                _divide(row.revenue, row.paid_orders) or Decimal(0),
+                _divide(row.revenue - row.refund_amount, row.paid_orders) or Decimal(0),
                 _amount(row.cogs) if finance else None,
-                _amount(row.revenue - row.cogs) if finance else None,
+                _amount(row.revenue - row.refund_amount - row.cogs) if finance else None,
                 margins[row.location_id] if finance else None,
                 _amount(row.operating_expenses) if finance else None,
                 _amount(profits[row.location_id]) if finance else None,
@@ -345,16 +348,21 @@ class AnalyticsQueryService:
                 averages[row.location_id],
                 margin_ranks[row.location_id] if finance else None,
                 profit_ranks[row.location_id] if finance else None,
+                _amount(row.revenue),
+                _amount(row.refund_amount),
+                _amount(row.revenue - row.refund_amount),
             )
-            for row in sorted(values, key=lambda value: (-value.revenue, str(value.location_id)))
+            for row in sorted(
+                values,
+                key=lambda value: (
+                    -(value.revenue - value.refund_amount),
+                    str(value.location_id),
+                ),
+            )
         )
-        return LocationAnalytics(
-            rows, await self.repository.data_as_of(context.organization_id)
-        )
+        return LocationAnalytics(rows, await self.repository.data_as_of(context.organization_id))
 
-    async def _scope(
-        self, context: TenantContext, location_id: UUID | None
-    ) -> set[UUID] | None:
+    async def _scope(self, context: TenantContext, location_id: UUID | None) -> set[UUID] | None:
         if location_id is not None:
             try:
                 await self.organizations.ensure_location_access(context, location_id)
@@ -370,25 +378,33 @@ class AnalyticsQueryService:
 
 
 def _product(row, finance: bool) -> ProductAnalyticsRow:
-    profit = row.revenue - row.cogs
+    net = row.revenue - row.refund_amount
+    profit = net - row.cogs
     return ProductAnalyticsRow(
         row.product_id,
         row.product_variant_id,
         row.name,
         row.variant_name,
         row.quantity_sold,
-        _amount(row.revenue),
+        _amount(net),
         row.orders,
         _amount(row.cogs) if finance else None,
         _amount(profit) if finance else None,
-        _percent(profit, row.revenue) if finance else None,
+        _percent(profit, net) if finance else None,
         row.incomplete_cogs_orders if finance else None,
+        _amount(row.revenue),
+        _amount(row.refund_amount),
+        _amount(net),
+        row.refunded_quantity,
+        row.quantity_sold - row.refunded_quantity,
+        row.refund_orders,
     )
 
 
 def _menu_row(row, total_quantity, popularity_threshold, margin_threshold):
     popularity = _percent(Decimal(row.quantity_sold), Decimal(total_quantity)) or Decimal(0)
-    contribution = _divide(row.revenue - row.cogs, row.quantity_sold) or Decimal(0)
+    net_revenue = row.revenue - row.refund_amount
+    contribution = _divide(net_revenue - row.cogs, row.quantity_sold) or Decimal(0)
     high_popularity = popularity >= popularity_threshold
     high_margin = contribution >= margin_threshold
     classification = {
@@ -401,11 +417,11 @@ def _menu_row(row, total_quantity, popularity_threshold, margin_threshold):
         row.product_id,
         row.name,
         row.quantity_sold,
-        _amount(row.revenue),
+        _amount(net_revenue),
         row.orders,
         popularity,
         contribution,
-        _percent(row.revenue - row.cogs, row.revenue),
+        _percent(net_revenue - row.cogs, net_revenue),
         classification,
     )
 

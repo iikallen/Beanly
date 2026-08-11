@@ -151,6 +151,10 @@ async def test_0018_integrations_upgrade_contract_downgrade_and_reupgrade() -> N
         assert reupgraded["revision"] == "0018_integrations"
         assert INTEGRATION_TABLES <= reupgraded["tables"]
 
+        # Keep the historical migration contract above exact, then use the
+        # current head for current ORM/repository behavior.
+        await asyncio.to_thread(command.upgrade, config, "head")
+
         user_id = uuid4()
         organization_id = uuid4()
         location_id = uuid4()

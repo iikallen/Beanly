@@ -474,6 +474,141 @@ export type Payment = {
   lines: PaymentLine[];
 };
 
+export type RefundReason =
+  | "QUALITY_ISSUE"
+  | "WRONG_ITEM"
+  | "ORDER_ERROR"
+  | "CUSTOMER_RETURN"
+  | "DUPLICATE_PAYMENT"
+  | "GOODWILL"
+  | "OTHER";
+
+export type RefundStatus = "PENDING" | "COMPLETED" | "FAILED";
+export type RefundFiscalStatus = "NOT_CONFIGURED" | "PENDING" | "PROCESSING" | "RETRYING" | "SUCCESS" | "DEAD";
+
+export type RefundRequestLine = {
+  order_item_id: string;
+  quantity: number;
+  restock_quantity: number;
+};
+
+export type RefundPaymentRequestLine = {
+  original_payment_line_id: string;
+  amount_minor: string;
+  external_refund_confirmed?: boolean;
+  reference?: string | null;
+};
+
+export type RefundPreviewRequest = {
+  payment_id: string;
+  reason: RefundReason;
+  note?: string | null;
+  lines: RefundRequestLine[];
+  payment_lines: RefundPaymentRequestLine[];
+};
+
+export type RefundPreview = {
+  payment_id: string;
+  order_id: string;
+  currency_code: string;
+  total_amount_minor: string;
+  lines: Array<{
+    order_item_id: string;
+    product_name: string;
+    variant_name: string;
+    original_quantity: number;
+    already_refunded_quantity: number;
+    available_quantity: number;
+    quantity: number;
+    restock_quantity: number;
+    unit_refund_minor: string;
+    total_refund_minor: string;
+  }>;
+  payment_lines: Array<{
+    original_payment_line_id: string;
+    method: PaymentMethod;
+    original_amount_minor: string;
+    already_refunded_minor: string;
+    available_amount_minor: string;
+    amount_minor: string;
+  }>;
+};
+
+export type Refund = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  order_id: string;
+  payment_id: string;
+  client_refund_id: string;
+  status: RefundStatus;
+  reason: RefundReason;
+  note: string | null;
+  currency_code: string;
+  total_amount_minor: string;
+  inventory_transaction_id: string | null;
+  cogs_reversal_amount: string;
+  cogs_quality_status: "COMPLETE" | "INCOMPLETE" | "ESTIMATED" | null;
+  created_by_user_id: string;
+  created_at: string;
+  completed_by_user_id: string | null;
+  completed_at: string | null;
+  failure_code: string | null;
+  fiscal_status: RefundFiscalStatus;
+  fiscal_external_number: string | null;
+  fiscal_external_url: string | null;
+  lines: Array<{
+    id: string;
+    order_item_id: string;
+    quantity: number;
+    restock_quantity: number;
+    unit_refund_minor: string;
+    total_refund_minor: string;
+  }>;
+  payment_lines: Array<{
+    id: string;
+    original_payment_line_id: string;
+    method: PaymentMethod;
+    amount_minor: string;
+    external_refund_confirmed: boolean;
+    reference: string | null;
+  }>;
+};
+
+export type FiscalTaxProfile = {
+  id: string;
+  organization_id: string;
+  country_code: string;
+  tax_regime_code: string;
+  vat_registered: boolean;
+  default_vat_rate: string | null;
+  effective_from: string;
+  effective_to: string | null;
+  created_by: string;
+  created_at: string;
+};
+
+export type FiscalVariantProfile = {
+  id: string;
+  organization_id: string;
+  product_variant_id: string;
+  fiscal_name: string;
+  nkt_code: string | null;
+  nkt_code_type: string | null;
+  fiscal_unit_code: string;
+  vat_rate_override: string | null;
+  requires_marking: boolean;
+  updated_at: string;
+};
+
+export type FiscalReadiness = {
+  ready: boolean;
+  readiness_percent: number;
+  tax_profile: "COMPLETE" | "MISSING";
+  location: "COMPLETE" | "MISSING";
+  unmapped_variants: Array<{ variant_id: string; name: string; reason: string }>;
+};
+
 export type WarehouseResponse = {
   id: string;
   organization_id: string;
@@ -950,6 +1085,9 @@ export type DashboardOverview = {
   };
   sales: {
     revenue: DashboardMetric<string>;
+    gross_sales_minor: string;
+    refund_amount_minor: string;
+    net_sales_minor: string;
     paid_orders: DashboardMetric<number>;
     average_check: DashboardMetric<string>;
     open_orders: number;
@@ -989,12 +1127,18 @@ export type DashboardOverview = {
   trend: Array<{
     bucket_start: string;
     revenue: string;
+    gross_sales_minor: string;
+    refund_amount_minor: string;
+    net_sales_minor: string;
     orders: number;
   }>;
   locations: Array<{
     location_id: string;
     location_name: string;
     revenue: string;
+    gross_sales_minor: string;
+    refund_amount_minor: string;
+    net_sales_minor: string;
     paid_orders: number;
     average_check: string;
     operating_profit: string | null;
@@ -1015,6 +1159,9 @@ export type AnalyticsOverview = {
   date_to: string;
   currency_code: string;
   revenue: string;
+  gross_revenue: string;
+  refund_amount: string;
+  net_revenue: string;
   paid_orders: number;
   items_sold: number;
   average_check: string;
@@ -1033,6 +1180,11 @@ export type AnalyticsProductRow = {
   variant_name: string | null;
   quantity_sold: number;
   revenue: string;
+  gross_revenue: string;
+  refund_amount: string;
+  net_revenue: string;
+  refunded_quantity: number;
+  refund_orders: number;
   orders: number;
   cogs: string | null;
   gross_profit: string | null;
@@ -1106,6 +1258,9 @@ export type AnalyticsLocations = {
     location_id: string;
     location_name: string;
     revenue: string;
+    gross_revenue: string;
+    refund_amount: string;
+    net_revenue: string;
     paid_orders: number;
     items_sold: number;
     average_check: string;
@@ -2100,6 +2255,74 @@ export const api = {
   }),
   listPaymentMethods: (organizationId: string, accessToken: string) =>
     request<PaymentMethodChoice[]>("/api/v1/payments/methods", {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  listPayments: (
+    organizationId: string,
+    accessToken: string,
+    filters: { locationId?: string; shiftId?: string; dateFrom?: string; dateTo?: string; method?: PaymentMethod } = {},
+  ) => request<Payment[]>(`/api/v1/payments?${operationFilters(filters)}`, {
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  previewRefund: (input: RefundPreviewRequest, organizationId: string, accessToken: string) =>
+    request<RefundPreview>("/api/v1/refunds/preview", {
+      method: "POST",
+      body: JSON.stringify(input),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  createRefund: (
+    input: RefundPreviewRequest & { client_refund_id: string },
+    organizationId: string,
+    accessToken: string,
+  ) => request<Refund>("/api/v1/refunds", {
+    method: "POST",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  listRefunds: (
+    organizationId: string,
+    accessToken: string,
+    filters: { locationId?: string; orderId?: string; paymentId?: string; status?: RefundStatus; dateFrom?: string; dateTo?: string } = {},
+  ) => request<Refund[]>(`/api/v1/refunds?${operationFilters(filters)}`, {
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  getRefund: (refundId: string, organizationId: string, accessToken: string) =>
+    request<Refund>(`/api/v1/refunds/${refundId}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  listPaymentRefunds: (paymentId: string, organizationId: string, accessToken: string) =>
+    request<Refund[]>(`/api/v1/payments/${paymentId}/refunds`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  getFiscalTaxProfile: (organizationId: string, accessToken: string) =>
+    request<FiscalTaxProfile>("/api/v1/fiscal/tax-profile", {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  updateFiscalTaxProfile: (
+    input: Pick<FiscalTaxProfile, "country_code" | "tax_regime_code" | "vat_registered" | "default_vat_rate" | "effective_from">,
+    organizationId: string,
+    accessToken: string,
+  ) => request<FiscalTaxProfile>("/api/v1/fiscal/tax-profile", {
+    method: "PUT",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  getFiscalVariantProfile: (variantId: string, organizationId: string, accessToken: string) =>
+    request<FiscalVariantProfile>(`/api/v1/fiscal/variants/${variantId}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  updateFiscalVariantProfile: (
+    variantId: string,
+    input: Pick<FiscalVariantProfile, "fiscal_name" | "nkt_code" | "nkt_code_type" | "fiscal_unit_code" | "vat_rate_override" | "requires_marking">,
+    organizationId: string,
+    accessToken: string,
+  ) => request<FiscalVariantProfile>(`/api/v1/fiscal/variants/${variantId}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  getFiscalReadiness: (organizationId: string, accessToken: string) =>
+    request<FiscalReadiness>("/api/v1/fiscal/readiness", {
       headers: tenantAuthorization(organizationId, accessToken),
     }),
   listSuppliers: (

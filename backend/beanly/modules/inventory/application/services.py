@@ -548,14 +548,19 @@ class InventoryService:
         if original is None:
             raise InventoryNotFound
         await self._warehouse(context, original.warehouse_id)
-        if original.reference_type in {
-            "ORDER",
-            "GOODS_RECEIPT",
-            "WRITE_OFF",
-            "INVENTORY_COUNT",
-            "TRANSFER",
-            "SUPPLIER_RETURN",
-        } and not allow_source_controlled:
+        if (
+            original.reference_type
+            in {
+                "ORDER",
+                "GOODS_RECEIPT",
+                "WRITE_OFF",
+                "INVENTORY_COUNT",
+                "TRANSFER",
+                "SUPPLIER_RETURN",
+                "REFUND",
+            }
+            and not allow_source_controlled
+        ):
             raise SourceControlledTransaction("SOURCE_CONTROLLED_TRANSACTION")
         if original.status == InventoryTransactionStatus.REVERSED:
             existing = await self.repository.get_reversal(context.organization_id, original.id)
@@ -918,9 +923,7 @@ class InventoryService:
     async def get_item_for_operation(
         self, organization_id: UUID, item_id: UUID, *, include_inactive: bool = False
     ) -> InventoryItem:
-        return await self._item(
-            organization_id, item_id, include_inactive=include_inactive
-        )
+        return await self._item(organization_id, item_id, include_inactive=include_inactive)
 
     async def lock_operation_balances(
         self,
@@ -981,6 +984,7 @@ class InventoryService:
         except OrganizationAccessDenied as exc:
             raise InventoryNotFound from exc
 
+
 def _name(value: str) -> str:
     normalized = value.strip()
     if not normalized or len(normalized) > 150:
@@ -1033,6 +1037,7 @@ def _reference(value: str | None, reference_id: UUID | None) -> tuple[str | None
         "TRANSFER",
         "WRITE_OFF",
         "SUPPLIER_RETURN",
+        "REFUND",
     }:
         raise ValueError("Unsupported inventory reference type")
     return normalized, reference_id

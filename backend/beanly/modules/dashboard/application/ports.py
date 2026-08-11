@@ -11,6 +11,9 @@ from beanly.modules.dashboard.application.dto import (
     LocationSalesRow,
     NegativeStockItem,
     PaymentMixRow,
+    RefundAggregate,
+    RefundLocationRow,
+    RefundTrendRow,
     SalesAggregate,
     ScopeLocation,
     TrendPoint,
@@ -60,6 +63,31 @@ class PaymentsDashboardPort(Protocol):
         date_from: datetime,
         date_to: datetime,
     ) -> tuple[PaymentMixRow, ...]: ...
+
+
+class RefundsDashboardPort(Protocol):
+    async def summary(
+        self,
+        organization_id: UUID,
+        location_ids: tuple[UUID, ...],
+        date_from: datetime,
+        date_to: datetime,
+    ) -> RefundAggregate: ...
+
+    async def trend(
+        self,
+        organization_id: UUID,
+        location_ids: tuple[UUID, ...],
+        buckets: tuple[tuple[datetime, datetime], ...],
+    ) -> tuple[RefundTrendRow, ...]: ...
+
+    async def locations(
+        self,
+        organization_id: UUID,
+        location_ids: tuple[UUID, ...],
+        date_from: datetime,
+        date_to: datetime,
+    ) -> tuple[RefundLocationRow, ...]: ...
 
 
 class InventoryDashboardPort(Protocol):

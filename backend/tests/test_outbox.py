@@ -62,12 +62,14 @@ from beanly.modules.purchasing.domain.events import (
     SupplierReturnPosted,
     SupplierReturnReversed,
 )
+from beanly.modules.refunds.domain.events import RefundCompleted
 
 
 def _event_contracts() -> tuple[tuple[object, str, str, UUID], ...]:
     organization_id = uuid4()
     location_id = uuid4()
     payment_id = uuid4()
+    refund_id = uuid4()
     order_id = uuid4()
     transaction_id = uuid4()
     reversal_id = uuid4()
@@ -210,6 +212,22 @@ def _event_contracts() -> tuple[tuple[object, str, str, UUID], ...]:
             "payment.completed",
             "payment",
             payment_id,
+        ),
+        (
+            RefundCompleted(
+                refund_id,
+                organization_id,
+                location_id,
+                order_id,
+                payment_id,
+                180000,
+                Decimal("307.000000"),
+                "COMPLETE",
+                datetime(2026, 8, 10, 3, 4, 5, tzinfo=UTC),
+            ),
+            "refund.completed",
+            "refund",
+            refund_id,
         ),
         (
             InventoryTransactionPosted(organization_id, transaction_id),

@@ -164,6 +164,11 @@ async def test_0017_analytics_upgrade_contract_downgrade_and_reupgrade() -> None
         assert reupgraded["revision"] == "0017_analytics_read_models"
         assert ANALYTICS_TABLES <= reupgraded["tables"]
 
+        # The schema assertions above intentionally target the historical 0017
+        # boundary. Exercise the current repository only after upgrading to the
+        # current head so its mapped columns match the database.
+        await asyncio.to_thread(command.upgrade, config, "head")
+
         user_id = uuid4()
         organization_id = uuid4()
         location_id = uuid4()

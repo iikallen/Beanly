@@ -68,9 +68,7 @@ class SqlAlchemyAnalyticsRepository:
                 source_occurred_at=source_occurred_at,
                 projected_at=datetime.now(UTC),
             )
-            .on_conflict_do_nothing(
-                index_elements=("projection_name", "source_type", "source_id")
-            )
+            .on_conflict_do_nothing(index_elements=("projection_name", "source_type", "source_id"))
             .returning(AnalyticsProjectionReceiptModel.source_id)
         )
         return (await self.session.scalar(statement)) is not None
@@ -84,11 +82,9 @@ class SqlAlchemyAnalyticsRepository:
                 set_={
                     "revenue_amount": AnalyticsSalesDailyModel.revenue_amount
                     + excluded.revenue_amount,
-                    "paid_orders": AnalyticsSalesDailyModel.paid_orders
-                    + excluded.paid_orders,
+                    "paid_orders": AnalyticsSalesDailyModel.paid_orders + excluded.paid_orders,
                     "items_sold": AnalyticsSalesDailyModel.items_sold + excluded.items_sold,
-                    "cogs_amount": AnalyticsSalesDailyModel.cogs_amount
-                    + excluded.cogs_amount,
+                    "cogs_amount": AnalyticsSalesDailyModel.cogs_amount + excluded.cogs_amount,
                     "incomplete_cogs_orders": AnalyticsSalesDailyModel.incomplete_cogs_orders
                     + excluded.incomplete_cogs_orders,
                     "dine_in_orders": AnalyticsSalesDailyModel.dine_in_orders
@@ -97,6 +93,11 @@ class SqlAlchemyAnalyticsRepository:
                     + excluded.takeaway_orders,
                     "delivery_orders": AnalyticsSalesDailyModel.delivery_orders
                     + excluded.delivery_orders,
+                    "refund_amount": AnalyticsSalesDailyModel.refund_amount
+                    + excluded.refund_amount,
+                    "refund_count": AnalyticsSalesDailyModel.refund_count + excluded.refund_count,
+                    "refunded_items": AnalyticsSalesDailyModel.refunded_items
+                    + excluded.refunded_items,
                     "updated_at": excluded.updated_at,
                 },
             )
@@ -126,6 +127,12 @@ class SqlAlchemyAnalyticsRepository:
                         AnalyticsProductSalesDailyModel.incomplete_cogs_orders
                         + excluded.incomplete_cogs_orders
                     ),
+                    "refund_amount": AnalyticsProductSalesDailyModel.refund_amount
+                    + excluded.refund_amount,
+                    "refunded_quantity": AnalyticsProductSalesDailyModel.refunded_quantity
+                    + excluded.refunded_quantity,
+                    "refund_orders": AnalyticsProductSalesDailyModel.refund_orders
+                    + excluded.refund_orders,
                     "updated_at": excluded.updated_at,
                 },
             )
@@ -145,11 +152,9 @@ class SqlAlchemyAnalyticsRepository:
                 set_={
                     "revenue_amount": AnalyticsHourlySalesModel.revenue_amount
                     + excluded.revenue_amount,
-                    "paid_orders": AnalyticsHourlySalesModel.paid_orders
-                    + excluded.paid_orders,
+                    "paid_orders": AnalyticsHourlySalesModel.paid_orders + excluded.paid_orders,
                     "items_sold": AnalyticsHourlySalesModel.items_sold + excluded.items_sold,
-                    "cogs_amount": AnalyticsHourlySalesModel.cogs_amount
-                    + excluded.cogs_amount,
+                    "cogs_amount": AnalyticsHourlySalesModel.cogs_amount + excluded.cogs_amount,
                     "updated_at": excluded.updated_at,
                 },
             )
@@ -167,6 +172,7 @@ class SqlAlchemyAnalyticsRepository:
             "inventory_losses",
             "inventory_gains",
             "incomplete_cogs_orders",
+            "refund_amount",
         )
         await self.session.execute(
             insert.on_conflict_do_update(
@@ -182,12 +188,8 @@ class SqlAlchemyAnalyticsRepository:
             )
         )
 
-    async def upsert_consumption(
-        self, delta: InventoryConsumptionDailyDelta
-    ) -> None:
-        insert = self._insert(AnalyticsInventoryConsumptionDailyModel).values(
-            **_values(delta)
-        )
+    async def upsert_consumption(self, delta: InventoryConsumptionDailyDelta) -> None:
+        insert = self._insert(AnalyticsInventoryConsumptionDailyModel).values(**_values(delta))
         excluded = insert.excluded
         columns = (
             "sale_quantity",
@@ -218,9 +220,7 @@ class SqlAlchemyAnalyticsRepository:
 
     async def organization_currency(self, organization_id: UUID) -> str:
         value = await self.session.scalar(
-            select(OrganizationModel.currency_code).where(
-                OrganizationModel.id == organization_id
-            )
+            select(OrganizationModel.currency_code).where(OrganizationModel.id == organization_id)
         )
         if value is None:
             raise ValueError("Organization not found")
@@ -240,6 +240,7 @@ class SqlAlchemyAnalyticsRepository:
             func.coalesce(func.sum(sales.items_sold), 0),
             func.coalesce(func.sum(sales.cogs_amount), 0),
             func.coalesce(func.sum(sales.incomplete_cogs_orders), 0),
+            func.coalesce(func.sum(sales.refund_amount), 0),
         ).where(
             sales.organization_id == organization_id,
             sales.local_date.between(date_from, date_to),
@@ -247,19 +248,20 @@ class SqlAlchemyAnalyticsRepository:
         statement = _locations(statement, sales.location_id, location_ids)
         row = (await self.session.execute(statement)).one()
         location = AnalyticsLocationMetricsDailyModel
-        loss_statement = select(
-            func.coalesce(func.sum(location.inventory_losses), 0)
-        ).where(
+        loss_statement = select(func.coalesce(func.sum(location.inventory_losses), 0)).where(
             location.organization_id == organization_id,
             location.local_date.between(date_from, date_to),
         )
-        loss_statement = _locations(
-            loss_statement, location.location_id, location_ids
-        )
+        loss_statement = _locations(loss_statement, location.location_id, location_ids)
         losses = await self.session.scalar(loss_statement)
         return OverviewAggregate(
-            Decimal(row[0]), int(row[1]), int(row[2]), Decimal(row[3]),
-            Decimal(losses or 0), int(row[4])
+            Decimal(row[0]),
+            int(row[1]),
+            int(row[2]),
+            Decimal(row[3]),
+            Decimal(losses or 0),
+            int(row[4]),
+            Decimal(row[5]),
         )
 
     async def products(
@@ -278,6 +280,9 @@ class SqlAlchemyAnalyticsRepository:
         cogs = func.sum(model.cogs_amount).label("cogs")
         orders = func.sum(model.orders_count).label("orders")
         incomplete = func.sum(model.incomplete_cogs_orders).label("incomplete")
+        refund = func.sum(model.refund_amount).label("refund")
+        refunded_quantity = func.sum(model.refunded_quantity).label("refunded_quantity")
+        refund_orders = func.sum(model.refund_orders).label("refund_orders")
         if group_by == ProductGroupBy.PRODUCT:
             keys = (model.product_id,)
             variant_id = None
@@ -296,15 +301,18 @@ class SqlAlchemyAnalyticsRepository:
             orders,
             cogs,
             incomplete,
+            refund,
+            refunded_quantity,
+            refund_orders,
         ).where(
             model.organization_id == organization_id,
             model.local_date.between(date_from, date_to),
         )
         statement = _locations(statement, model.location_id, location_ids).group_by(*keys)
         order = {
-            ProductSort.REVENUE: revenue,
+            ProductSort.REVENUE: revenue - refund,
             ProductSort.QUANTITY: quantity,
-            ProductSort.GROSS_PROFIT: revenue - cogs,
+            ProductSort.GROSS_PROFIT: revenue - refund - cogs,
         }[sort_by]
         statement = statement.order_by(order.desc(), model.product_id)
         if limit is not None:
@@ -312,8 +320,18 @@ class SqlAlchemyAnalyticsRepository:
         rows = await self.session.execute(statement)
         return tuple(
             ProductAggregate(
-                row[0], row[1], row[2], row[3], int(row[4]), Decimal(row[5]),
-                int(row[6]), Decimal(row[7]), int(row[8])
+                row[0],
+                row[1],
+                row[2],
+                row[3],
+                int(row[4]),
+                Decimal(row[5]),
+                int(row[6]),
+                Decimal(row[7]),
+                int(row[8]),
+                Decimal(row[9]),
+                int(row[10]),
+                int(row[11]),
             )
             for row in rows
         )
@@ -343,8 +361,7 @@ class SqlAlchemyAnalyticsRepository:
         )
         rows = await self.session.execute(statement)
         return tuple(
-            HourAggregate(row[0], row[1], Decimal(row[2]), int(row[3]), int(row[4]))
-            for row in rows
+            HourAggregate(row[0], row[1], Decimal(row[2]), int(row[3]), int(row[4])) for row in rows
         )
 
     async def consumption(
@@ -360,8 +377,11 @@ class SqlAlchemyAnalyticsRepository:
         sums = [
             func.sum(getattr(model, column))
             for column in (
-                "sale_quantity", "sale_cost_amount", "writeoff_quantity",
-                "writeoff_cost_amount", "adjustment_quantity"
+                "sale_quantity",
+                "sale_cost_amount",
+                "writeoff_quantity",
+                "writeoff_cost_amount",
+                "adjustment_quantity",
             )
         ]
         statement = select(
@@ -382,9 +402,7 @@ class SqlAlchemyAnalyticsRepository:
             statement.group_by(model.inventory_item_id).order_by(sums[1].desc())
         )
         return tuple(
-            ConsumptionAggregate(
-                row[0], row[1], row[2], *(Decimal(value) for value in row[3:])
-            )
+            ConsumptionAggregate(row[0], row[1], row[2], *(Decimal(value) for value in row[3:]))
             for row in rows
         )
 
@@ -396,28 +414,39 @@ class SqlAlchemyAnalyticsRepository:
         location_ids: set[UUID] | None,
     ) -> tuple[LocationAggregate, ...]:
         model = AnalyticsLocationMetricsDailyModel
-        statement = select(
-            model.location_id,
-            LocationModel.name,
-            func.sum(model.revenue_amount),
-            func.sum(model.paid_orders),
-            func.sum(model.items_sold),
-            func.sum(model.cogs_amount),
-            func.sum(model.operating_expenses),
-            func.sum(model.inventory_losses),
-            func.sum(model.inventory_gains),
-        ).join(LocationModel, LocationModel.id == model.location_id).where(
-            model.organization_id == organization_id,
-            model.local_date.between(date_from, date_to),
+        statement = (
+            select(
+                model.location_id,
+                LocationModel.name,
+                func.sum(model.revenue_amount),
+                func.sum(model.paid_orders),
+                func.sum(model.items_sold),
+                func.sum(model.cogs_amount),
+                func.sum(model.operating_expenses),
+                func.sum(model.inventory_losses),
+                func.sum(model.inventory_gains),
+                func.sum(model.refund_amount),
+            )
+            .join(LocationModel, LocationModel.id == model.location_id)
+            .where(
+                model.organization_id == organization_id,
+                model.local_date.between(date_from, date_to),
+            )
         )
         statement = _locations(statement, model.location_id, location_ids)
-        rows = await self.session.execute(
-            statement.group_by(model.location_id, LocationModel.name)
-        )
+        rows = await self.session.execute(statement.group_by(model.location_id, LocationModel.name))
         return tuple(
             LocationAggregate(
-                row[0], row[1], Decimal(row[2]), int(row[3]), int(row[4]),
-                Decimal(row[5]), Decimal(row[6]), Decimal(row[7]), Decimal(row[8])
+                row[0],
+                row[1],
+                Decimal(row[2]),
+                int(row[3]),
+                int(row[4]),
+                Decimal(row[5]),
+                Decimal(row[6]),
+                Decimal(row[7]),
+                Decimal(row[8]),
+                Decimal(row[9]),
             )
             for row in rows
         )
@@ -437,15 +466,12 @@ class SqlAlchemyAnalyticsRepository:
 
 
 def _values(value) -> dict[str, object]:
-    return {
-        field: getattr(value, field)
-        for field in value.__dataclass_fields__
-    } | {"updated_at": datetime.now(UTC)}
+    return {field: getattr(value, field) for field in value.__dataclass_fields__} | {
+        "updated_at": datetime.now(UTC)
+    }
 
 
-def _locations(
-    statement: Select, column, location_ids: set[UUID] | None
-) -> Select:
+def _locations(statement: Select, column, location_ids: set[UUID] | None) -> Select:
     if location_ids is None:
         return statement
     if not location_ids:

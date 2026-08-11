@@ -14,16 +14,16 @@ class BeanlyMetrics:
         self.db_errors = meter.create_counter("db.errors.total")
         self.db_pool_wait = meter.create_histogram("db.pool.wait", unit="ms")
         self.outbox_processed = meter.create_counter("outbox.events.processed.total")
-        self.integration_duration = meter.create_histogram(
-            "integration.job.duration", unit="ms"
-        )
+        self.integration_duration = meter.create_histogram("integration.job.duration", unit="ms")
         self.integration_retries = meter.create_counter("integration.retries.total")
-        self.integration_provider_errors = meter.create_counter(
-            "integration.provider.errors.total"
-        )
+        self.integration_provider_errors = meter.create_counter("integration.provider.errors.total")
         self.payment_completed = meter.create_counter("payment.completed.total")
         self.payment_failed = meter.create_counter("payment.failed.total")
         self.inventory_sales = meter.create_counter("inventory.sale.post.total")
+        self.refund_completed = meter.create_counter("refund.completed.total")
+        self.refund_failed = meter.create_counter("refund.failed.total")
+        self.refund_amount = meter.create_counter("refund.amount.minor.total")
+        self.fiscal_refund_jobs = meter.create_counter("fiscal.refund.jobs.total")
         self.negative_stock = meter.create_counter("inventory.negative_stock.total")
         self.pos_offline_sessions_started = meter.create_counter(
             "pos.offline.sessions.started.total"

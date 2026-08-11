@@ -26,6 +26,9 @@ class SalesDailyDelta:
     dine_in_orders: int
     takeaway_orders: int
     delivery_orders: int
+    refund_amount: Decimal = Decimal(0)
+    refund_count: int = 0
+    refunded_items: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +45,9 @@ class ProductSalesDailyDelta:
     revenue_amount: Decimal
     cogs_amount: Decimal
     incomplete_cogs_orders: int
+    refund_amount: Decimal = Decimal(0)
+    refunded_quantity: int = 0
+    refund_orders: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +75,7 @@ class LocationMetricsDailyDelta:
     inventory_losses: Decimal = Decimal(0)
     inventory_gains: Decimal = Decimal(0)
     incomplete_cogs_orders: int = 0
+    refund_amount: Decimal = Decimal(0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +111,9 @@ class AnalyticsOverview:
     inventory_losses: Decimal | None
     incomplete_cogs_orders: int | None
     data_as_of: datetime | None
+    gross_revenue: Decimal = Decimal(0)
+    refund_amount: Decimal = Decimal(0)
+    net_revenue: Decimal = Decimal(0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +129,12 @@ class ProductAnalyticsRow:
     gross_profit: Decimal | None
     gross_margin_percent: Decimal | None
     incomplete_cogs_orders: int | None
+    gross_revenue: Decimal = Decimal(0)
+    refund_amount: Decimal = Decimal(0)
+    net_revenue: Decimal = Decimal(0)
+    refunded_quantity: int = 0
+    net_quantity: int = 0
+    refund_orders: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,6 +246,9 @@ class LocationAnalyticsRow:
     average_check_rank: int
     gross_margin_rank: int | None
     operating_profit_rank: int | None
+    gross_revenue: Decimal = Decimal(0)
+    refund_amount: Decimal = Decimal(0)
+    net_revenue: Decimal = Decimal(0)
 
 
 @dataclass(frozen=True, slots=True)

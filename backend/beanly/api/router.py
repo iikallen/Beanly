@@ -4,6 +4,7 @@ from beanly.modules.analytics.api.router import router as analytics_router
 from beanly.modules.dashboard.api.router import router as dashboard_router
 from beanly.modules.employees.api.router import router as employees_router
 from beanly.modules.finance.api.router import router as finance_router
+from beanly.modules.fiscal.api.router import router as fiscal_router
 from beanly.modules.identity.api.router import router as auth_router
 from beanly.modules.integrations.api.oauth_router import router as integration_oauth_router
 from beanly.modules.integrations.api.router import router as integrations_router
@@ -17,6 +18,12 @@ from beanly.modules.organizations.api.router import router as organizations_rout
 from beanly.modules.organizations.api.team_router import router as team_router
 from beanly.modules.payments.api.router import router as payments_router
 from beanly.modules.purchasing.api.router import router as purchasing_router
+from beanly.modules.refunds.api.router import (
+    payments_refunds_router,
+)
+from beanly.modules.refunds.api.router import (
+    router as refunds_router,
+)
 from beanly.modules.sales.api.router import router as sales_router
 
 api_v1_router = APIRouter(prefix="/api/v1")
@@ -33,6 +40,9 @@ api_v1_router.include_router(team_router)
 api_v1_router.include_router(purchasing_router)
 api_v1_router.include_router(sales_router)
 api_v1_router.include_router(payments_router)
+api_v1_router.include_router(payments_refunds_router)
+api_v1_router.include_router(refunds_router)
+api_v1_router.include_router(fiscal_router)
 api_v1_router.include_router(finance_router)
 api_v1_router.include_router(dashboard_router)
 api_v1_router.include_router(analytics_router)

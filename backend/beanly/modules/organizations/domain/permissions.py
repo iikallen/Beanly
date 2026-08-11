@@ -54,6 +54,8 @@ class Permission(StrEnum):
     INTEGRATIONS_READ = "integrations.read"
     INTEGRATIONS_WRITE = "integrations.write"
     POS_DEVICE_MANAGE = "pos.device.manage"
+    FISCAL_READ = "fiscal.read"
+    FISCAL_WRITE = "fiscal.write"
 
 
 _ALL = frozenset(Permission)
@@ -108,6 +110,8 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.INTEGRATIONS_READ,
             Permission.INTEGRATIONS_WRITE,
             Permission.POS_DEVICE_MANAGE,
+            Permission.FISCAL_READ,
+            Permission.FISCAL_WRITE,
         }
     ),
     MembershipRole.MANAGER: frozenset(
@@ -138,6 +142,7 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.MENU_PRICE_WRITE,
             Permission.MENU_MODIFIER_WRITE,
             Permission.SALES_READ,
+            Permission.SALES_REFUND,
             Permission.SALES_REGISTER_MANAGE,
             Permission.SALES_SHIFT_MANAGE,
             Permission.SALES_CANCEL,
@@ -147,6 +152,7 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.ANALYTICS_READ,
             Permission.INTEGRATIONS_READ,
             Permission.POS_DEVICE_MANAGE,
+            Permission.FISCAL_READ,
         }
     ),
     MembershipRole.ACCOUNTANT: frozenset(
@@ -162,6 +168,8 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.FINANCE_WRITE,
             Permission.ANALYTICS_READ,
             Permission.INTEGRATIONS_READ,
+            Permission.FISCAL_READ,
+            Permission.FISCAL_WRITE,
         }
     ),
     MembershipRole.CASHIER: frozenset(

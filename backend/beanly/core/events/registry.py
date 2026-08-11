@@ -56,6 +56,7 @@ from beanly.modules.purchasing.domain.events import (
     SupplierReturnPosted,
     SupplierReturnReversed,
 )
+from beanly.modules.refunds.domain.events import RefundCompleted
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +68,7 @@ class EventSpec:
 
 
 EVENT_REGISTRY: dict[type[object], EventSpec] = {
+    RefundCompleted: EventSpec("refund.completed", 1, "refund", "refund_id"),
     PosDevicePaired: EventSpec("pos.device_paired", 1, "pos_device", "device_id"),
     PosDeviceRevoked: EventSpec("pos.device_revoked", 1, "pos_device", "device_id"),
     OfflineSessionStarted: EventSpec(
@@ -91,9 +93,7 @@ EVENT_REGISTRY: dict[type[object], EventSpec] = {
     IntegrationConnectionRevoked: EventSpec(
         "integration.connection_revoked", 1, "integration_connection", "connection_id"
     ),
-    IntegrationJobSucceeded: EventSpec(
-        "integration.job_succeeded", 1, "integration_job", "job_id"
-    ),
+    IntegrationJobSucceeded: EventSpec("integration.job_succeeded", 1, "integration_job", "job_id"),
     IntegrationJobDeadLettered: EventSpec(
         "integration.job_dead_lettered", 1, "integration_job", "job_id"
     ),
@@ -200,9 +200,7 @@ def to_envelope(
     if timestamp.utcoffset() is None:
         raise ValueError("occurred_at must include a timezone")
     organization_id = getattr(event, "organization_id", None)
-    aggregate_id = (
-        getattr(event, spec.aggregate_id_field) if spec.aggregate_id_field else None
-    )
+    aggregate_id = getattr(event, spec.aggregate_id_field) if spec.aggregate_id_field else None
     return EventEnvelope(
         event_id or uuid4(),
         organization_id,

@@ -42,9 +42,7 @@ class AnalyticsProjectionReceiptModel(Base):
     )
     source_event_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
     source_occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    projected_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now
-    )
+    projected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class AnalyticsSalesDailyModel(Base):
@@ -66,27 +64,22 @@ class AnalyticsSalesDailyModel(Base):
     revenue_amount: Mapped[Decimal] = mapped_column(
         Numeric(20, 6), default=Decimal(0), server_default=text("0")
     )
-    paid_orders: Mapped[int] = mapped_column(
-        BigInteger, default=0, server_default=text("0")
+    refund_amount: Mapped[Decimal] = mapped_column(
+        Numeric(20, 6), default=Decimal(0), server_default=text("0")
     )
-    items_sold: Mapped[int] = mapped_column(
-        BigInteger, default=0, server_default=text("0")
-    )
+    refund_count: Mapped[int] = mapped_column(BigInteger, default=0, server_default=text("0"))
+    refunded_items: Mapped[int] = mapped_column(BigInteger, default=0, server_default=text("0"))
+    paid_orders: Mapped[int] = mapped_column(BigInteger, default=0, server_default=text("0"))
+    items_sold: Mapped[int] = mapped_column(BigInteger, default=0, server_default=text("0"))
     cogs_amount: Mapped[Decimal] = mapped_column(
         Numeric(20, 6), default=Decimal(0), server_default=text("0")
     )
     incomplete_cogs_orders: Mapped[int] = mapped_column(
         BigInteger, default=0, server_default=text("0")
     )
-    dine_in_orders: Mapped[int] = mapped_column(
-        BigInteger, default=0, server_default=text("0")
-    )
-    takeaway_orders: Mapped[int] = mapped_column(
-        BigInteger, default=0, server_default=text("0")
-    )
-    delivery_orders: Mapped[int] = mapped_column(
-        BigInteger, default=0, server_default=text("0")
-    )
+    dine_in_orders: Mapped[int] = mapped_column(BigInteger, default=0, server_default=text("0"))
+    takeaway_orders: Mapped[int] = mapped_column(BigInteger, default=0, server_default=text("0"))
+    delivery_orders: Mapped[int] = mapped_column(BigInteger, default=0, server_default=text("0"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
@@ -114,15 +107,16 @@ class AnalyticsProductSalesDailyModel(Base):
     product_variant_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
     product_name: Mapped[str] = mapped_column(String(200))
     variant_name: Mapped[str] = mapped_column(String(100))
-    quantity_sold: Mapped[int] = mapped_column(
-        BigInteger, default=0, server_default=text("0")
-    )
-    orders_count: Mapped[int] = mapped_column(
-        BigInteger, default=0, server_default=text("0")
-    )
+    quantity_sold: Mapped[int] = mapped_column(BigInteger, default=0, server_default=text("0"))
+    orders_count: Mapped[int] = mapped_column(BigInteger, default=0, server_default=text("0"))
     revenue_amount: Mapped[Decimal] = mapped_column(
         Numeric(20, 6), default=Decimal(0), server_default=text("0")
     )
+    refund_amount: Mapped[Decimal] = mapped_column(
+        Numeric(20, 6), default=Decimal(0), server_default=text("0")
+    )
+    refunded_quantity: Mapped[int] = mapped_column(BigInteger, default=0, server_default=text("0"))
+    refund_orders: Mapped[int] = mapped_column(BigInteger, default=0, server_default=text("0"))
     cogs_amount: Mapped[Decimal] = mapped_column(
         Numeric(20, 6), default=Decimal(0), server_default=text("0")
     )
@@ -135,9 +129,7 @@ class AnalyticsProductSalesDailyModel(Base):
 class AnalyticsHourlySalesModel(Base):
     __tablename__ = "analytics_hourly_sales"
     __table_args__ = (
-        CheckConstraint(
-            "local_hour BETWEEN 0 AND 23", name="ck_an_hour_local_hour"
-        ),
+        CheckConstraint("local_hour BETWEEN 0 AND 23", name="ck_an_hour_local_hour"),
         Index("ix_an_hour_org_date", "organization_id", "local_date"),
     )
 
@@ -152,12 +144,8 @@ class AnalyticsHourlySalesModel(Base):
     revenue_amount: Mapped[Decimal] = mapped_column(
         Numeric(20, 6), default=Decimal(0), server_default=text("0")
     )
-    paid_orders: Mapped[int] = mapped_column(
-        BigInteger, default=0, server_default=text("0")
-    )
-    items_sold: Mapped[int] = mapped_column(
-        BigInteger, default=0, server_default=text("0")
-    )
+    paid_orders: Mapped[int] = mapped_column(BigInteger, default=0, server_default=text("0"))
+    items_sold: Mapped[int] = mapped_column(BigInteger, default=0, server_default=text("0"))
     cogs_amount: Mapped[Decimal] = mapped_column(
         Numeric(20, 6), default=Decimal(0), server_default=text("0")
     )
@@ -166,9 +154,7 @@ class AnalyticsHourlySalesModel(Base):
 
 class AnalyticsLocationMetricsDailyModel(Base):
     __tablename__ = "analytics_location_metrics_daily"
-    __table_args__ = (
-        Index("ix_an_location_org_date", "organization_id", "local_date"),
-    )
+    __table_args__ = (Index("ix_an_location_org_date", "organization_id", "local_date"),)
 
     organization_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
@@ -180,12 +166,11 @@ class AnalyticsLocationMetricsDailyModel(Base):
     revenue_amount: Mapped[Decimal] = mapped_column(
         Numeric(20, 6), default=Decimal(0), server_default=text("0")
     )
-    paid_orders: Mapped[int] = mapped_column(
-        BigInteger, default=0, server_default=text("0")
+    refund_amount: Mapped[Decimal] = mapped_column(
+        Numeric(20, 6), default=Decimal(0), server_default=text("0")
     )
-    items_sold: Mapped[int] = mapped_column(
-        BigInteger, default=0, server_default=text("0")
-    )
+    paid_orders: Mapped[int] = mapped_column(BigInteger, default=0, server_default=text("0"))
+    items_sold: Mapped[int] = mapped_column(BigInteger, default=0, server_default=text("0"))
     cogs_amount: Mapped[Decimal] = mapped_column(
         Numeric(20, 6), default=Decimal(0), server_default=text("0")
     )

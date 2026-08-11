@@ -25,6 +25,26 @@ class FinancePaymentSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class FinanceRefundPaymentLineSnapshot:
+    id: UUID
+    method: str
+    amount_minor: int
+
+
+@dataclass(frozen=True, slots=True)
+class FinanceRefundSnapshot:
+    refund_id: UUID
+    organization_id: UUID
+    location_id: UUID
+    currency_code: str
+    amount_minor: int
+    cogs_reversal_amount: Decimal
+    cogs_quality_status: str | None
+    completed_at: datetime
+    payment_lines: tuple[FinanceRefundPaymentLineSnapshot, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class FinanceSaleSnapshot:
     order_id: UUID
     organization_id: UUID
@@ -57,27 +77,22 @@ class FinanceCountSnapshot:
 
 
 class FinanceSourceReader(Protocol):
-    async def payment(self, organization_id: UUID, payment_id: UUID) -> FinancePaymentSnapshot:
-        ...
+    async def payment(self, organization_id: UUID, payment_id: UUID) -> FinancePaymentSnapshot: ...
 
-    async def sale(self, organization_id: UUID, order_id: UUID) -> FinanceSaleSnapshot:
-        ...
+    async def refund(self, organization_id: UUID, refund_id: UUID) -> FinanceRefundSnapshot: ...
+
+    async def sale(self, organization_id: UUID, order_id: UUID) -> FinanceSaleSnapshot: ...
 
     async def writeoff(
         self, organization_id: UUID, writeoff_id: UUID
-    ) -> FinanceWriteOffSnapshot:
-        ...
+    ) -> FinanceWriteOffSnapshot: ...
 
     async def count(
         self, organization_id: UUID, inventory_count_id: UUID
-    ) -> FinanceCountSnapshot:
-        ...
+    ) -> FinanceCountSnapshot: ...
 
-    async def paid_payment_ids(self) -> tuple[tuple[UUID, UUID], ...]:
-        ...
+    async def paid_payment_ids(self) -> tuple[tuple[UUID, UUID], ...]: ...
 
-    async def posted_writeoff_ids(self) -> tuple[tuple[UUID, UUID], ...]:
-        ...
+    async def posted_writeoff_ids(self) -> tuple[tuple[UUID, UUID], ...]: ...
 
-    async def posted_count_ids(self) -> tuple[tuple[UUID, UUID], ...]:
-        ...
+    async def posted_count_ids(self) -> tuple[tuple[UUID, UUID], ...]: ...

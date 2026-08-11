@@ -158,6 +158,74 @@ async def test_owner_admin_manager_and_barista_api_permissions(app_client, monke
     accountant_headers = {**accountant, "X-Organization-ID": organization_id}
     cashier_headers = {**cashier, "X-Organization-ID": organization_id}
 
+    refund_preview = {
+        "payment_id": str(uuid4()),
+        "reason": "OTHER",
+        "lines": [
+            {
+                "order_item_id": str(uuid4()),
+                "quantity": 1,
+                "restock_quantity": 0,
+            }
+        ],
+        "payment_lines": [
+            {"original_payment_line_id": str(uuid4()), "amount_minor": "1"}
+        ],
+    }
+    for headers in (owner_headers, admin_headers, manager_headers):
+        response = await client.post(
+            "/api/v1/refunds/preview", headers=headers, json=refund_preview
+        )
+        assert response.status_code == 404, response.text
+        assert response.json()["detail"]["code"] == "REFUND_NOT_FOUND"
+    for headers in (accountant_headers, cashier_headers, barista_headers):
+        assert (
+            await client.post(
+                "/api/v1/refunds/preview", headers=headers, json=refund_preview
+            )
+        ).status_code == 403
+
+    missing_refund_id = uuid4()
+    for headers in (owner_headers, admin_headers, manager_headers, accountant_headers):
+        response = await client.get(
+            f"/api/v1/refunds/{missing_refund_id}", headers=headers
+        )
+        assert response.status_code == 404, response.text
+    for headers in (cashier_headers, barista_headers):
+        assert (
+            await client.get(f"/api/v1/refunds/{missing_refund_id}", headers=headers)
+        ).status_code == 403
+
+    for headers in (owner_headers, admin_headers, manager_headers, accountant_headers):
+        response = await client.get("/api/v1/fiscal/tax-profile", headers=headers)
+        assert response.status_code == 404, response.text
+    for headers in (cashier_headers, barista_headers):
+        assert (
+            await client.get("/api/v1/fiscal/tax-profile", headers=headers)
+        ).status_code == 403
+
+    invalid_tax_profile = {
+        "country_code": "KZ",
+        "tax_regime_code": "VAT",
+        "vat_registered": True,
+        "default_vat_rate": None,
+        "effective_from": "2026-08-11",
+    }
+    for headers in (owner_headers, admin_headers, accountant_headers):
+        response = await client.put(
+            "/api/v1/fiscal/tax-profile", headers=headers, json=invalid_tax_profile
+        )
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"]["code"] == "INVALID_TAX_PROFILE"
+    for headers in (manager_headers, cashier_headers, barista_headers):
+        assert (
+            await client.put(
+                "/api/v1/fiscal/tax-profile",
+                headers=headers,
+                json=invalid_tax_profile,
+            )
+        ).status_code == 403
+
     for headers, role in (
         (owner_headers, "Owner"),
         (admin_headers, "Admin"),

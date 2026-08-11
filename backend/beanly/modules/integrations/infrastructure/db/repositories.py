@@ -138,15 +138,11 @@ class SqlAlchemyIntegrationRepository:
             )
         )
         if location_id is not None:
-            statement = statement.where(
-                IntegrationLocationBindingModel.location_id == location_id
-            )
+            statement = statement.where(IntegrationLocationBindingModel.location_id == location_id)
         rows = (await self.session.execute(statement)).all()
         return [(to_connection(connection), bound_location) for connection, bound_location in rows]
 
-    async def upsert_binding(
-        self, value: IntegrationLocationBinding
-    ) -> IntegrationLocationBinding:
+    async def upsert_binding(self, value: IntegrationLocationBinding) -> IntegrationLocationBinding:
         model = await self.session.scalar(
             select(IntegrationLocationBindingModel).where(
                 IntegrationLocationBindingModel.connection_id == value.connection_id,
@@ -291,6 +287,8 @@ class SqlAlchemyIntegrationRepository:
         provider_request_id: str | None,
         started_at: datetime,
         duration_ms: int,
+        external_number: str | None = None,
+        external_url: str | None = None,
         now: datetime | None = None,
     ) -> None:
         timestamp = _utc(now)
@@ -299,6 +297,8 @@ class SqlAlchemyIntegrationRepository:
         attempt_number = await self._next_attempt_number(model.id)
         model.status = IntegrationJobStatus.SUCCESS.value
         model.external_id = external_id
+        model.external_number = external_number
+        model.external_url = external_url
         model.completed_at = timestamp
         model.locked_by = None
         model.locked_until = None
@@ -332,9 +332,7 @@ class SqlAlchemyIntegrationRepository:
         model.attempts += 1
         attempt_number = await self._next_attempt_number(model.id)
         code = str(getattr(error, "code", type(error).__name__))[:100]
-        message = str(
-            getattr(error, "public_message", "Provider request failed")
-        )[:1000]
+        message = str(getattr(error, "public_message", "Provider request failed"))[:1000]
         model.last_error_code = code
         model.last_error_message = message
         model.locked_by = None
@@ -342,9 +340,7 @@ class SqlAlchemyIntegrationRepository:
         if temporary and model.attempts < max_attempts:
             model.status = IntegrationJobStatus.RETRYING.value
             ceiling = min(2 ** (model.attempts - 1), 300)
-            model.available_at = timestamp + timedelta(
-                seconds=self._jitter(ceiling / 2, ceiling)
-            )
+            model.available_at = timestamp + timedelta(seconds=self._jitter(ceiling / 2, ceiling))
         else:
             model.status = IntegrationJobStatus.DEAD.value
             model.dead_lettered_at = timestamp
@@ -561,9 +557,7 @@ class SqlAlchemyIntegrationRepository:
             model.dead_lettered_at = timestamp
         else:
             ceiling = min(2 ** (model.attempts - 1), 300)
-            model.available_at = timestamp + timedelta(
-                seconds=self._jitter(ceiling / 2, ceiling)
-            )
+            model.available_at = timestamp + timedelta(seconds=self._jitter(ceiling / 2, ceiling))
         await self.session.flush()
 
     async def add_oauth_session(

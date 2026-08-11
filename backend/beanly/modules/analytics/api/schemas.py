@@ -23,6 +23,9 @@ class AnalyticsOverviewResponse(AnalyticsModel):
     date_to: date
     currency_code: str
     revenue: Decimal
+    gross_revenue: Decimal
+    refund_amount: Decimal
+    net_revenue: Decimal
     paid_orders: int
     items_sold: int
     average_check: Decimal
@@ -41,6 +44,12 @@ class ProductAnalyticsRowResponse(AnalyticsModel):
     variant_name: str | None
     quantity_sold: int
     revenue: Decimal
+    gross_revenue: Decimal
+    refund_amount: Decimal
+    net_revenue: Decimal
+    refunded_quantity: int
+    net_quantity: int
+    refund_orders: int
     orders: int
     cogs: Decimal | None
     gross_profit: Decimal | None
@@ -132,6 +141,9 @@ class LocationAnalyticsRowResponse(AnalyticsModel):
     location_id: UUID
     location_name: str
     revenue: Decimal
+    gross_revenue: Decimal
+    refund_amount: Decimal
+    net_revenue: Decimal
     paid_orders: int
     items_sold: int
     average_check: Decimal

@@ -6,6 +6,11 @@ class IntegrationNotFound(IntegrationError):
     pass
 
 
+class FiscalOriginalReceiptPending(RuntimeError):
+    code = "FISCAL_ORIGINAL_RECEIPT_PENDING"
+    public_message = "Original fiscal receipt is not ready"
+
+
 class UnknownProvider(IntegrationError):
     pass
 
