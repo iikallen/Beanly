@@ -11,27 +11,48 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAuth } from "@/components/auth-provider";
+import { ConnectionStatus } from "@/components/pos/connection-status";
+import { OfflineReady } from "@/components/pos/offline-ready";
+import { SyncStatus } from "@/components/pos/sync-status";
 import { useWorkspace } from "@/components/workspace-provider";
+import { useOfflinePos } from "@/hooks/use-offline-pos";
 import {
   ApiError,
   api,
   type MenuProduct,
   type MenuReadModel,
-  type Payment,
   type PaymentMethod,
   type PaymentMethodChoice,
   type PosRegister,
   type PosWarehouseChoice,
   type ProductVariant,
   type RegisterShift,
-  type SalesOrder,
-  type SalesOrderItem,
   type SalesOrderType,
 } from "@/lib/api";
 import { formatMenuPriceMinor, parseMenuPriceToMinor, priceMinorToInput } from "@/lib/menu";
+import {
+  closeOfflineSession,
+  currentOfflineSession,
+  defaultPaymentMethods,
+  OfflineApiError,
+  pairDevice,
+  refreshOfflineSession,
+  revokeDevice,
+  startOfflineSession,
+  type SessionShell,
+} from "@/lib/offline/api";
+import { readCatalog, readCurrentSession, saveSession } from "@/lib/offline/db";
+import {
+  cancelLocalOrder,
+  createLocalOrder,
+  payLocalOrder,
+  updateLocalOrder,
+} from "@/lib/offline/orders";
+import { buildLocalItem, catalogSelectionIsValid } from "@/lib/offline/catalog";
+import type { OfflineOrder, OfflineOrderItem, OfflineSession } from "@/lib/offline/types";
 import { paymentRequest, type PaymentMode } from "@/lib/payment";
 
 type ConfigurationTarget = {
@@ -41,8 +62,14 @@ type ConfigurationTarget = {
   clientItemId?: string;
 };
 
+type CompletedLocalPayment = {
+  amount_minor: string;
+  currency_code: string;
+  lines: Array<{ method: PaymentMethod; change_minor: string }>;
+};
+
 export default function PosPage() {
-  const { accessToken } = useAuth();
+  const { accessToken, user } = useAuth();
   const { currentOrganization, currentLocation } = useWorkspace();
   const [permissions, setPermissions] = useState<string[]>([]);
   const [registers, setRegisters] = useState<PosRegister[]>([]);
@@ -51,7 +78,8 @@ export default function PosPage() {
   const [selectedRegisterId, setSelectedRegisterId] = useState("");
   const [selectedWarehouseId, setSelectedWarehouseId] = useState("");
   const [shift, setShift] = useState<RegisterShift | null>(null);
-  const [orders, setOrders] = useState<SalesOrder[]>([]);
+  const [offlineSession, setOfflineSession] = useState<OfflineSession | null>(null);
+  const [menuCatalogId, setMenuCatalogId] = useState("");
   const [currentOrderId, setCurrentOrderId] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [search, setSearch] = useState("");
@@ -59,9 +87,10 @@ export default function PosPage() {
   const [registerName, setRegisterName] = useState("");
   const [configuration, setConfiguration] = useState<ConfigurationTarget | null>(null);
   const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
+  const [configurationNote, setConfigurationNote] = useState("");
   const [cancelReason, setCancelReason] = useState("");
   const [showCancelDialog, setShowCancelDialog] = useState(false);
-  const [paymentOrder, setPaymentOrder] = useState<SalesOrder | null>(null);
+  const [paymentOrder, setPaymentOrder] = useState<OfflineOrder | null>(null);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodChoice[]>([]);
   const [paymentMode, setPaymentMode] = useState<PaymentMode>(null);
   const [paymentCashReceived, setPaymentCashReceived] = useState("");
@@ -69,36 +98,78 @@ export default function PosPage() {
   const [splitCard, setSplitCard] = useState("");
   const [splitOther, setSplitOther] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
-  const [completedPayment, setCompletedPayment] = useState<Payment | null>(null);
+  const [completedPayment, setCompletedPayment] = useState<CompletedLocalPayment | null>(null);
+  const [cardConfirmed, setCardConfirmed] = useState(false);
   const [paymentBusy, setPaymentBusy] = useState(false);
   const [paymentError, setPaymentError] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const pendingOrderId = useRef<string | null>(null);
+  const [clockNow, setClockNow] = useState(0);
   const pendingPayment = useRef<{ id: string; payload: string } | null>(null);
 
-  const organizationId = currentOrganization?.id;
-  const locationId = currentLocation?.id;
-  const currency = currentOrganization?.currency_code ?? "KZT";
+  const offline = useOfflinePos(offlineSession);
+
+  const organizationId = currentOrganization?.id ?? offlineSession?.organization_id;
+  const locationId = currentLocation?.id ?? offlineSession?.location_id;
+  const currency = currentOrganization?.currency_code ?? offlineSession?.shell.currency_code ?? "KZT";
   const canCreate = permissions.includes("sales.create");
   const canManageRegister = permissions.includes("sales.register.manage");
   const canManageShift = permissions.includes("sales.shift.manage");
+  const canManageDevice = permissions.includes("pos.device.manage");
   const canCancel = permissions.includes("sales.cancel");
   const canPay = permissions.includes("payments.create");
-  const currentOrder = orders.find((order) => order.id === currentOrderId) ?? null;
+  const orders = offline.orders.filter((order) => !order.status.startsWith("SYNCED_CANCELLED") && !order.status.startsWith("SYNCED_PAID"));
+  const selectedOrder = orders.find((order) => order.id === currentOrderId)
+    ?? orders.find((order) => order.status === "OPEN" || order.status === "SYNCED_OPEN")
+    ?? null;
+  const currentOrder = selectedOrder && (selectedOrder.status === "OPEN" || selectedOrder.status === "SYNCED_OPEN") ? selectedOrder : null;
   const selectedRegister = registers.find((register) => register.id === selectedRegisterId);
+  const hasOpenOrders = orders.some((order) => order.status === "OPEN" || order.status === "SYNCED_OPEN");
+  const sessionActive = Boolean(offlineSession && offlineSession.status === "ACTIVE" && clockNow + offlineSession.clock_offset_ms < Date.parse(offlineSession.expires_at));
+  const canWriteLocal = sessionActive && offline.isWriter;
+
+  useEffect(() => {
+    const tick = () => setClockNow(Date.now());
+    queueMicrotask(tick);
+    const interval = window.setInterval(tick, 30_000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
       await Promise.resolve();
-      if (!accessToken || !organizationId || !locationId) return;
       setLoading(true);
+      const cached = await readCurrentSession().catch(() => null);
+      const cachedUsable = Boolean(cached
+        && (cached.status === "ACTIVE" || cached.status === "EXPIRED")
+        && (!organizationId || cached.organization_id === organizationId)
+        && (!locationId || cached.location_id === locationId));
+      if (!cancelled && cached && cachedUsable) {
+        setOfflineSession(cached);
+        setPermissions(cached.shell.permissions);
+        setPaymentMethods(cached.shell.payment_methods.length ? cached.shell.payment_methods : defaultPaymentMethods());
+        setMenu(cached.catalog_snapshot.public_payload);
+        setMenuCatalogId(cached.catalog_snapshot_id);
+        setCategoryId(cached.catalog_snapshot.public_payload.categories[0]?.id ?? "");
+        setSelectedRegisterId(cached.register_id);
+        setSelectedWarehouseId(cached.warehouse_id);
+        setShift(shiftFromSession(cached));
+      }
+      if (!accessToken) {
+        if (!cancelled) setLoading(false);
+        return;
+      }
+      if (!organizationId || !locationId) {
+        setLoading(false);
+        return;
+      }
       setError("");
-      setPermissions([]);
-      setShift(null);
-      setOrders([]);
+      if (!cachedUsable) {
+        setPermissions([]);
+        setShift(null);
+      }
       setCurrentOrderId("");
       try {
         const [context, nextRegisters, nextMenu] = await Promise.all([
@@ -109,8 +180,10 @@ export default function PosPage() {
         if (cancelled) return;
         setPermissions(context.permissions);
         setRegisters(nextRegisters.filter((register) => register.is_active));
-        setMenu(nextMenu);
-        setCategoryId(nextMenu.categories[0]?.id ?? "");
+        if (!cachedUsable) {
+          setMenu(nextMenu);
+          setCategoryId(nextMenu.categories[0]?.id ?? "");
+        }
         setSelectedRegisterId((current) =>
           nextRegisters.some((register) => register.id === current && register.is_active)
             ? current
@@ -147,26 +220,11 @@ export default function PosPage() {
     return () => { cancelled = true; };
   }, [accessToken, locationId, organizationId]);
 
-  const loadOrders = useCallback(async (activeShift: RegisterShift) => {
-    if (!accessToken || !organizationId) return;
-    const nextOrders = await api.listSalesOrders(organizationId, accessToken, {
-      shiftId: activeShift.id,
-      status: "OPEN",
-    });
-    setOrders(nextOrders);
-    setCurrentOrderId((current) =>
-      nextOrders.some((order) => order.id === current) ? current : nextOrders[0]?.id ?? "",
-    );
-  }, [accessToken, organizationId]);
-
   useEffect(() => {
     let cancelled = false;
     async function loadShift() {
       await Promise.resolve();
-      if (!accessToken || !organizationId || !selectedRegisterId) {
-        setShift(null);
-        return;
-      }
+      if (!accessToken || !organizationId || !selectedRegisterId) return;
       setError("");
       try {
         const current = await api.getCurrentRegisterShift(
@@ -178,16 +236,35 @@ export default function PosPage() {
         setShift(current);
         if (current) {
           setSelectedWarehouseId(current.warehouse_id);
-          await loadOrders(current);
+          const register = registers.find((item) => item.id === current.register_id);
+          const shell: SessionShell = {
+            organization_name: currentOrganization?.name ?? "Beanly",
+            location_name: currentLocation?.name ?? "POS",
+            register_name: register?.name ?? "Register",
+            operator_name: user ? `${user.first_name} ${user.last_name}` : "Cashier",
+            currency_code: currency,
+            permissions,
+            payment_methods: paymentMethods.length ? paymentMethods : defaultPaymentMethods(),
+          };
+          const cached = await currentOfflineSession(shell).catch(() => null);
+          if (cancelled) return;
+          if (cached?.shift_id === current.id) {
+            await saveSession(cached);
+            if (cancelled) return;
+            setOfflineSession(cached);
+            setMenu(cached.catalog_snapshot.public_payload);
+            setMenuCatalogId(cached.catalog_snapshot_id);
+            setCategoryId(cached.catalog_snapshot.public_payload.categories[0]?.id ?? "");
+          }
         } else {
-          setOrders([]);
+          setOfflineSession(null);
           setCurrentOrderId("");
         }
       } catch (caught) {
         if (cancelled) return;
         if (caught instanceof ApiError && caught.status === 404) {
           setShift(null);
-          setOrders([]);
+          setOfflineSession(null);
           setCurrentOrderId("");
         } else {
           setError(messageOf(caught));
@@ -196,7 +273,40 @@ export default function PosPage() {
     }
     void loadShift();
     return () => { cancelled = true; };
-  }, [accessToken, loadOrders, organizationId, selectedRegisterId]);
+  }, [accessToken, currency, currentLocation?.name, currentOrganization?.name, organizationId, paymentMethods, permissions, registers, selectedRegisterId, user]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const snapshotId = currentOrder?.catalog_snapshot_id ?? offlineSession?.catalog_snapshot_id;
+    if (!snapshotId || snapshotId === menuCatalogId) return;
+    readCatalog(snapshotId).then((snapshot) => {
+      if (cancelled || !snapshot) return;
+      setMenu(snapshot.public_payload);
+      setMenuCatalogId(snapshot.id);
+      setCategoryId((current) => snapshot.public_payload.categories.some((category) => category.id === current)
+        ? current
+        : snapshot.public_payload.categories[0]?.id ?? "");
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [currentOrder?.catalog_snapshot_id, menuCatalogId, offlineSession?.catalog_snapshot_id]);
+
+  useEffect(() => {
+    if (!accessToken || !offlineSession || offline.networkStatus !== "ONLINE") return;
+    let cancelled = false;
+    const refresh = async () => {
+      const next = await refreshOfflineSession(offlineSession.id, offlineSession.shell);
+      await saveSession(next);
+      if (!cancelled) setOfflineSession(next);
+    };
+    const onFocus = () => { if (document.visibilityState === "visible") void refresh().catch(() => undefined); };
+    const interval = window.setInterval(() => { void refresh().catch(() => undefined); }, 120_000);
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, [accessToken, offline.networkStatus, offlineSession]);
 
   const products = useMemo(() => {
     const normalized = search.trim().toLocaleLowerCase();
@@ -221,6 +331,7 @@ export default function PosPage() {
     () => new Map(paymentMethods.map((method) => [method.code, method.name])),
     [paymentMethods],
   );
+  const needsSettlementConfirmation = paymentDraft.lines.some((line) => line.method === "CARD" || line.method === "OTHER");
 
   async function run(action: () => Promise<void>) {
     setBusy(true);
@@ -234,14 +345,10 @@ export default function PosPage() {
     }
   }
 
-  function replaceOrder(order: SalesOrder) {
-    setOrders((current) => {
-      const exists = current.some((item) => item.id === order.id);
-      return exists
-        ? current.map((item) => item.id === order.id ? order : item)
-        : [order, ...current];
-    });
+  async function afterLocalWrite(order: OfflineOrder) {
     setCurrentOrderId(order.id);
+    await offline.reload();
+    void offline.syncNow();
   }
 
   async function createRegister() {
@@ -267,32 +374,68 @@ export default function PosPage() {
         accessToken,
       );
       setShift(opened);
-      setOrders([]);
+      setOfflineSession(null);
       setCurrentOrderId("");
+    });
+  }
+
+  async function enableOffline() {
+    if (!accessToken || !organizationId || !shift || !selectedRegister) return;
+    await run(async () => {
+      const shell: SessionShell = {
+        organization_name: currentOrganization?.name ?? "Beanly",
+        location_name: currentLocation?.name ?? "POS",
+        register_name: selectedRegister.name,
+        operator_name: user ? `${user.first_name} ${user.last_name}` : "Cashier",
+        currency_code: currency,
+        permissions,
+        payment_methods: paymentMethods.length ? paymentMethods : defaultPaymentMethods(),
+      };
+      let session: OfflineSession;
+      try {
+        session = await startOfflineSession(shift.id, organizationId, accessToken, shell);
+      } catch (caught) {
+        if (!canManageDevice || !(caught instanceof OfflineApiError) || caught.status !== 401) throw caught;
+        await pairDevice(selectedRegister.id, `${selectedRegister.name} POS`, organizationId, accessToken);
+        session = await startOfflineSession(shift.id, organizationId, accessToken, shell);
+      }
+      await saveSession(session);
+      setOfflineSession(session);
+      setMenu(session.catalog_snapshot.public_payload);
+      setMenuCatalogId(session.catalog_snapshot_id);
+      setCategoryId(session.catalog_snapshot.public_payload.categories[0]?.id ?? "");
+      await offline.requestPersistence();
+      await offline.reload();
     });
   }
 
   async function closeShift() {
-    if (!accessToken || !organizationId || !shift) return;
+    if (!accessToken || !organizationId || !shift || hasOpenOrders || offline.unresolvedCount > 0 || offline.networkStatus !== "ONLINE") return;
     await run(async () => {
+      if (offlineSession) {
+        await closeOfflineSession(offlineSession.id);
+        await saveSession({ ...offlineSession, status: "CLOSED" });
+      }
       await api.closeRegisterShift(shift.id, organizationId, accessToken);
       setShift(null);
-      setOrders([]);
+      setOfflineSession(null);
       setCurrentOrderId("");
     });
   }
 
-  async function createOrder(type: SalesOrderType = "TAKEAWAY") {
-    if (!accessToken || !organizationId || !shift) return;
-    pendingOrderId.current ??= crypto.randomUUID();
+  async function disableOffline() {
+    if (!accessToken || !organizationId || !offlineSession || !canManageDevice || hasOpenOrders || offline.unresolvedCount > 0) return;
     await run(async () => {
-      const order = await api.createSalesOrder(
-        { client_order_id: pendingOrderId.current!, shift_id: shift.id, order_type: type },
-        organizationId,
-        accessToken,
-      );
-      pendingOrderId.current = null;
-      replaceOrder(order);
+      await revokeDevice(offlineSession.device_id, organizationId, accessToken);
+      await saveSession({ ...offlineSession, status: "REVOKED" });
+      setOfflineSession(null);
+    });
+  }
+
+  async function createOrder(type: SalesOrderType = "TAKEAWAY") {
+    if (!offlineSession || !canWriteLocal) return;
+    await run(async () => {
+      await afterLocalWrite(await createLocalOrder(offlineSession, type));
       setShowOrders(false);
     });
   }
@@ -300,7 +443,7 @@ export default function PosPage() {
   function openConfiguration(
     product: MenuProduct,
     variant: ProductVariant,
-    item?: SalesOrderItem,
+    item?: OfflineOrderItem,
   ) {
     setConfiguration({
       product,
@@ -315,10 +458,11 @@ export default function PosPage() {
         )
         ?? [],
     );
+    setConfigurationNote(item?.note ?? "");
   }
 
   function chooseProduct(product: MenuProduct) {
-    if (!currentOrder || !canCreate) return;
+    if (!currentOrder || menuCatalogId !== currentOrder.catalog_snapshot_id || !canCreate || !canWriteLocal || product.is_available === false || product.is_visible === false) return;
     const variants = product.variants.filter((variant) => variant.status === "ACTIVE");
     const variant = variants.find((item) => item.is_default) ?? variants[0];
     if (variant) openConfiguration(product, variant);
@@ -353,62 +497,54 @@ export default function PosPage() {
   }
 
   async function saveConfiguration() {
-    if (!accessToken || !organizationId || !currentOrder || !configuration) return;
+    if (!currentOrder || !configuration || !offlineSession || !canWriteLocal) return;
     await run(async () => {
-      const order = configuration.itemId
-        ? await api.configureSalesOrderItem(
-          currentOrder.id,
-          configuration.itemId,
-          selectedOptionIds,
-          organizationId,
-          accessToken,
-        )
-        : await api.addSalesOrderItem(
-          currentOrder.id,
-          {
-            client_item_id: configuration.clientItemId!,
-            variant_id: configuration.variant.id,
-            selected_option_ids: selectedOptionIds,
-            quantity: 1,
-          },
-          organizationId,
-          accessToken,
-        );
-      replaceOrder(order);
+      if (!catalogSelectionIsValid(configuration.product, configuration.variant, selectedOptionIds)) {
+        throw new Error("This product configuration is no longer available in the cached catalog");
+      }
+      const previous = currentOrder.items.find((item) => item.id === configuration.itemId);
+      const item = buildLocalItem(
+        configuration.product,
+        configuration.variant,
+        selectedOptionIds,
+        previous?.client_item_id ?? configuration.clientItemId!,
+        previous?.quantity ?? 1,
+        configurationNote.trim() || null,
+      );
+      const order = await updateLocalOrder(currentOrder.id, (value) => {
+        value.items = previous
+          ? value.items.map((candidate) => candidate.id === previous.id ? item : candidate)
+          : [...value.items, item];
+      }, offlineSession.clock_offset_ms);
+      await afterLocalWrite(order);
       setConfiguration(null);
     });
   }
 
-  async function updateQuantity(item: SalesOrderItem, quantity: number) {
-    if (!accessToken || !organizationId || !currentOrder || quantity < 1) return;
-    await run(async () => replaceOrder(await api.updateSalesOrderItem(
-      currentOrder.id,
-      item.id,
-      { quantity },
-      organizationId,
-      accessToken,
-    )));
+  async function updateQuantity(item: OfflineOrderItem, quantity: number) {
+    if (!currentOrder || !offlineSession || !canWriteLocal || quantity < 1) return;
+    await run(async () => afterLocalWrite(await updateLocalOrder(currentOrder.id, (order) => {
+      const target = order.items.find((candidate) => candidate.id === item.id);
+      if (target) target.quantity = quantity;
+    }, offlineSession.clock_offset_ms)));
   }
 
   async function removeItem(itemId: string) {
-    if (!accessToken || !organizationId || !currentOrder) return;
-    await run(async () => replaceOrder(await api.removeSalesOrderItem(
-      currentOrder.id,
-      itemId,
-      organizationId,
-      accessToken,
-    )));
+    if (!currentOrder || !offlineSession || !canWriteLocal) return;
+    await run(async () => afterLocalWrite(await updateLocalOrder(currentOrder.id, (order) => {
+      order.items = order.items.filter((item) => item.id !== itemId);
+    }, offlineSession.clock_offset_ms)));
   }
 
   async function cancelOrder() {
-    if (!accessToken || !organizationId || !currentOrder) return;
+    if (!currentOrder || !offlineSession || !canWriteLocal) return;
     const reason = cancelReason.trim();
     if (!reason) return;
     await run(async () => {
-      await api.cancelSalesOrder(currentOrder.id, reason.trim(), organizationId, accessToken);
-      const remaining = orders.filter((order) => order.id !== currentOrder.id);
-      setOrders(remaining);
-      setCurrentOrderId(remaining[0]?.id ?? "");
+      await cancelLocalOrder(currentOrder.id, reason, offlineSession.clock_offset_ms);
+      await offline.reload();
+      void offline.syncNow();
+      setCurrentOrderId(orders.find((order) => order.id !== currentOrder.id && (order.status === "OPEN" || order.status === "SYNCED_OPEN"))?.id ?? "");
       setShowCancelDialog(false);
       setCancelReason("");
     });
@@ -434,6 +570,7 @@ export default function PosPage() {
     setSplitOther("");
     setPaymentReference("");
     setCompletedPayment(null);
+    setCardConfirmed(false);
     setPaymentError("");
     pendingPayment.current = null;
   }
@@ -449,6 +586,7 @@ export default function PosPage() {
   function choosePaymentMode(mode: PaymentMethod | "SPLIT") {
     setPaymentMode(mode);
     setPaymentError("");
+    setCardConfirmed(false);
     if (mode === "CASH" && paymentOrder) {
       setPaymentCashReceived(priceMinorToInput(paymentOrder.total_minor));
     }
@@ -465,7 +603,7 @@ export default function PosPage() {
   }
 
   async function completePayment() {
-    if (!accessToken || !organizationId || !paymentOrder || paymentDraft.error) return;
+    if (!offlineSession || !canWriteLocal || !paymentOrder || paymentDraft.error || (needsSettlementConfirmation && !cardConfirmed)) return;
     const payload = JSON.stringify(paymentDraft.lines);
     if (!pendingPayment.current || pendingPayment.current.payload !== payload) {
       pendingPayment.current = { id: crypto.randomUUID(), payload };
@@ -473,18 +611,27 @@ export default function PosPage() {
     setPaymentBusy(true);
     setPaymentError("");
     try {
-      const payment = await api.completePayment(
+      const lines = paymentDraft.lines.map((line) => ({
+        ...line,
+        ...((line.method === "CARD" || line.method === "OTHER") ? { external_settlement_confirmed: true } : {}),
+      }));
+      await payLocalOrder(
         paymentOrder.id,
-        { client_payment_id: pendingPayment.current.id, lines: paymentDraft.lines },
-        organizationId,
-        accessToken,
+        pendingPayment.current.id,
+        lines,
+        offlineSession.clock_offset_ms,
       );
-      setCompletedPayment(payment);
-      setOrders((current) => {
-        const remaining = current.filter((order) => order.id !== paymentOrder.id);
-        setCurrentOrderId(remaining[0]?.id ?? "");
-        return remaining;
+      setCompletedPayment({
+        amount_minor: paymentOrder.total_minor,
+        currency_code: paymentOrder.currency_code,
+        lines: lines.map((line) => ({
+          method: line.method,
+          change_minor: line.method === "CASH" ? String(paymentDraft.changeMinor) : "0",
+        })),
       });
+      await offline.reload();
+      void offline.syncNow();
+      setCurrentOrderId(orders.find((order) => order.id !== paymentOrder.id && (order.status === "OPEN" || order.status === "SYNCED_OPEN"))?.id ?? "");
       pendingPayment.current = null;
     } catch (caught) {
       setPaymentError(messageOf(caught));
@@ -498,8 +645,8 @@ export default function PosPage() {
     await createOrder();
   }
 
-  function editItemConfiguration(item: SalesOrderItem) {
-    if (!canCreate) return;
+  function editItemConfiguration(item: OfflineOrderItem) {
+    if (!canCreate || !canWriteLocal) return;
     const product = menu?.categories.flatMap((category) => category.products)
       .find((candidate) => candidate.id === item.product_id);
     const variant = product?.variants.find((candidate) => candidate.id === item.product_variant_id);
@@ -518,7 +665,7 @@ export default function PosPage() {
         <div className="pos-startup-card">
           <span className="pos-eyebrow">Beanly POS</span>
           <h1>Start selling</h1>
-          <p>Choose a register and warehouse for {currentLocation?.name}.</p>
+          <p>Choose a register and warehouse for {currentLocation?.name ?? "this location"}.</p>
           {error && <p className="form-message error" role="alert">{error}</p>}
           <label className="modal-field">
             <span>Register</span>
@@ -558,14 +705,24 @@ export default function PosPage() {
     <section className="pos-content">
       <header className="pos-header">
         <div>
-          <span className="pos-eyebrow">{currentLocation?.name} · {selectedRegister?.name}</span>
+          <span className="pos-eyebrow">{currentLocation?.name ?? offlineSession?.shell.location_name} · {selectedRegister?.name ?? offlineSession?.shell.register_name}</span>
           <strong><Clock3 aria-hidden="true" /> Shift opened {formatTime(shift.opened_at)}</strong>
         </div>
         <div className="pos-header-actions">
           <button className="secondary-button" type="button" onClick={() => setShowOrders((current) => !current)}>Orders ({orders.length})</button>
-          <button className="secondary-button" disabled={busy || orders.length > 0} type="button" onClick={closeShift}>Close shift</button>
+          {offlineSession && canManageDevice && <button className="secondary-button" disabled={busy || !accessToken || hasOpenOrders || offline.unresolvedCount > 0 || offline.networkStatus !== "ONLINE"} type="button" onClick={disableOffline}>Disable offline</button>}
+          <button className="secondary-button" disabled={busy || hasOpenOrders || offline.unresolvedCount > 0 || offline.networkStatus !== "ONLINE" || !accessToken} type="button" onClick={closeShift}>Close shift</button>
         </div>
       </header>
+      <div className="pos-status-row">
+        <ConnectionStatus status={offline.networkStatus} />
+        <SyncStatus state={offline.syncState} pending={offline.unresolvedCount} pendingTotal={offline.pendingTotal} currency={currency} disabled={!offline.isWriter} onSync={() => { void offline.syncNow(); }} />
+        <OfflineReady readiness={offline.storage} onPrepare={() => { void offline.requestPersistence(); }} />
+      </div>
+      {!offlineSession && <p className="pos-notice">Offline sales are not ready on this terminal.<button disabled={!accessToken || busy} type="button" onClick={enableOffline}>Enable offline POS</button></p>}
+      {offlineSession && !sessionActive && <p className="pos-notice">Offline session expired. Existing orders remain safe and can sync.{offline.unresolvedCount === 0 && <button disabled={!accessToken || busy || offline.networkStatus !== "ONLINE"} type="button" onClick={enableOffline}>Start new offline session</button>}</p>}
+      {!offline.isWriter && <p className="pos-notice">POS is already open in another window. This tab is read-only.</p>}
+      {offline.updatePending && <p className="pos-notice">Beanly update available.{offline.unresolvedCount > 0 ? " Update waits until pending sales are synchronized or reviewed." : ""}<button disabled={offline.unresolvedCount > 0} type="button" onClick={offline.applyUpdate}>Update now</button></p>}
       {error && <p className="pos-global-error" role="alert">{error}</p>}
 
       <div className="pos-grid">
@@ -574,11 +731,11 @@ export default function PosPage() {
             <button className="icon-button" type="button" aria-label="Hide orders" onClick={() => setShowOrders(false)}><ChevronLeft /></button>
             <h2>Open orders</h2>
           </div>
-          <button className="primary-button" disabled={busy || !canCreate} type="button" onClick={() => createOrder()}>+ New order</button>
+          <button className="primary-button" disabled={busy || !canCreate || !canWriteLocal} type="button" onClick={() => createOrder()}>+ New order</button>
           <div className="pos-order-list">
             {orders.map((order) => (
-              <button className={order.id === currentOrderId ? "is-active" : ""} key={order.id} type="button" onClick={() => { setCurrentOrderId(order.id); setShowOrders(false); }}>
-                <span><strong>#{order.number}</strong>{prettyOrderType(order.order_type)}</span>
+              <button className={order.id === selectedOrder?.id ? "is-active" : ""} key={order.id} type="button" onClick={() => { setCurrentOrderId(order.id); setShowOrders(false); }}>
+                <span><strong>{displayOrderNumber(order)}</strong>{prettyOrderType(order.order_type)}<small className="pos-order-state">{prettyOrderStatus(order.status)}</small></span>
                 <b>{formatMenuPriceMinor(order.total_minor, order.currency_code)}</b>
               </button>
             ))}
@@ -598,9 +755,9 @@ export default function PosPage() {
           {!currentOrder ? (
             <div className="pos-empty-order">
               <ShoppingBag aria-hidden="true" />
-              <h2>Create or select an order</h2>
-              <p>Every change is saved to the server immediately.</p>
-              <button className="primary-button" disabled={busy || !canCreate} type="button" onClick={() => createOrder()}>Create order</button>
+              <h2>{selectedOrder?.status === "CONFLICT" ? "Paid order needs manager review" : selectedOrder?.status === "PAID_PENDING_SYNC" ? "Payment pending sync" : "Create or select an order"}</h2>
+              <p>{selectedOrder?.status === "CONFLICT" ? `Payment has not been posted: ${selectedOrder.sync_error ?? "server conflict"}.` : selectedOrder?.status === "PAID_PENDING_SYNC" ? "This paid order is immutable. Fiscal receipt: Pending sync." : "Every change is committed locally first, then synchronized."}</p>
+              {!selectedOrder && <button className="primary-button" disabled={busy || !canCreate || !canWriteLocal} type="button" onClick={() => createOrder()}>Create order</button>}
             </div>
           ) : (
             <div className="pos-product-grid">
@@ -608,7 +765,7 @@ export default function PosPage() {
                 const activeVariants = product.variants.filter((variant) => variant.status === "ACTIVE");
                 const from = activeVariants.reduce<string | null>((lowest, variant) => lowest === null || BigInt(variant.effective_price_minor) < BigInt(lowest) ? variant.effective_price_minor : lowest, null);
                 return (
-                  <button disabled={busy || !canCreate || !activeVariants.length} key={product.id} type="button" onClick={() => chooseProduct(product)}>
+                  <button disabled={busy || !canCreate || !canWriteLocal || menuCatalogId !== currentOrder.catalog_snapshot_id || !activeVariants.length || product.is_available === false || product.is_visible === false} key={product.id} type="button" onClick={() => chooseProduct(product)}>
                     <span className="pos-product-icon" aria-hidden="true">{product.name.charAt(0)}</span>
                     <strong>{product.name}</strong>
                     <small>{activeVariants.length > 1 ? `${activeVariants.length} variants · ` : ""}{from ? formatMenuPriceMinor(from, currency) : "Unavailable"}</small>
@@ -624,8 +781,8 @@ export default function PosPage() {
           {currentOrder ? (
             <>
               <div className="pos-receipt-heading">
-                <div><span>Current order</span><h2>Order #{currentOrder.number}</h2></div>
-                <select aria-label="Order type" disabled={busy || !canCreate} value={currentOrder.order_type} onChange={(event) => run(async () => replaceOrder(await api.updateSalesOrder(currentOrder.id, { order_type: event.target.value as SalesOrderType }, organizationId!, accessToken!)))}>
+                <div><span>Current order</span><h2>{displayOrderNumber(currentOrder)}</h2></div>
+                <select aria-label="Order type" disabled={busy || !canCreate || !canWriteLocal} value={currentOrder.order_type} onChange={(event) => run(async () => { if (!offlineSession) return; await afterLocalWrite(await updateLocalOrder(currentOrder.id, (order) => { order.order_type = event.target.value as SalesOrderType; }, offlineSession.clock_offset_ms)); })}>
                   <option value="DINE_IN">Dine-in</option><option value="TAKEAWAY">Takeaway</option><option value="DELIVERY">Delivery</option>
                 </select>
               </div>
@@ -639,17 +796,17 @@ export default function PosPage() {
                     {item.modifiers.length > 0 && <p>{item.modifiers.map((modifier) => modifier.modifier_option_name).join(" · ")}</p>}
                     {item.note && <p>{item.note}</p>}
                     <div className="pos-line-actions">
-                      <span className="pos-quantity"><button aria-label={`Decrease ${item.product_name}`} disabled={busy || !canCreate || item.quantity <= 1} type="button" onClick={() => updateQuantity(item, item.quantity - 1)}><Minus /></button><b>{item.quantity}</b><button aria-label={`Increase ${item.product_name}`} disabled={busy || !canCreate} type="button" onClick={() => updateQuantity(item, item.quantity + 1)}><Plus /></button></span>
-                      <button disabled={busy || !canCreate} type="button" onClick={() => editItemConfiguration(item)}>Customize</button>
-                      <button className="danger-link" aria-label={`Remove ${item.product_name}`} disabled={busy || !canCreate} type="button" onClick={() => removeItem(item.id)}><Trash2 /></button>
+                      <span className="pos-quantity"><button aria-label={`Decrease ${item.product_name}`} disabled={busy || !canCreate || !canWriteLocal || item.quantity <= 1} type="button" onClick={() => updateQuantity(item, item.quantity - 1)}><Minus /></button><b>{item.quantity}</b><button aria-label={`Increase ${item.product_name}`} disabled={busy || !canCreate || !canWriteLocal} type="button" onClick={() => updateQuantity(item, item.quantity + 1)}><Plus /></button></span>
+                      <button disabled={busy || !canCreate || !canWriteLocal} type="button" onClick={() => editItemConfiguration(item)}>Customize</button>
+                      <button className="danger-link" aria-label={`Remove ${item.product_name}`} disabled={busy || !canCreate || !canWriteLocal} type="button" onClick={() => removeItem(item.id)}><Trash2 /></button>
                     </div>
                   </article>
                 ))}
                 {currentOrder.items.length === 0 && <div className="pos-receipt-empty"><ShoppingBag aria-hidden="true" /><p>Add a product to start this order.</p></div>}
               </div>
               <div className="pos-receipt-total"><span>Total</span><strong>{formatMenuPriceMinor(currentOrder.total_minor, currentOrder.currency_code)}</strong></div>
-              <button className="primary-button pos-pay-button" disabled={busy || !canPay || currentOrder.items.length === 0} type="button" onClick={openPayment}>Pay · {formatMenuPriceMinor(currentOrder.total_minor, currentOrder.currency_code)}</button>
-              {canCancel && <button className="pos-cancel-order" disabled={busy} type="button" onClick={openCancelDialog}>Cancel order</button>}
+              <button className="primary-button pos-pay-button" disabled={busy || !canPay || !canWriteLocal || currentOrder.items.length === 0} type="button" onClick={openPayment}>Pay · {formatMenuPriceMinor(currentOrder.total_minor, currentOrder.currency_code)}</button>
+              {canCancel && <button className="pos-cancel-order" disabled={busy || !canWriteLocal} type="button" onClick={openCancelDialog}>Cancel order</button>}
             </>
           ) : (
             <div className="pos-receipt-empty"><ShoppingBag aria-hidden="true" /><h2>No order selected</h2></div>
@@ -680,6 +837,7 @@ export default function PosPage() {
                 </fieldset>
               ))}
             </div>
+            <label className="modal-field"><span>Item note (optional)</span><input maxLength={1000} placeholder="No sugar" value={configurationNote} onChange={(event) => setConfigurationNote(event.target.value)} /></label>
             {!configurationIsValid(configuration.variant, selectedOptionIds) && <p className="form-message error" role="alert">Complete the required modifier selections.</p>}
             <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setConfiguration(null)}>Cancel</button><button className="primary-button" disabled={busy || !configurationIsValid(configuration.variant, selectedOptionIds)} type="button" onClick={saveConfiguration}>{busy ? "Saving…" : `${configuration.itemId ? "Update" : "Add"} · ${formatMenuPriceMinor(configurationPrice(configuration.variant, selectedOptionIds), currency)}`}</button></div>
           </div>
@@ -705,12 +863,13 @@ export default function PosPage() {
               <div className="pos-payment-success" role="status">
                 <span className="pos-payment-check" aria-hidden="true">✓</span>
                 <span className="pos-eyebrow">Payment successful</span>
-                <h2 id="pos-payment-title">Order #{paymentOrder.number}</h2>
+                <h2 id="pos-payment-title">{displayOrderNumber(paymentOrder)}</h2>
                 <strong>{formatMenuPriceMinor(completedPayment.amount_minor, completedPayment.currency_code)}</strong>
                 <p>{completedPayment.lines.length > 0 ? completedPayment.lines.map((line) => paymentMethodNames.get(line.method) ?? line.method).join(" + ") : "Complimentary"}</p>
                 {completedPayment.lines.some((line) => BigInt(line.change_minor) > BigInt(0)) && (
                   <p>Change · {formatMenuPriceMinor(String(completedPayment.lines.reduce((sum, line) => sum + BigInt(line.change_minor), BigInt(0))), completedPayment.currency_code)}</p>
                 )}
+                <p>Recorded locally · Fiscal receipt pending sync</p>
                 <div className="modal-actions">
                   <button className="secondary-button" type="button" onClick={closePayment}>Done</button>
                   {canCreate && <button className="primary-button" disabled={busy} type="button" onClick={startNewOrderAfterPayment}>+ New order</button>}
@@ -718,7 +877,7 @@ export default function PosPage() {
               </div>
             ) : (
               <>
-                <span className="pos-eyebrow">Order #{paymentOrder.number}</span>
+                <span className="pos-eyebrow">{displayOrderNumber(paymentOrder)}</span>
                 <h2 id="pos-payment-title">Payment</h2>
                 <div className="pos-payment-total"><span>Total</span><strong>{formatMenuPriceMinor(paymentOrder.total_minor, paymentOrder.currency_code)}</strong></div>
                 {BigInt(paymentOrder.total_minor) === BigInt(0) ? (
@@ -737,7 +896,7 @@ export default function PosPage() {
                         <PaymentBalance label="Change" amount={paymentDraft.changeMinor} currency={paymentOrder.currency_code} />
                       </div>
                     )}
-                    {paymentMode === "CARD" && <p className="pos-payment-note">The full total will be recorded as a card payment.</p>}
+                    {paymentMode === "CARD" && <p className="pos-payment-note">Record this only after the external card terminal approves the payment.</p>}
                     {paymentMode === "OTHER" && (
                       <div className="pos-payment-fields"><label className="modal-field"><span>Reference (optional)</span><input autoFocus maxLength={200} placeholder="Provider or note" value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} /></label></div>
                     )}
@@ -753,9 +912,12 @@ export default function PosPage() {
                     )}
                   </>
                 )}
+                {needsSettlementConfirmation && !paymentDraft.error && (
+                  <label className="pos-payment-confirm"><input type="checkbox" checked={cardConfirmed} onChange={(event) => setCardConfirmed(event.target.checked)} /><span>I confirm the card or external settlement was approved outside Beanly. No card credentials are stored.</span></label>
+                )}
                 {paymentMode && paymentDraft.error && <p className="form-message error" role="alert">{paymentDraft.error}</p>}
                 {paymentError && <p className="form-message error" role="alert">{paymentError}</p>}
-                <div className="modal-actions"><button className="secondary-button" disabled={paymentBusy} type="button" onClick={closePayment}>Cancel</button><button className="primary-button" disabled={paymentBusy || Boolean(paymentDraft.error)} type="button" onClick={completePayment}>{paymentBusy ? "Completing…" : "Complete payment"}</button></div>
+                <div className="modal-actions"><button className="secondary-button" disabled={paymentBusy} type="button" onClick={closePayment}>Cancel</button><button className="primary-button" disabled={paymentBusy || !canWriteLocal || Boolean(paymentDraft.error) || (needsSettlementConfirmation && !cardConfirmed)} type="button" onClick={completePayment}>{paymentBusy ? "Recording…" : "Record payment"}</button></div>
               </>
             )}
           </div>
@@ -777,10 +939,41 @@ function configurationPrice(variant: ProductVariant, selectedOptionIds: string[]
 
 function configurationIsValid(variant: ProductVariant, selectedOptionIds: string[]) {
   const selected = new Set(selectedOptionIds);
-  return (variant.modifier_groups ?? []).filter((group) => group.is_active).every((group) => {
+  const available = new Set((variant.modifier_groups ?? []).filter((group) => group.is_active)
+    .flatMap((group) => group.options.filter((option) => option.is_available).map((option) => option.id)));
+  return selectedOptionIds.every((id) => available.has(id)) && (variant.modifier_groups ?? []).filter((group) => group.is_active).every((group) => {
     const count = group.options.filter((option) => option.is_available && selected.has(option.id)).length;
     return count >= group.min_selections && count <= group.max_selections;
   });
+}
+
+function displayOrderNumber(order: OfflineOrder) {
+  return order.server_order_id ? `Order #${order.number}` : order.number;
+}
+
+function prettyOrderStatus(status: OfflineOrder["status"]) {
+  if (status === "PAID_PENDING_SYNC") return "Paid · pending sync";
+  if (status === "CANCELLED_PENDING_SYNC") return "Cancelled · pending sync";
+  if (status === "CONFLICT") return "Needs review";
+  if (status === "SYNCED_OPEN") return "Synced";
+  return "Pending sync";
+}
+
+function shiftFromSession(session: OfflineSession): RegisterShift {
+  return {
+    id: session.shift_id,
+    organization_id: session.organization_id,
+    location_id: session.location_id,
+    register_id: session.register_id,
+    warehouse_id: session.warehouse_id,
+    status: "OPEN",
+    opened_by_user_id: session.actor_user_id,
+    closed_by_user_id: null,
+    opened_at: session.started_at,
+    closed_at: null,
+    created_at: session.started_at,
+    updated_at: session.started_at,
+  };
 }
 
 function prettyOrderType(value: SalesOrderType) {

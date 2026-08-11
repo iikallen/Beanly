@@ -25,6 +25,19 @@ class BeanlyMetrics:
         self.payment_failed = meter.create_counter("payment.failed.total")
         self.inventory_sales = meter.create_counter("inventory.sale.post.total")
         self.negative_stock = meter.create_counter("inventory.negative_stock.total")
+        self.pos_offline_sessions_started = meter.create_counter(
+            "pos.offline.sessions.started.total"
+        )
+        self.pos_offline_sync = meter.create_counter("pos.offline.sync.total")
+        self.pos_offline_orders_synced = meter.create_counter("pos.offline.orders.synced.total")
+        self.pos_offline_payments_synced = meter.create_counter("pos.offline.payments.synced.total")
+        self.pos_offline_conflicts = meter.create_counter("pos.offline.conflicts.total")
+        self.pos_offline_sync_duration = meter.create_histogram(
+            "pos.offline.sync.duration", unit="s"
+        )
+        self.pos_offline_payment_delay = meter.create_histogram(
+            "pos.offline.payment.delay", unit="s"
+        )
         self._lock = Lock()
         self._queue_values: dict[str, float] = {
             "outbox_pending": 0,

@@ -86,4 +86,5 @@ class InventorySalePort(Protocol):
         order_number: int,
         warehouse_id: UUID,
         lines: tuple[SaleStockLine, ...],
+        occurred_at: datetime | None = None,
     ) -> StagedSaleResult: ...

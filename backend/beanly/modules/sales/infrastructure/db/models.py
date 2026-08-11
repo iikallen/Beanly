@@ -97,9 +97,10 @@ class SalesOrderModel(Base):
             name="ck_sales_order_cogs_nonnegative",
         ),
         CheckConstraint(
-            "cogs_status IS NULL OR cogs_status IN ('COMPLETE', 'INCOMPLETE')",
+            "cogs_status IS NULL OR cogs_status IN ('COMPLETE', 'INCOMPLETE', 'ESTIMATED')",
             name="ck_sales_order_cogs_status",
         ),
+        CheckConstraint("version > 0", name="ck_sales_order_version_positive"),
         UniqueConstraint("inventory_transaction_id"),
         Index("ix_sales_orders_organization_created", "organization_id", "created_at"),
         Index(
@@ -123,6 +124,17 @@ class SalesOrderModel(Base):
     warehouse_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("warehouses.id"))
     number: Mapped[int] = mapped_column(BigInteger)
     client_order_id: Mapped[UUID] = mapped_column(Uuid)
+    version: Mapped[int] = mapped_column(default=1)
+    pos_device_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("pos_devices.id"), nullable=True, index=True
+    )
+    offline_session_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("pos_offline_sessions.id"), nullable=True, index=True
+    )
+    client_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    offline_display_number: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     order_type: Mapped[str] = mapped_column(String(16))
     status: Mapped[str] = mapped_column(String(16), index=True)
     currency_code: Mapped[str] = mapped_column(String(3))

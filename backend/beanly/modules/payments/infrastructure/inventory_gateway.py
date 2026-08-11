@@ -1,5 +1,9 @@
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from beanly.core.observability import traced
 from beanly.modules.inventory.application.commands import (
@@ -9,6 +13,10 @@ from beanly.modules.inventory.application.commands import (
 from beanly.modules.inventory.application.services import InventoryService
 from beanly.modules.inventory.domain.enums import InventoryTransactionType
 from beanly.modules.inventory.domain.exceptions import InvalidInventoryOperation
+from beanly.modules.inventory.infrastructure.db.models import (
+    InventoryTransactionLineModel,
+    InventoryTransactionModel,
+)
 from beanly.modules.organizations.domain.entities import TenantContext
 from beanly.modules.payments.application.ports import (
     SaleStockLine,
@@ -32,8 +40,11 @@ class SalesOrderReferenceValidator:
 
 
 class InventorySaleGateway:
-    def __init__(self, inventory: InventoryService) -> None:
+    def __init__(
+        self, inventory: InventoryService, session: AsyncSession | None = None
+    ) -> None:
         self.inventory = inventory
+        self.session = session
 
     async def stage_sale(
         self,
@@ -43,6 +54,7 @@ class InventorySaleGateway:
         order_number: int,
         warehouse_id: UUID,
         lines: tuple[SaleStockLine, ...],
+        occurred_at: datetime | None = None,
     ) -> StagedSaleResult:
         if not lines:
             return StagedSaleResult(
@@ -93,10 +105,46 @@ class InventorySaleGateway:
             or (cogs_amount and cogs_amount.adjusted() > 13)
         ):
             raise InvalidInventoryOperation("COGS is outside NUMERIC(20, 6)")
+        estimated = await self._cost_changed(item_ids, warehouse_id, occurred_at)
         return StagedSaleResult(
             staged.detail.transaction.id,
             cogs_amount,
-            SaleCostStatus.INCOMPLETE if missing else SaleCostStatus.COMPLETE,
+            (
+                SaleCostStatus.INCOMPLETE
+                if missing
+                else SaleCostStatus.ESTIMATED
+                if estimated
+                else SaleCostStatus.COMPLETE
+            ),
             missing,
             staged.events,
         )
+
+    async def _cost_changed(
+        self,
+        item_ids: tuple[UUID, ...],
+        warehouse_id: UUID,
+        occurred_at: datetime | None,
+    ) -> bool:
+        if self.session is None or occurred_at is None:
+            return False
+        value = await self.session.scalar(
+            select(InventoryTransactionModel.id)
+            .join(
+                InventoryTransactionLineModel,
+                InventoryTransactionLineModel.transaction_id
+                == InventoryTransactionModel.id,
+            )
+            .where(
+                InventoryTransactionLineModel.inventory_item_id.in_(item_ids),
+                InventoryTransactionLineModel.quantity_delta > 0,
+                InventoryTransactionModel.status == "POSTED",
+                InventoryTransactionModel.warehouse_id == warehouse_id,
+                InventoryTransactionModel.posted_at > occurred_at,
+                InventoryTransactionModel.type.in_(
+                    ("PURCHASE", "TRANSFER_IN", "RETURN_IN", "ADJUSTMENT")
+                ),
+            )
+            .limit(1)
+        )
+        return value is not None

@@ -459,7 +459,7 @@ class SqlAlchemyFinanceRepository:
         statement = select(func.count(FinanceEntryModel.id)).where(
             FinanceEntryModel.organization_id == organization_id,
             FinanceEntryModel.entry_type == FinanceEntryType.COGS.value,
-            FinanceEntryModel.quality_status == "INCOMPLETE",
+            FinanceEntryModel.quality_status.in_(("INCOMPLETE", "ESTIMATED")),
             FinanceEntryModel.effective_at >= date_from,
             FinanceEntryModel.effective_at < date_to,
         )

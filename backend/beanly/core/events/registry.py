@@ -34,6 +34,14 @@ from beanly.modules.inventory.domain.events import (
     StockAdjusted,
     StockWentNegative,
 )
+from beanly.modules.offline_pos.domain.events import (
+    OfflineOrderSynced,
+    OfflineSessionClosed,
+    OfflineSessionStarted,
+    OfflineSyncConflict,
+    PosDevicePaired,
+    PosDeviceRevoked,
+)
 from beanly.modules.payments.domain.events import PaymentCompleted
 from beanly.modules.purchasing.domain.events import (
     GoodsReceiptCreated,
@@ -59,6 +67,18 @@ class EventSpec:
 
 
 EVENT_REGISTRY: dict[type[object], EventSpec] = {
+    PosDevicePaired: EventSpec("pos.device_paired", 1, "pos_device", "device_id"),
+    PosDeviceRevoked: EventSpec("pos.device_revoked", 1, "pos_device", "device_id"),
+    OfflineSessionStarted: EventSpec(
+        "pos.offline_session_started", 1, "pos_offline_session", "session_id"
+    ),
+    OfflineSessionClosed: EventSpec(
+        "pos.offline_session_closed", 1, "pos_offline_session", "session_id"
+    ),
+    OfflineOrderSynced: EventSpec("pos.offline_order_synced", 1, "sales_order", "order_id"),
+    OfflineSyncConflict: EventSpec(
+        "pos.offline_sync_conflict", 1, "pos_offline_session", "session_id"
+    ),
     IntegrationConnectionCreated: EventSpec(
         "integration.connection_created", 1, "integration_connection", "connection_id"
     ),

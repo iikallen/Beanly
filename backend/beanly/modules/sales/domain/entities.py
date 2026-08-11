@@ -113,3 +113,8 @@ class SalesOrder:
     inventory_transaction_id: UUID | None = None
     cogs_amount: Decimal | None = None
     cogs_status: SaleCostStatus | None = None
+    version: int = 1
+    pos_device_id: UUID | None = None
+    offline_session_id: UUID | None = None
+    client_created_at: datetime | None = None
+    offline_display_number: int | None = None

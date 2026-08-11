@@ -21,3 +21,4 @@ class OrderStatus(StrEnum):
 class SaleCostStatus(StrEnum):
     COMPLETE = "COMPLETE"
     INCOMPLETE = "INCOMPLETE"
+    ESTIMATED = "ESTIMATED"

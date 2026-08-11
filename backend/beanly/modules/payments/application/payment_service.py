@@ -40,6 +40,8 @@ class PaymentLineInput:
 class CompletePaymentInput:
     client_payment_id: UUID
     lines: tuple[PaymentLineInput, ...]
+    completed_at: datetime | None = None
+    offline_session_id: UUID | None = None
 
 
 class PaymentService:
@@ -67,124 +69,144 @@ class PaymentService:
             order_id=str(order_id),
         ):
             try:
-                result = await self._complete(context, order_id, value)
+                result = await self.complete_staged(context, order_id, value)
+                with traced("transaction.commit"):
+                    await self.repository.commit()
+            except PaymentConflict as exc:
+                await self.repository.rollback()
+                result = await self._recover_conflict(
+                    context.organization_id,
+                    order_id,
+                    value,
+                    exc,
+                )
             except Exception:
+                await self.repository.rollback()
                 metrics.payment_failed.add(1)
                 raise
             metrics.payment_completed.add(1)
             metrics.inventory_sales.add(1)
             return result
 
-    async def _complete(
+    async def complete_staged(
         self,
         context: TenantContext,
         order_id: UUID,
         value: CompletePaymentInput,
     ) -> Payment:
-        try:
-            with traced("order.lock", order_id=str(order_id)):
-                order = await self.sales.lock_order_for_payment(context, order_id)
-            lines = _normalize_lines(value.lines)
-            existing = await self.repository.get_by_client_id(
-                context.organization_id, value.client_payment_id
+        with traced("order.lock", order_id=str(order_id)):
+            order = await self.sales.lock_order_for_payment(context, order_id)
+        lines = _normalize_lines(value.lines)
+        existing = await self.repository.get_by_client_id(
+            context.organization_id, value.client_payment_id
+        )
+        if existing is not None:
+            return _idempotent(
+                existing,
+                order_id,
+                lines,
+                value.completed_at,
+                value.offline_session_id,
             )
-            if existing is not None:
-                return _idempotent(existing, order_id, lines)
-            if order.status == OrderStatus.PAID:
-                raise OrderAlreadyPaid("Order is already paid")
-            if order.status != OrderStatus.OPEN:
-                raise OrderNotPayable("Only OPEN orders can be paid")
-            if not order.shift_is_open:
-                raise OrderShiftClosed("Order shift is not OPEN")
-            if not order.has_items:
-                raise OrderNotPayable("Order must contain at least one item")
-            amount_minor = sum(line.amount_minor for line in lines)
-            if amount_minor > MAX_NUMERIC_20_6_MINOR:
-                raise InvalidPayment("Payment total exceeds the finance ledger limit")
-            if amount_minor != order.total_minor:
-                raise PaymentAmountMismatch("Payment lines must equal the order total")
-            with traced("inventory.sale", order_id=str(order.id)):
+        if order.status == OrderStatus.PAID:
+            raise OrderAlreadyPaid("Order is already paid")
+        if order.status != OrderStatus.OPEN:
+            raise OrderNotPayable("Only OPEN orders can be paid")
+        if not order.shift_is_open:
+            raise OrderShiftClosed("Order shift is not OPEN")
+        if not order.has_items:
+            raise OrderNotPayable("Order must contain at least one item")
+        amount_minor = sum(line.amount_minor for line in lines)
+        if amount_minor > MAX_NUMERIC_20_6_MINOR:
+            raise InvalidPayment("Payment total exceeds the finance ledger limit")
+        if amount_minor != order.total_minor:
+            raise PaymentAmountMismatch("Payment lines must equal the order total")
+        completed_at = value.completed_at or datetime.now(UTC)
+        if completed_at.utcoffset() is None:
+            raise InvalidPayment("Payment completed_at must include a timezone")
+        completed_at = completed_at.astimezone(UTC)
+        with traced("inventory.sale", order_id=str(order.id)):
+            sale_lines = tuple(
+                SaleStockLine(
+                    component.inventory_item_id,
+                    component.base_unit,
+                    component.quantity,
+                )
+                for component in order.sale_components
+            )
+            if value.offline_session_id:
                 staged_sale = await self.inventory.stage_sale(
                     context,
                     order_id=order.id,
                     order_number=order.order_number,
                     warehouse_id=order.warehouse_id,
-                    lines=tuple(
-                        SaleStockLine(
-                            component.inventory_item_id,
-                            component.base_unit,
-                            component.quantity,
-                        )
-                        for component in order.sale_components
-                    ),
+                    lines=sale_lines,
+                    occurred_at=completed_at,
                 )
-            now = datetime.now(UTC)
-            payment_id = uuid4()
-            payment = Payment(
-                payment_id,
-                order.organization_id,
-                order.location_id,
+            else:
+                staged_sale = await self.inventory.stage_sale(
+                    context,
+                    order_id=order.id,
+                    order_number=order.order_number,
+                    warehouse_id=order.warehouse_id,
+                    lines=sale_lines,
+                )
+        recorded_at = datetime.now(UTC)
+        payment_id = uuid4()
+        payment = Payment(
+            payment_id,
+            order.organization_id,
+            order.location_id,
+            order.id,
+            order.shift_id,
+            value.client_payment_id,
+            order.currency_code,
+            amount_minor,
+            context.user_id,
+            completed_at,
+            recorded_at,
+            recorded_at,
+            tuple(
+                PaymentLine(
+                    uuid4(),
+                    payment_id,
+                    line.method,
+                    line.amount_minor,
+                    line.cash_received_minor,
+                    line.change_minor,
+                    line.reference,
+                    sort_order,
+                    recorded_at,
+                )
+                for sort_order, line in enumerate(lines)
+            ),
+            value.offline_session_id,
+        )
+        with traced("payment.persist", payment_id=str(payment.id)):
+            saved = await self.repository.add(payment)
+            await self.sales.mark_order_paid(
                 order.id,
-                order.shift_id,
-                value.client_payment_id,
-                order.currency_code,
-                amount_minor,
                 context.user_id,
-                now,
-                now,
-                now,
-                tuple(
-                    PaymentLine(
-                        uuid4(),
-                        payment_id,
-                        line.method,
-                        line.amount_minor,
-                        line.cash_received_minor,
-                        line.change_minor,
-                        line.reference,
-                        sort_order,
-                        now,
-                    )
-                    for sort_order, line in enumerate(lines)
+                completed_at,
+                staged_sale.inventory_transaction_id,
+                staged_sale.cogs_amount,
+                staged_sale.cogs_status,
+            )
+        with traced("outbox.stage", aggregate_id=str(saved.id)):
+            events = (
+                *staged_sale.events,
+                PaymentCompleted(
+                    saved.id,
+                    saved.order_id,
+                    saved.organization_id,
+                    saved.location_id,
+                    saved.amount_minor,
                 ),
             )
-            with traced("payment.persist", payment_id=str(payment.id)):
-                saved = await self.repository.add(payment)
-                await self.sales.mark_order_paid(
-                    order.id,
-                    context.user_id,
-                    now,
-                    staged_sale.inventory_transaction_id,
-                    staged_sale.cogs_amount,
-                    staged_sale.cogs_status,
-                )
-            with traced("outbox.stage", aggregate_id=str(saved.id)):
-                await self.sink.stage_many(
-                    (
-                        *staged_sale.events,
-                        PaymentCompleted(
-                            saved.id,
-                            saved.order_id,
-                            saved.organization_id,
-                            saved.location_id,
-                            saved.amount_minor,
-                        ),
-                    )
-                )
-            with traced("transaction.commit"):
-                await self.repository.commit()
-        except PaymentConflict as exc:
-            await self.repository.rollback()
-            return await self._recover_conflict(
-                context.organization_id,
-                order_id,
-                value.client_payment_id,
-                value.lines,
-                exc,
-            )
-        except Exception:
-            await self.repository.rollback()
-            raise
+            if value.offline_session_id:
+                await self.sink.stage_many(events, occurred_at=completed_at)
+            else:
+                await self.sink.stage_many(events)
         return saved
 
     async def get(
@@ -242,16 +264,21 @@ class PaymentService:
         self,
         organization_id: UUID,
         order_id: UUID,
-        client_payment_id: UUID,
-        requested: tuple[PaymentLineInput, ...],
+        value: CompletePaymentInput,
         original: PaymentConflict,
     ) -> Payment:
-        lines = _normalize_lines(requested)
+        lines = _normalize_lines(value.lines)
         existing = await self.repository.get_by_client_id(
-            organization_id, client_payment_id
+            organization_id, value.client_payment_id
         )
         if existing is not None:
-            return _idempotent(existing, order_id, lines)
+            return _idempotent(
+                existing,
+                order_id,
+                lines,
+                value.completed_at,
+                value.offline_session_id,
+            )
         if await self.repository.get_by_order(organization_id, order_id) is not None:
             raise OrderAlreadyPaid("Order is already paid") from original
         raise original
@@ -263,6 +290,7 @@ class PaymentService:
             raise PaymentNotFound("Payment not found")
         await self.sales.ensure_location_access(context, value.location_id)
         return value
+
 
 @dataclass(frozen=True, slots=True)
 class _NormalizedLine:
@@ -318,6 +346,8 @@ def _idempotent(
     existing: Payment,
     order_id: UUID,
     requested: tuple[_NormalizedLine, ...],
+    completed_at: datetime | None = None,
+    offline_session_id: UUID | None = None,
 ) -> Payment:
     persisted = tuple(
         _NormalizedLine(
@@ -329,7 +359,26 @@ def _idempotent(
         )
         for line in existing.lines
     )
-    if existing.order_id != order_id or persisted != requested:
+    if completed_at is not None and completed_at.utcoffset() is None:
+        raise InvalidPayment("Payment completed_at must include a timezone")
+    requested_completed_at = completed_at.astimezone(UTC) if completed_at is not None else None
+    existing_completed_at = (
+        existing.completed_at
+        if existing.completed_at.tzinfo is not None
+        else existing.completed_at.replace(tzinfo=UTC)
+    )
+    if (
+        existing.order_id != order_id
+        or persisted != requested
+        or (
+            requested_completed_at is not None
+            and existing_completed_at.astimezone(UTC) != requested_completed_at
+        )
+        or (
+            offline_session_id is not None
+            and existing.offline_session_id != offline_session_id
+        )
+    ):
         raise PaymentIdempotencyConflict(
             "client_payment_id was already used with a different request"
         )

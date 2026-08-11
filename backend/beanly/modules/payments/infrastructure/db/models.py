@@ -44,6 +44,9 @@ class PaymentModel(Base):
     shift_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("register_shifts.id"), index=True
     )
+    offline_session_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("pos_offline_sessions.id"), nullable=True, index=True
+    )
     client_payment_id: Mapped[UUID] = mapped_column(Uuid)
     currency_code: Mapped[str] = mapped_column(String(3))
     amount_minor: Mapped[int] = mapped_column(BigInteger)

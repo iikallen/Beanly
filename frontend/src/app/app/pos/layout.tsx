@@ -2,11 +2,13 @@
 
 import { MapPin } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { useAuth } from "@/components/auth-provider";
 import { useWorkspace } from "@/components/workspace-provider";
+import { readCurrentSession } from "@/lib/offline/db";
+import type { OfflineSession } from "@/lib/offline/types";
 
 export default function PosLayout({ children }: { children: React.ReactNode }) {
   const { user, loading: authLoading } = useAuth();
@@ -20,18 +22,46 @@ export default function PosLayout({ children }: { children: React.ReactNode }) {
     selectLocation,
   } = useWorkspace();
   const router = useRouter();
+  const [cachedSession, setCachedSession] = useState<OfflineSession | null>(null);
+  const [cacheChecked, setCacheChecked] = useState(false);
 
   useEffect(() => {
-    if (!authLoading && !user) router.replace("/login");
-    if (!authLoading && user && !workspaceLoading && !error && organizations.length === 0) {
-      router.replace("/onboarding");
-    }
+    if (authLoading) return;
+    if (user && !error) return;
+    let cancelled = false;
+    readCurrentSession()
+      .then((session) => {
+        if (cancelled) return;
+        const usable = session && (session.status === "ACTIVE" || session.status === "EXPIRED") && session.device_id;
+        setCachedSession(usable ? session : null);
+        if (!usable && !user) router.replace("/login");
+      })
+      .finally(() => { if (!cancelled) setCacheChecked(true); });
+    return () => { cancelled = true; };
+  }, [authLoading, error, router, user]);
+
+  useEffect(() => {
+    if (!authLoading && user && !workspaceLoading && !error && organizations.length === 0) router.replace("/onboarding");
   }, [authLoading, error, organizations.length, router, user, workspaceLoading]);
 
-  if (authLoading || workspaceLoading || !user) {
+  if (authLoading || ((!user || Boolean(error)) && !cacheChecked) || (user && workspaceLoading)) {
     return <main className="loading-state">Loading…</main>;
   }
+  if ((!user || error) && cachedSession) {
+    return (
+      <main className="pos-offline-shell">
+        <div className="pos-workspace">
+          <header className="menu-topbar">
+            <strong>{cachedSession.shell.location_name} · {cachedSession.shell.register_name}</strong>
+            <span>Offline session · {cachedSession.shell.operator_name}</span>
+          </header>
+          {children}
+        </div>
+      </main>
+    );
+  }
   if (error) return <main className="loading-state error-state">{error}</main>;
+  if (!user) return <main className="loading-state">Loading…</main>;
   if (!currentOrganization || !currentLocation) {
     return <main className="loading-state">Preparing workspace…</main>;
   }

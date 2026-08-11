@@ -12,6 +12,9 @@
 
 /* POS */
 .pos-workspace { min-width: 0; background: #f7f8f6; }
+.pos-offline-shell { min-height: 100vh; background: #f7f8f6; }
+.pos-offline-shell .pos-workspace { min-height: 100vh; }
+.pos-offline-shell .menu-topbar { justify-content: space-between; padding: 0 24px; }
 .app-shell:has(.pos-workspace) { grid-template-columns: 250px minmax(0, 1fr); }
 .app-shell:has(.pos-workspace) .app-sidebar .brand { margin-left: 4px; font-size: 42px; font-weight: 400; }
 .app-shell:has(.pos-workspace) .app-sidebar .brand svg,
@@ -33,6 +36,23 @@
 .pos-header strong { display: flex; align-items: center; gap: 7px; font-size: 14px; }
 .pos-header strong svg { width: 17px; height: 17px; color: var(--muted); }
 .pos-header-actions { display: flex; gap: 10px; }
+.pos-status-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; margin: -10px 0 18px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+.pos-connection { display: inline-flex; align-items: center; gap: 7px; font-weight: 800; }
+.pos-connection i { width: 9px; height: 9px; border-radius: 50%; background: #c78d2f; }
+.pos-connection.is-online i { background: #2d7a43; }
+.pos-connection.is-offline i { background: #a64539; }
+.pos-sync-status { min-width: 0; display: flex; flex: 1; flex-wrap: wrap; align-items: center; gap: 7px 12px; color: var(--muted); font-size: 12px; }
+.pos-sync-status b { color: var(--text); }
+.pos-sync-status small { width: 100%; color: #a64539; }
+.pos-sync-status button, .pos-offline-ready button { padding: 0; border: 0; background: transparent; color: var(--primary); font: inherit; font-weight: 800; cursor: pointer; }
+.pos-offline-ready { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 5px 11px; color: #8c3127; font-size: 11px; }
+.pos-offline-ready.is-ready { color: #2d6a3d; }
+.pos-offline-ready span { color: var(--muted); }
+.pos-notice { margin: -8px 0 16px; padding: 11px 14px; border: 1px solid #e5c884; border-radius: 6px; background: #fff9e9; color: #755514; }
+.pos-notice button { margin-left: 8px; border: 0; background: transparent; color: inherit; font-weight: 800; text-decoration: underline; cursor: pointer; }
+.pos-order-state { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase; }
+.pos-payment-confirm { display: flex; gap: 10px; margin-top: 16px; padding: 14px; border: 1px solid #e5c884; border-radius: 6px; background: #fff9e9; line-height: 1.4; }
+.pos-payment-confirm input { width: 18px; height: 18px; accent-color: var(--primary); }
 .pos-global-error { margin: -8px 0 16px; padding: 11px 14px; border: 1px solid #e4b5ad; border-radius: 6px; background: #fff5f3; color: #8c3127; }
 .pos-grid { position: relative; min-height: calc(100vh - 184px); display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 18px; }
 .pos-catalog, .pos-receipt, .pos-orders-drawer { border: 1px solid var(--border); border-radius: 10px; background: #fff; }

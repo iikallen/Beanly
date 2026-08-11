@@ -41,7 +41,7 @@ def payment_service(session: SessionDep) -> PaymentService:
     return PaymentService(
         SqlAlchemyPaymentRepository(session),
         SalesSettlementGateway(sales_repository, organizations),
-        InventorySaleGateway(inventory),
+        InventorySaleGateway(inventory, session),
         OutboxEventSink(OutboxRepository(session)),
     )
 

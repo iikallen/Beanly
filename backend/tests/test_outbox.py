@@ -40,6 +40,14 @@ from beanly.modules.inventory.domain.events import (
     StockAdjusted,
     StockWentNegative,
 )
+from beanly.modules.offline_pos.domain.events import (
+    OfflineOrderSynced,
+    OfflineSessionClosed,
+    OfflineSessionStarted,
+    OfflineSyncConflict,
+    PosDevicePaired,
+    PosDeviceRevoked,
+)
 from beanly.modules.payments.domain.events import PaymentCompleted
 from beanly.modules.purchasing.domain.events import (
     GoodsReceiptCreated,
@@ -78,7 +86,51 @@ def _event_contracts() -> tuple[tuple[object, str, str, UUID], ...]:
     connection_id = uuid4()
     integration_job_id = uuid4()
     inbox_event_id = uuid4()
+    device_id = uuid4()
+    offline_session_id = uuid4()
+    client_order_id = uuid4()
     return (
+        (
+            PosDevicePaired(organization_id, device_id),
+            "pos.device_paired",
+            "pos_device",
+            device_id,
+        ),
+        (
+            PosDeviceRevoked(organization_id, device_id),
+            "pos.device_revoked",
+            "pos_device",
+            device_id,
+        ),
+        (
+            OfflineSessionStarted(organization_id, offline_session_id),
+            "pos.offline_session_started",
+            "pos_offline_session",
+            offline_session_id,
+        ),
+        (
+            OfflineSessionClosed(organization_id, offline_session_id),
+            "pos.offline_session_closed",
+            "pos_offline_session",
+            offline_session_id,
+        ),
+        (
+            OfflineOrderSynced(organization_id, offline_session_id, order_id),
+            "pos.offline_order_synced",
+            "sales_order",
+            order_id,
+        ),
+        (
+            OfflineSyncConflict(
+                organization_id,
+                offline_session_id,
+                client_order_id,
+                "OFFLINE_REVISION_CONFLICT",
+            ),
+            "pos.offline_sync_conflict",
+            "pos_offline_session",
+            offline_session_id,
+        ),
         (
             IntegrationConnectionCreated(connection_id, organization_id),
             "integration.connection_created",
@@ -353,6 +405,22 @@ def test_all_domain_events_have_exact_stable_v1_contracts() -> None:
         "location_id": str(payment_event.location_id),
         "amount_minor": 260000,
     }
+    pos_payload_keys = {
+        "pos.device_paired": {"organization_id", "device_id"},
+        "pos.device_revoked": {"organization_id", "device_id"},
+        "pos.offline_session_started": {"organization_id", "session_id"},
+        "pos.offline_session_closed": {"organization_id", "session_id"},
+        "pos.offline_order_synced": {"organization_id", "session_id", "order_id"},
+        "pos.offline_sync_conflict": {
+            "organization_id",
+            "session_id",
+            "client_order_id",
+            "code",
+        },
+    }
+    for event, name, *_ in contracts:
+        if name in pos_payload_keys:
+            assert set(to_envelope(event).payload) == pos_payload_keys[name]
 
 
 @dataclass(frozen=True, slots=True)

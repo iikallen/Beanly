@@ -188,6 +188,7 @@ class OrderService:
                     _optional(table_label, 100) if table_label_set else order.table_label
                 ),
                 note=_optional(note, 4000) if note_set else order.note,
+                version=order.version + 1,
                 updated_at=datetime.now(UTC),
             )
             saved = await self.repository.update_order(updated)
@@ -211,6 +212,7 @@ class OrderService:
                     cancelled_by_user_id=context.user_id,
                     cancelled_at=now,
                     cancel_reason=_required(reason, 1000, "Cancel reason"),
+                    version=order.version + 1,
                     updated_at=now,
                 )
             )
