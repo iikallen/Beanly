@@ -352,6 +352,20 @@ async def test_terminal_attempt_is_exact_idempotent_and_fails_closed_without_bri
         headers=headers,
     )
     _coded(unavailable, 503, "PAYMENT_TERMINAL_UNAVAILABLE")
+
+    async with sessions() as session:
+        await session.execute(
+            update(SalesOrderModel)
+            .where(SalesOrderModel.id == UUID(order["id"]))
+            .values(status="PAID")
+        )
+        await session.commit()
+    replayed_after_payment = await client.post(
+        "/api/v1/payments/external-attempts", headers=headers, json=payload
+    )
+    assert replayed_after_payment.status_code == 201, replayed_after_payment.text
+    assert replayed_after_payment.json()["id"] == created.json()["id"]
+
     async with sessions() as session:
         assert (
             await session.scalar(

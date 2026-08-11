@@ -130,6 +130,14 @@ class TerminalPaymentService:
     async def create_attempt(
         self, context: TenantContext, value: ExternalAttemptInput
     ) -> ExternalPaymentAttempt:
+        request_hash = _request_hash(value)
+        existing = await self.repository.get_external_attempt_by_client_id(
+            context.organization_id, value.client_attempt_id
+        )
+        if existing is not None:
+            await self.sales.ensure_location_access(context, existing.location_id)
+            return _idempotent(existing, value, request_hash)
+
         order = await self.sales.lock_order_for_payment(context, value.order_id)
         if order.status != OrderStatus.OPEN or not order.shift_is_open or not order.has_items:
             raise OrderNotPayable("Order is not payable")
@@ -144,12 +152,6 @@ class TerminalPaymentService:
         if value.amount_minor != order.total_minor:
             raise ExternalPaymentAttemptAmountMismatch("Attempt must equal the order total")
 
-        request_hash = _request_hash(value)
-        existing = await self.repository.get_external_attempt_by_client_id(
-            context.organization_id, value.client_attempt_id
-        )
-        if existing is not None:
-            return _idempotent(existing, value, request_hash)
         await self.repository.validate_terminal_binding(
             context.organization_id,
             location_id=order.location_id,
