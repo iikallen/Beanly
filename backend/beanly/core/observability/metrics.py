@@ -24,6 +24,16 @@ class BeanlyMetrics:
         self.refund_failed = meter.create_counter("refund.failed.total")
         self.refund_amount = meter.create_counter("refund.amount.minor.total")
         self.fiscal_refund_jobs = meter.create_counter("fiscal.refund.jobs.total")
+        self.fiscal_receipts = meter.create_counter("fiscal.receipts.total")
+        self.fiscal_receipt_success = meter.create_counter("fiscal.receipt.success.total")
+        self.fiscal_receipt_failed = meter.create_counter("fiscal.receipt.failed.total")
+        self.fiscal_receipt_unknown = meter.create_counter("fiscal.receipt.unknown.total")
+        self.fiscal_receipt_duration = meter.create_histogram(
+            "fiscal.receipt.duration", unit="s"
+        )
+        self.nkt_requests = meter.create_counter("nkt.requests.total")
+        self.nkt_cache_hits = meter.create_counter("nkt.cache.hits.total")
+        self.nkt_rate_limit = meter.create_counter("nkt.rate_limit.total")
         self.negative_stock = meter.create_counter("inventory.negative_stock.total")
         self.pos_offline_sessions_started = meter.create_counter(
             "pos.offline.sessions.started.total"
@@ -46,6 +56,8 @@ class BeanlyMetrics:
             "integration_jobs_pending": 0,
             "integration_dead_lettered": 0,
             "integration_oldest_pending_seconds": 0,
+            "fiscal_pending_count": 0,
+            "fiscal_oldest_pending_seconds": 0,
             "db_connections": 0,
             "db_pool_checked_out": 0,
         }

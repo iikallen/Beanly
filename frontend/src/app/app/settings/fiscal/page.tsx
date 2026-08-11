@@ -1,13 +1,28 @@
 "use client";
 
-import { Check, CircleAlert, Pencil, X } from "lucide-react";
+import { Check, CircleAlert, Link2, Pencil, RefreshCcw, Search, ShieldCheck, X } from "lucide-react";
 import { useSearchParams } from "next/navigation";
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAuth } from "@/components/auth-provider";
 import { useWorkspace } from "@/components/workspace-provider";
 import { useIntegrationPermissions } from "@/hooks/use-integration-permissions";
-import { ApiError, api, type FiscalReadiness, type FiscalTaxProfile, type FiscalVariantProfile } from "@/lib/api";
+import {
+  ApiError,
+  api,
+  type FiscalEnforcement,
+  type FiscalEnforcementMode,
+  type FiscalGoLiveReadiness,
+  type FiscalReadiness,
+  type FiscalRoute,
+  type FiscalTaxProfile,
+  type FiscalVariantProfile,
+  type IntegrationConnection,
+  type IntegrationProvider,
+  type NktProduct,
+  type PosRegister,
+  type TerminalBinding,
+} from "@/lib/api";
 import { localDateInput } from "@/lib/dashboard";
 import { trapDialogFocus } from "@/lib/dialog";
 
@@ -18,7 +33,7 @@ const emptyVariant: VariantDraft = { fiscal_name: "", nkt_code: null, nkt_code_t
 
 export default function FiscalSettingsPage() {
   const { accessToken } = useAuth();
-  const { currentOrganization } = useWorkspace();
+  const { currentOrganization, currentLocation } = useWorkspace();
   const permissions = useIntegrationPermissions();
   const searchParams = useSearchParams();
   const linkedVariantId = searchParams.get("variant_id") ?? "";
@@ -30,6 +45,24 @@ export default function FiscalSettingsPage() {
   const [variantId, setVariantId] = useState("");
   const [variantName, setVariantName] = useState("");
   const [variant, setVariant] = useState<VariantDraft>(emptyVariant);
+  const [variantProfile, setVariantProfile] = useState<FiscalVariantProfile | null>(null);
+  const [nktMode, setNktMode] = useState<"CACHE" | "NTIN" | "GTIN">("CACHE");
+  const [nktQuery, setNktQuery] = useState("");
+  const [nktResults, setNktResults] = useState<NktProduct[]>([]);
+  const [selectedNtin, setSelectedNtin] = useState("");
+  const [nktBusy, setNktBusy] = useState(false);
+  const [enforcement, setEnforcement] = useState<FiscalEnforcement | null>(null);
+  const [goLive, setGoLive] = useState<FiscalGoLiveReadiness | null>(null);
+  const [routes, setRoutes] = useState<FiscalRoute[]>([]);
+  const [registers, setRegisters] = useState<PosRegister[]>([]);
+  const [connections, setConnections] = useState<IntegrationConnection[]>([]);
+  const [providers, setProviders] = useState<IntegrationProvider[]>([]);
+  const [terminalBindings, setTerminalBindings] = useState<TerminalBinding[]>([]);
+  const [routeRegisterId, setRouteRegisterId] = useState("");
+  const [routeConnectionId, setRouteConnectionId] = useState("");
+  const [routeSourceMode, setRouteSourceMode] = useState<FiscalRoute["source_mode"]>("EXTERNAL_KKM");
+  const [terminalConnectionId, setTerminalConnectionId] = useState("");
+  const [externalTerminalId, setExternalTerminalId] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -42,7 +75,7 @@ export default function FiscalSettingsPage() {
 
   const load = useCallback(async () => {
     const activeRequestId = ++requestId.current;
-    if (!accessToken || !currentOrganization || permissions.loading || !permissions.canReadFiscal) {
+    if (!accessToken || !currentOrganization || !currentLocation || permissions.loading || !permissions.canReadFiscal) {
       setProfile(null);
       setReadiness(null);
       setLoadedOrganizationId("");
@@ -57,16 +90,30 @@ export default function FiscalSettingsPage() {
     setProfile(null);
     setReadiness(null);
     try {
-      const [nextProfile, nextReadiness] = await Promise.all([
+      const [nextProfile, nextReadiness, nextEnforcement, nextGoLive, nextRoutes, nextRegisters, nextConnections, nextProviders] = await Promise.all([
         api.getFiscalTaxProfile(currentOrganization.id, accessToken).catch((caught) => {
           if (caught instanceof ApiError && caught.status === 404) return null;
           throw caught;
         }),
         api.getFiscalReadiness(currentOrganization.id, accessToken),
+        api.getFiscalEnforcement(currentLocation.id, currentOrganization.id, accessToken),
+        api.getFiscalGoLiveReadiness(currentLocation.id, currentOrganization.id, accessToken),
+        api.listFiscalRoutes(currentLocation.id, currentOrganization.id, accessToken),
+        api.listPosRegisters(currentLocation.id, currentOrganization.id, accessToken),
+        api.listIntegrationConnections(currentOrganization.id, accessToken),
+        api.listIntegrationProviders(currentOrganization.id, accessToken),
       ]);
       if (requestId.current !== activeRequestId) return;
       setProfile(nextProfile);
       setReadiness(nextReadiness);
+      setEnforcement(nextEnforcement);
+      setGoLive(nextGoLive);
+      setRoutes(nextRoutes);
+      setRegisters(nextRegisters.filter((item) => item.is_active));
+      setConnections(nextConnections.filter((item) => item.status === "ACTIVE"));
+      setProviders(nextProviders);
+      const defaultRegister = nextRegisters.find((item) => item.is_active)?.id ?? "";
+      setRouteRegisterId((current) => nextRegisters.some((item) => item.id === current && item.is_active) ? current : defaultRegister);
       setLoadedOrganizationId(currentOrganization.id);
       setTax(nextProfile ? {
         country_code: nextProfile.country_code,
@@ -80,9 +127,34 @@ export default function FiscalSettingsPage() {
     } finally {
       if (requestId.current === activeRequestId) setLoading(false);
     }
-  }, [accessToken, currentOrganization, permissions.canReadFiscal, permissions.loading]);
+  }, [accessToken, currentLocation, currentOrganization, permissions.canReadFiscal, permissions.loading]);
 
   useEffect(() => { queueMicrotask(() => { void load(); }); }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadBindings() {
+      await Promise.resolve();
+      if (!accessToken || !currentOrganization || !routeRegisterId || (!permissions.canUseTerminal && !permissions.canManageTerminal)) {
+        setTerminalBindings([]);
+        return;
+      }
+      try {
+        const values = await api.listTerminalBindings(routeRegisterId, currentOrganization.id, accessToken);
+        if (!cancelled) setTerminalBindings(values);
+      } catch {
+        if (!cancelled) setTerminalBindings([]);
+      }
+    }
+    void loadBindings();
+    return () => { cancelled = true; };
+  }, [accessToken, currentOrganization, permissions.canManageTerminal, permissions.canUseTerminal, routeRegisterId]);
+
+  const fiscalProviderCodes = useMemo(() => new Set(providers.filter((item) => item.capabilities.includes("FISCAL")).map((item) => item.code)), [providers]);
+  const paymentProviderCodes = useMemo(() => new Set(providers.filter((item) => item.capabilities.includes("PAYMENT")).map((item) => item.code)), [providers]);
+  const fiscalConnections = connections.filter((item) => fiscalProviderCodes.has(item.provider_code));
+  const paymentConnections = connections.filter((item) => paymentProviderCodes.has(item.provider_code));
+  const routeConnections = routeSourceMode === "EXTERNAL_KKM" ? fiscalConnections : paymentConnections;
 
   async function saveTax(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -128,6 +200,10 @@ export default function FiscalSettingsPage() {
       if (activeOrganizationId.current !== requestOrganizationId) return;
       setVariantId(id);
       setVariantName(name);
+      setVariantProfile(value);
+      setNktQuery("");
+      setNktResults([]);
+      setSelectedNtin("");
       setVariant(value ? {
         fiscal_name: value.fiscal_name,
         nkt_code: value.nkt_code,
@@ -176,7 +252,131 @@ export default function FiscalSettingsPage() {
 
   function closeVariant() {
     setVariantId("");
+    setVariantProfile(null);
     queueMicrotask(() => returnFocus.current?.focus());
+  }
+
+  async function searchNkt() {
+    if (!accessToken || !currentOrganization || !nktQuery.trim()) return;
+    setNktBusy(true);
+    setError("");
+    try {
+      const query = nktQuery.trim();
+      const results = nktMode === "NTIN"
+        ? [await api.getNktByNtin(query, currentOrganization.id, accessToken)]
+        : nktMode === "GTIN"
+          ? await api.getNktByGtin(query, currentOrganization.id, accessToken)
+          : await api.searchNkt(query, currentOrganization.id, accessToken);
+      setNktResults(results);
+      setSelectedNtin(results.length === 1 ? results[0].ntin : "");
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 404) {
+        setNktResults([]);
+        setSelectedNtin("");
+      } else setError(messageOf(caught));
+    } finally {
+      setNktBusy(false);
+    }
+  }
+
+  async function linkNkt() {
+    if (!accessToken || !currentOrganization || !variantId || !selectedNtin || !permissions.canWriteFiscal) return;
+    setNktBusy(true);
+    setError("");
+    try {
+      const value = await api.linkFiscalVariantNkt(variantId, selectedNtin, currentOrganization.id, accessToken);
+      setVariantProfile(value);
+      setVariant((current) => ({ ...current, nkt_code: value.nkt_code, nkt_code_type: value.nkt_code_type }));
+      setMessage(`${variantName} linked to verified NKT product.`);
+      setReadiness(await api.getFiscalReadiness(currentOrganization.id, accessToken));
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setNktBusy(false);
+    }
+  }
+
+  async function refreshNkt() {
+    if (!accessToken || !currentOrganization || !variantId || !permissions.canWriteFiscal) return;
+    setNktBusy(true);
+    setError("");
+    try {
+      const value = await api.refreshFiscalVariantNkt(variantId, currentOrganization.id, accessToken);
+      setVariantProfile(value);
+      setVariant((current) => ({ ...current, nkt_code: value.nkt_code, nkt_code_type: value.nkt_code_type }));
+      setMessage(`${variantName} NKT mapping refreshed for future sales.`);
+      setReadiness(await api.getFiscalReadiness(currentOrganization.id, accessToken));
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setNktBusy(false);
+    }
+  }
+
+  async function saveEnforcement(mode: FiscalEnforcementMode) {
+    if (!accessToken || !currentOrganization || !currentLocation || !permissions.canWriteFiscal) return;
+    setSaving(true);
+    setError("");
+    try {
+      setEnforcement(await api.updateFiscalEnforcement(currentLocation.id, mode, currentOrganization.id, accessToken));
+      setMessage(`Fiscal mode for ${currentLocation.name} updated.`);
+      setGoLive(await api.getFiscalGoLiveReadiness(currentLocation.id, currentOrganization.id, accessToken));
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function createRoute(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!accessToken || !currentOrganization || !currentLocation || !routeRegisterId || !routeConnectionId || !permissions.canWriteFiscal) return;
+    setSaving(true);
+    setError("");
+    try {
+      const route = await api.createFiscalRoute({ location_id: currentLocation.id, register_id: routeRegisterId, provider_connection_id: routeConnectionId, source_mode: routeSourceMode, is_active: true }, currentOrganization.id, accessToken);
+      setRoutes((current) => [...current.filter((item) => item.id !== route.id), route]);
+      setMessage("Fiscal route activated. Beanly prevents a second active route for this register.");
+      setGoLive(await api.getFiscalGoLiveReadiness(currentLocation.id, currentOrganization.id, accessToken));
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deactivateRoute(route: FiscalRoute) {
+    if (!accessToken || !currentOrganization || !permissions.canWriteFiscal) return;
+    setSaving(true);
+    setError("");
+    try {
+      const value = await api.updateFiscalRoute(route.id, { is_active: false }, currentOrganization.id, accessToken);
+      setRoutes((current) => current.map((item) => item.id === value.id ? value : item));
+      setMessage("Fiscal route disabled.");
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function createTerminalBinding(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!accessToken || !currentOrganization || !currentLocation || !routeRegisterId || !terminalConnectionId || !permissions.canManageTerminal) return;
+    const connection = paymentConnections.find((item) => item.id === terminalConnectionId);
+    if (!connection) return;
+    setSaving(true);
+    setError("");
+    try {
+      const binding = await api.createTerminalBinding({ connection_id: connection.id, location_id: currentLocation.id, register_id: routeRegisterId, provider_code: connection.provider_code, external_terminal_id: externalTerminalId.trim() || null, is_active: true }, currentOrganization.id, accessToken);
+      setTerminalBindings((current) => [...current.filter((item) => item.id !== binding.id), binding]);
+      setExternalTerminalId("");
+      setMessage("Payment terminal bound. No provider secret was sent to the browser.");
+    } catch (caught) {
+      setError(messageOf(caught));
+    } finally {
+      setSaving(false);
+    }
   }
 
   if (permissions.loading || loading) return <div className="fiscal-state">Loading fiscal settings…</div>;
@@ -195,8 +395,42 @@ export default function FiscalSettingsPage() {
         <ul>
           <li className={readiness?.tax_profile === "COMPLETE" ? "is-complete" : ""}><span>{readiness?.tax_profile === "COMPLETE" ? "✓" : "!"}</span>Tax profile</li>
           <li className={readiness?.location === "COMPLETE" ? "is-complete" : ""}><span>{readiness?.location === "COMPLETE" ? "✓" : "!"}</span>Location</li>
+          <li className={readiness?.unmapped_variants.length === 0 ? "is-complete" : ""}><span>{readiness?.unmapped_variants.length === 0 ? "✓" : "!"}</span>NKT mappings</li>
         </ul>
       </section>
+
+      <section className="fiscal-card fiscal-live-card">
+        <div className="fiscal-card-heading"><div><h2>{currentLocation?.name} fiscal mode</h2><p>Live mode blocks checkout before money is taken when fiscal preflight fails.</p></div><span>{enforcement?.mode ?? "DISABLED"}</span></div>
+        <div className="fiscal-mode-actions" role="group" aria-label="Fiscal enforcement mode">
+          <button className={enforcement?.mode === "DISABLED" ? "is-active" : ""} disabled={!permissions.canWriteFiscal || saving} type="button" onClick={() => void saveEnforcement("DISABLED")}>Disabled</button>
+          <button className={enforcement?.mode === "TEST" ? "is-active" : ""} disabled={!permissions.canWriteFiscal || saving} type="button" onClick={() => void saveEnforcement("TEST")}>Test</button>
+          <button className={enforcement?.mode === "LIVE_REQUIRED" ? "is-active" : ""} disabled={!permissions.canWriteFiscal || saving || !goLive?.ready} type="button" onClick={() => void saveEnforcement("LIVE_REQUIRED")}>Switch to production</button>
+        </div>
+        {!goLive?.ready && <p className="fiscal-advice">Production stays locked until every go-live check below passes.</p>}
+        <div className="fiscal-checklist">{Object.entries(goLive?.checks ?? {}).map(([code, complete]) => <article className={complete ? "is-complete" : ""} key={code}><span aria-hidden="true">{complete ? "✓" : "!"}</span><div><strong>{labelFromCode(code)}</strong></div><em>{complete ? "COMPLETE" : "INCOMPLETE"}</em></article>)}</div>
+      </section>
+
+      <section className="fiscal-card">
+        <div className="fiscal-card-heading"><div><h2>Fiscal routing</h2><p>One active fiscal source per register prevents duplicate receipts.</p></div><span>{routes.filter((item) => item.is_active).length} active</span></div>
+        {routes.length > 0 && <div className="fiscal-route-list">{routes.map((route) => <article key={route.id}><div><strong>{registers.find((item) => item.id === route.register_id)?.name ?? "Register"}</strong><span>{route.source_mode === "EXTERNAL_KKM" ? "External KKM" : "Payment terminal KKM"} · {connections.find((item) => item.id === route.provider_connection_id)?.display_name ?? shortId(route.provider_connection_id)}</span></div><span className={route.is_active ? "is-active" : ""}>{route.is_active ? "Active" : "Disabled"}</span>{route.is_active && permissions.canWriteFiscal && <button className="secondary-button" disabled={saving} type="button" onClick={() => void deactivateRoute(route)}>Disable</button>}</article>)}</div>}
+        {permissions.canWriteFiscal && <form className="fiscal-route-form" onSubmit={createRoute}>
+          <label><span>Register</span><select required value={routeRegisterId} onChange={(event) => setRouteRegisterId(event.target.value)}><option value="">Select register</option>{registers.map((register) => <option key={register.id} value={register.id}>{register.name}</option>)}</select></label>
+          <label><span>Fiscal source</span><select value={routeSourceMode} onChange={(event) => { setRouteSourceMode(event.target.value as FiscalRoute["source_mode"]); setRouteConnectionId(""); }}><option value="EXTERNAL_KKM">External KKM</option><option value="PAYMENT_TERMINAL_KKM">Payment terminal KKM</option></select></label>
+          <label><span>Connection</span><select required value={routeConnectionId} onChange={(event) => setRouteConnectionId(event.target.value)}><option value="">Select connection</option>{routeConnections.map((connection) => <option key={connection.id} value={connection.id}>{connection.display_name}</option>)}</select></label>
+          <button className="primary-button" disabled={saving || !routeRegisterId || !routeConnectionId} type="submit">Activate route</button>
+        </form>}
+      </section>
+
+      {(permissions.canUseTerminal || permissions.canManageTerminal) && <section className="fiscal-card">
+        <div className="fiscal-card-heading"><div><h2>Payment terminal</h2><p>Bindings expose only public terminal configuration. Provider secrets remain server-side.</p></div><ShieldCheck aria-hidden="true" /></div>
+        <label className="fiscal-terminal-register"><span>Register</span><select value={routeRegisterId} onChange={(event) => setRouteRegisterId(event.target.value)}><option value="">Select register</option>{registers.map((register) => <option key={register.id} value={register.id}>{register.name}</option>)}</select></label>
+        {terminalBindings.length > 0 && <div className="fiscal-terminal-bindings">{terminalBindings.map((binding) => <article key={binding.id}><div><strong>{binding.provider_code}</strong><span>{binding.external_terminal_id || "Provider-managed terminal"}</span></div><span className={binding.is_active ? "is-active" : ""}>{binding.is_active ? "Connected" : "Inactive"}</span></article>)}</div>}
+        {permissions.canManageTerminal && <form className="fiscal-terminal-form" onSubmit={createTerminalBinding}>
+          <label><span>Payment connection</span><select required value={terminalConnectionId} onChange={(event) => setTerminalConnectionId(event.target.value)}><option value="">Select connection</option>{paymentConnections.map((connection) => <option key={connection.id} value={connection.id}>{connection.display_name}</option>)}</select></label>
+          <label><span>External terminal ID <small>Optional</small></span><input maxLength={255} value={externalTerminalId} onChange={(event) => setExternalTerminalId(event.target.value)} /></label>
+          <button className="primary-button" disabled={saving || !routeRegisterId || !terminalConnectionId} type="submit">Bind terminal</button>
+        </form>}
+      </section>}
 
       <form className="fiscal-card" onSubmit={saveTax}>
         <div className="fiscal-card-heading"><div><h2>Organization tax profile</h2><p>Changes create a new effective version and do not rewrite past sales.</p></div>{profile && <span>Effective {profile.effective_from}</span>}</div>
@@ -223,8 +457,19 @@ export default function FiscalSettingsPage() {
             <button className="modal-close" disabled={saving} type="button" aria-label="Close fiscal profile" onClick={closeVariant}><X /></button>
             <span className="pos-eyebrow">Variant fiscal profile</span><h2 id="variant-fiscal-title">{variantName}</h2>
             <label className="modal-field"><span>Fiscal receipt name</span><input autoFocus required maxLength={300} disabled={!permissions.canWriteFiscal} value={variant.fiscal_name} onChange={(event) => setVariant((current) => ({ ...current, fiscal_name: event.target.value }))} /></label>
-            <label className="modal-field"><span>NKT code <small>Required for complete readiness</small></span><input maxLength={100} disabled={!permissions.canWriteFiscal} value={variant.nkt_code ?? ""} onChange={(event) => setVariant((current) => ({ ...current, nkt_code: event.target.value || null }))} /></label>
-            <label className="modal-field"><span>NKT code type <small>Optional</small></span><input maxLength={20} disabled={!permissions.canWriteFiscal} value={variant.nkt_code_type ?? ""} onChange={(event) => setVariant((current) => ({ ...current, nkt_code_type: event.target.value || null }))} /></label>
+            <section className="fiscal-nkt-mapping" aria-labelledby="nkt-mapping-title">
+              <div className="fiscal-nkt-heading"><div><h3 id="nkt-mapping-title">National Catalog</h3><p>Cache search is local. Use exact NTIN/GTIN lookup for the official catalog.</p></div>{variantProfile?.nkt_verified_at && <span><Check aria-hidden="true" />NKT verified</span>}</div>
+              {variantProfile?.nkt_code && <div className="fiscal-nkt-linked"><div><span>NTIN</span><strong>{variantProfile.nkt_code}</strong></div><div><span>Last verified</span><strong>{formatDate(variantProfile.nkt_verified_at)}</strong></div>{permissions.canWriteFiscal && <button className="secondary-button" disabled={nktBusy} type="button" onClick={() => void refreshNkt()}><RefreshCcw className={nktBusy ? "is-spinning" : ""} aria-hidden="true" />Refresh</button>}</div>}
+              <div className="fiscal-nkt-search">
+                <select aria-label="Catalog lookup type" value={nktMode} onChange={(event) => { setNktMode(event.target.value as typeof nktMode); setNktResults([]); setSelectedNtin(""); }}><option value="CACHE">Cached catalog</option><option value="NTIN">Exact NTIN</option><option value="GTIN">Exact GTIN</option></select>
+                <input aria-label="Catalog search" maxLength={300} placeholder={nktMode === "CACHE" ? "Search cached National Catalog" : `Enter exact ${nktMode}`} value={nktQuery} onChange={(event) => setNktQuery(event.target.value)} />
+                <button className="secondary-button" disabled={nktBusy || !nktQuery.trim()} type="button" onClick={() => void searchNkt()}><Search aria-hidden="true" />{nktBusy ? "Searching…" : "Search"}</button>
+              </div>
+              {nktQuery && !nktBusy && nktResults.length === 0 && <p className="fiscal-nkt-empty">No cached match. Use an exact NTIN or GTIN lookup when available.</p>}
+              {nktResults.length > 0 && <div className="fiscal-nkt-results" role="radiogroup" aria-label="National Catalog results">{nktResults.map((result) => <label key={result.external_id}><input type="radio" name="nkt_result" checked={selectedNtin === result.ntin} onChange={() => setSelectedNtin(result.ntin)} /><span><strong>{result.name_ru || result.name_kk || "Unnamed NKT product"}</strong><small>NTIN: {result.ntin}{result.unit_code ? ` · ${result.unit_code}` : ""}</small></span></label>)}</div>}
+              {!variantProfile && permissions.canWriteFiscal && <p className="fiscal-nkt-empty">Save the fiscal profile first, then reopen it to link an NKT product.</p>}
+              {variantProfile && permissions.canWriteFiscal && selectedNtin && <button className="primary-button fiscal-nkt-link" disabled={nktBusy} type="button" onClick={() => void linkNkt()}><Link2 aria-hidden="true" />Link selected product</button>}
+            </section>
             <label className="modal-field"><span>Fiscal unit</span><input required maxLength={50} list="fiscal-units" disabled={!permissions.canWriteFiscal} value={variant.fiscal_unit_code} onChange={(event) => setVariant((current) => ({ ...current, fiscal_unit_code: event.target.value }))} /><datalist id="fiscal-units"><option value="pcs" /><option value="g" /><option value="kg" /><option value="ml" /><option value="l" /></datalist></label>
             <label className="modal-field"><span>VAT override (%) <small>Blank inherits organization</small></span><input inputMode="decimal" disabled={!permissions.canWriteFiscal} value={variant.vat_rate_override ?? ""} onChange={(event) => setVariant((current) => ({ ...current, vat_rate_override: event.target.value || null }))} /></label>
             <label className="fiscal-check"><input type="checkbox" disabled={!permissions.canWriteFiscal} checked={variant.requires_marking} onChange={(event) => setVariant((current) => ({ ...current, requires_marking: event.target.checked }))} /><span>Requires product marking codes</span></label>
@@ -241,3 +486,6 @@ function newTaxDraft(country: string): TaxDraft {
 }
 function validRate(value: string) { return /^\d+(?:\.\d{1,4})?$/.test(value) && Number(value) >= 0; }
 function messageOf(error: unknown) { return error instanceof Error ? error.message : "Something went wrong. Please try again."; }
+function shortId(value: string) { return value.length > 12 ? `${value.slice(0, 8)}…` : value; }
+function formatDate(value: string | null) { return value ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(value)) : "Not verified"; }
+function labelFromCode(code: string) { const value = code.replaceAll("_", " ").toLowerCase(); return value.charAt(0).toUpperCase() + value.slice(1); }

@@ -47,7 +47,7 @@ export function useIntegrationPermissions() {
   }, [accessToken, currentOrganization]);
 
   if (!currentOrganization || state.organizationId !== currentOrganization.id) {
-    return { loading: true, canRead: false, canWrite: false, canReadFiscal: false, canWriteFiscal: false };
+    return { loading: true, canRead: false, canWrite: false, canReadFiscal: false, canWriteFiscal: false, canUseTerminal: false, canManageTerminal: false };
   }
   return {
     loading: state.loading,
@@ -55,5 +55,7 @@ export function useIntegrationPermissions() {
     canWrite: state.permissions.includes("integrations.write"),
     canReadFiscal: state.permissions.includes("fiscal.read"),
     canWriteFiscal: state.permissions.includes("fiscal.write"),
+    canUseTerminal: state.permissions.includes("payments.create"),
+    canManageTerminal: state.permissions.includes("payments.terminal.manage"),
   };
 }

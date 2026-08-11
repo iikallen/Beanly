@@ -1024,7 +1024,7 @@ async def test_postgres_offline_migration_maps_estimated_on_downgrade_and_reupgr
     await asyncio.to_thread(command.check, config)
     async with sessions() as database:
         assert await database.scalar(text("SELECT version_num FROM alembic_version")) == (
-            "0021_refunds_fiscal_tax"
+            "0022_kz_live_integrations"
         )
         assert await database.scalar(text("SELECT to_regclass('public.pos_devices')")) == (
             "pos_devices"

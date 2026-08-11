@@ -48,6 +48,7 @@ class Permission(StrEnum):
     PAYMENTS_READ = "payments.read"
     PAYMENTS_CREATE = "payments.create"
     PAYMENTS_REFUND = "payments.refund"
+    PAYMENTS_TERMINAL_MANAGE = "payments.terminal.manage"
     FINANCE_READ = "finance.read"
     FINANCE_WRITE = "finance.write"
     ANALYTICS_READ = "analytics.read"
@@ -104,6 +105,7 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.PAYMENTS_READ,
             Permission.PAYMENTS_CREATE,
             Permission.PAYMENTS_REFUND,
+            Permission.PAYMENTS_TERMINAL_MANAGE,
             Permission.FINANCE_READ,
             Permission.FINANCE_WRITE,
             Permission.ANALYTICS_READ,

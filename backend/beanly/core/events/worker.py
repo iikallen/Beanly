@@ -31,11 +31,20 @@ from beanly.modules.finance.infrastructure.handlers import register_finance_hand
 from beanly.modules.finance.infrastructure.source_reader import (
     SqlAlchemyFinanceSourceReader,
 )
+from beanly.modules.fiscal.infrastructure.live_repository import (
+    SqlAlchemyFiscalLiveRepository,
+)
 from beanly.modules.integrations.infrastructure.db.repositories import (
     SqlAlchemyIntegrationRepository,
 )
 from beanly.modules.integrations.infrastructure.handlers import (
     register_integration_handlers,
+)
+from beanly.modules.organizations.application.services.organization_service import (
+    OrganizationService,
+)
+from beanly.modules.organizations.infrastructure.db.repositories import (
+    SqlAlchemyOrganizationRepository,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,6 +75,10 @@ async def run_worker(shutdown: ShutdownSignal | None = None) -> None:
         register_integration_handlers(
             handlers,
             SqlAlchemyIntegrationRepository(session),
+            SqlAlchemyFiscalLiveRepository(
+                session,
+                OrganizationService(SqlAlchemyOrganizationRepository(session)),
+            ),
         )
         repository = OutboxRepository(session)
         dispatcher = OutboxDispatcher(

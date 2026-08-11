@@ -1,23 +1,38 @@
-from datetime import datetime
-from uuid import UUID
+from datetime import UTC, datetime
+from uuid import UUID, uuid4
 
 from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from beanly.modules.integrations.infrastructure.db.models import IntegrationConnectionModel
+from beanly.modules.offline_pos.infrastructure.db.models import PosDeviceModel
 from beanly.modules.payments.domain.entities import (
+    ExternalPaymentAttempt,
     Payment,
     PaymentMethodTotal,
     ShiftPaymentSummary,
+    TerminalBinding,
 )
 from beanly.modules.payments.domain.enums import PaymentMethod
-from beanly.modules.payments.domain.exceptions import PaymentConflict
-from beanly.modules.payments.infrastructure.db.mappers import to_payment
+from beanly.modules.payments.domain.exceptions import (
+    PaymentConflict,
+    TerminalBindingConflict,
+    TerminalBindingNotFound,
+)
+from beanly.modules.payments.infrastructure.db.mappers import (
+    to_external_attempt,
+    to_payment,
+    to_terminal_binding,
+)
 from beanly.modules.payments.infrastructure.db.models import (
+    ExternalPaymentAttemptModel,
     PaymentLineModel,
     PaymentModel,
+    TerminalBindingModel,
 )
+from beanly.modules.sales.infrastructure.db.models import PosRegisterModel, RegisterShiftModel
 
 
 class SqlAlchemyPaymentRepository:
@@ -34,17 +49,194 @@ class SqlAlchemyPaymentRepository:
             raise PaymentConflict("Payment already exists") from exc
         return to_payment(model)
 
-    async def get(
-        self, organization_id: UUID, payment_id: UUID
-    ) -> Payment | None:
+    async def list_terminal_bindings(
+        self, organization_id: UUID, register_id: UUID
+    ) -> list[TerminalBinding]:
+        values = await self.session.scalars(
+            select(TerminalBindingModel)
+            .where(
+                TerminalBindingModel.organization_id == organization_id,
+                TerminalBindingModel.register_id == register_id,
+            )
+            .order_by(TerminalBindingModel.created_at, TerminalBindingModel.id)
+        )
+        return [to_terminal_binding(value) for value in values]
+
+    async def add_terminal_binding(self, context, **values: object) -> TerminalBinding:
+        organization_id = context.organization_id
+        location_id = UUID(str(values["location_id"]))
+        register_id = UUID(str(values["register_id"]))
+        connection_id = UUID(str(values["connection_id"]))
+        provider_code = str(values["provider_code"])
+        valid = await self.session.scalar(
+            select(IntegrationConnectionModel.id)
+            .join(PosRegisterModel, PosRegisterModel.id == register_id)
+            .where(
+                IntegrationConnectionModel.organization_id == organization_id,
+                IntegrationConnectionModel.id == connection_id,
+                IntegrationConnectionModel.provider_code == provider_code,
+                IntegrationConnectionModel.status == "ACTIVE",
+                PosRegisterModel.organization_id == organization_id,
+                PosRegisterModel.location_id == location_id,
+                PosRegisterModel.is_active.is_(True),
+            )
+        )
+        if valid is None:
+            raise TerminalBindingNotFound("Active connection or register not found")
+        now = datetime.now(UTC)
+        model = TerminalBindingModel(
+            id=uuid4(),
+            organization_id=organization_id,
+            connection_id=connection_id,
+            location_id=location_id,
+            register_id=register_id,
+            provider_code=provider_code,
+            external_terminal_id=values.get("external_terminal_id"),
+            transport_config={},
+            is_active=bool(values.get("is_active", True)),
+            created_at=now,
+            updated_at=now,
+        )
+        try:
+            async with self.session.begin_nested():
+                self.session.add(model)
+                await self.session.flush()
+        except IntegrityError as exc:
+            raise TerminalBindingConflict("Terminal binding already exists") from exc
+        return to_terminal_binding(model)
+
+    async def update_terminal_binding(
+        self, context, binding_id: UUID, **values: object
+    ) -> TerminalBinding:
+        model = await self.session.scalar(
+            select(TerminalBindingModel)
+            .where(
+                TerminalBindingModel.organization_id == context.organization_id,
+                TerminalBindingModel.id == binding_id,
+            )
+            .with_for_update()
+        )
+        if model is None:
+            raise TerminalBindingNotFound("Terminal binding not found")
+        if "external_terminal_id" in values:
+            model.external_terminal_id = values["external_terminal_id"]
+        if "is_active" in values:
+            model.is_active = bool(values["is_active"])
+        model.transport_config = {}
+        model.updated_at = datetime.now(UTC)
+        await self.session.flush()
+        return to_terminal_binding(model)
+
+    async def get_external_attempt(
+        self, organization_id: UUID, attempt_id: UUID
+    ) -> ExternalPaymentAttempt | None:
+        model = await self.session.scalar(
+            select(ExternalPaymentAttemptModel).where(
+                ExternalPaymentAttemptModel.organization_id == organization_id,
+                ExternalPaymentAttemptModel.id == attempt_id,
+            )
+        )
+        return to_external_attempt(model) if model else None
+
+    async def get_external_attempt_by_client_id(
+        self, organization_id: UUID, client_attempt_id: UUID
+    ) -> ExternalPaymentAttempt | None:
+        model = await self.session.scalar(
+            select(ExternalPaymentAttemptModel).where(
+                ExternalPaymentAttemptModel.organization_id == organization_id,
+                ExternalPaymentAttemptModel.client_attempt_id == client_attempt_id,
+            )
+        )
+        return to_external_attempt(model) if model else None
+
+    async def validate_terminal_binding(
+        self,
+        organization_id: UUID,
+        *,
+        location_id: UUID,
+        shift_id: UUID,
+        register_id: UUID,
+        connection_id: UUID,
+        provider_code: str,
+        pos_device_id: UUID | None,
+    ) -> None:
+        value = await self.session.scalar(
+            select(TerminalBindingModel.id)
+            .join(
+                RegisterShiftModel,
+                RegisterShiftModel.register_id == TerminalBindingModel.register_id,
+            )
+            .join(
+                IntegrationConnectionModel,
+                IntegrationConnectionModel.id == TerminalBindingModel.connection_id,
+            )
+            .where(
+                TerminalBindingModel.organization_id == organization_id,
+                TerminalBindingModel.location_id == location_id,
+                TerminalBindingModel.register_id == register_id,
+                TerminalBindingModel.connection_id == connection_id,
+                TerminalBindingModel.provider_code == provider_code,
+                TerminalBindingModel.is_active.is_(True),
+                RegisterShiftModel.id == shift_id,
+                RegisterShiftModel.status == "OPEN",
+                IntegrationConnectionModel.status == "ACTIVE",
+            )
+        )
+        if value is None:
+            raise TerminalBindingNotFound("Active terminal binding not found")
+        if pos_device_id is not None:
+            device_id = await self.session.scalar(
+                select(PosDeviceModel.id).where(
+                    PosDeviceModel.organization_id == organization_id,
+                    PosDeviceModel.location_id == location_id,
+                    PosDeviceModel.register_id == register_id,
+                    PosDeviceModel.id == pos_device_id,
+                    PosDeviceModel.status == "ACTIVE",
+                )
+            )
+            if device_id is None:
+                raise TerminalBindingNotFound("Active POS device not found")
+
+    async def add_external_attempt(self, value: ExternalPaymentAttempt) -> ExternalPaymentAttempt:
+        model = ExternalPaymentAttemptModel(
+            id=value.id,
+            organization_id=value.organization_id,
+            location_id=value.location_id,
+            order_id=value.order_id,
+            register_id=value.register_id,
+            pos_device_id=value.pos_device_id,
+            connection_id=value.connection_id,
+            client_attempt_id=value.client_attempt_id,
+            provider_code=value.provider_code,
+            method=value.method.value,
+            amount_minor=value.amount_minor,
+            currency_code=value.currency_code,
+            status=value.status.value,
+            provider_operation_id=value.provider_operation_id,
+            provider_reference=value.provider_reference,
+            request_hash=value.request_hash,
+            created_by_user_id=value.created_by_user_id,
+            payment_id=value.payment_id,
+            created_at=value.created_at,
+            approved_at=value.approved_at,
+            failed_at=value.failed_at,
+            failure_code=value.failure_code,
+        )
+        try:
+            async with self.session.begin_nested():
+                self.session.add(model)
+                await self.session.flush()
+        except IntegrityError as exc:
+            raise PaymentConflict("External payment attempt already exists") from exc
+        return to_external_attempt(model)
+
+    async def get(self, organization_id: UUID, payment_id: UUID) -> Payment | None:
         model = await self.session.scalar(
             _payment_query(organization_id).where(PaymentModel.id == payment_id)
         )
         return to_payment(model) if model else None
 
-    async def get_by_order(
-        self, organization_id: UUID, order_id: UUID
-    ) -> Payment | None:
+    async def get_by_order(self, organization_id: UUID, order_id: UUID) -> Payment | None:
         model = await self.session.scalar(
             _payment_query(organization_id).where(PaymentModel.order_id == order_id)
         )
@@ -94,9 +286,7 @@ class SqlAlchemyPaymentRepository:
         )
         return [to_payment(model) for model in models]
 
-    async def shift_summary(
-        self, organization_id: UUID, shift_id: UUID
-    ) -> ShiftPaymentSummary:
+    async def shift_summary(self, organization_id: UUID, shift_id: UUID) -> ShiftPaymentSummary:
         totals = await self.session.execute(
             select(
                 func.count(PaymentModel.id),
@@ -164,9 +354,8 @@ class SqlAlchemyPaymentRepository:
             return tuple((0, 0) for _ in buckets)
         columns = []
         for date_from, date_to in buckets:
-            condition = (
-                (PaymentModel.completed_at >= date_from)
-                & (PaymentModel.completed_at < date_to)
+            condition = (PaymentModel.completed_at >= date_from) & (
+                PaymentModel.completed_at < date_to
             )
             columns.extend(
                 (
@@ -187,10 +376,7 @@ class SqlAlchemyPaymentRepository:
                 )
             )
         ).one()
-        return tuple(
-            (int(row[index]), int(row[index + 1]))
-            for index in range(0, len(row), 2)
-        )
+        return tuple((int(row[index]), int(row[index + 1])) for index in range(0, len(row), 2))
 
     async def dashboard_locations(
         self,
@@ -216,8 +402,7 @@ class SqlAlchemyPaymentRepository:
             .group_by(PaymentModel.location_id)
         )
         return tuple(
-            (location_id, int(amount), int(orders))
-            for location_id, amount, orders in rows
+            (location_id, int(amount), int(orders)) for location_id, amount, orders in rows
         )
 
     async def dashboard_mix(
@@ -289,6 +474,9 @@ def _line_values(value) -> dict[str, object]:
         "cash_received_minor": value.cash_received_minor,
         "change_minor": value.change_minor,
         "reference": value.reference,
+        "external_payment_attempt_id": value.external_payment_attempt_id,
+        "provider_code": value.provider_code,
+        "provider_transaction_id": value.provider_transaction_id,
         "sort_order": value.sort_order,
         "created_at": value.created_at,
     }

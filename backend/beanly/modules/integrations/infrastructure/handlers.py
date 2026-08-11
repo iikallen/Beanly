@@ -4,6 +4,7 @@ from uuid import UUID, uuid4
 from beanly.core.events.envelope import EventEnvelope
 from beanly.core.events.handlers.registry import EventHandlerRegistry
 from beanly.core.observability import metrics
+from beanly.modules.integrations.application.ports import FiscalReceiptProjectionPort
 from beanly.modules.integrations.domain.entities import IntegrationJob
 from beanly.modules.integrations.domain.enums import (
     IntegrationCapability,
@@ -15,22 +16,43 @@ from beanly.modules.integrations.infrastructure.db.repositories import (
 
 
 def register_integration_handlers(
-    registry: EventHandlerRegistry, repository: SqlAlchemyIntegrationRepository
+    registry: EventHandlerRegistry,
+    repository: SqlAlchemyIntegrationRepository,
+    receipts: FiscalReceiptProjectionPort | None = None,
 ) -> None:
-    registry.register("payment.completed", 1, _plan_fiscalization(repository))
-    registry.register("refund.completed", 1, _plan_refund_fiscalization(repository))
+    registry.register("payment.completed", 1, _plan_fiscalization(repository, receipts))
+    registry.register(
+        "refund.completed", 1, _plan_refund_fiscalization(repository, receipts)
+    )
 
 
-def _plan_fiscalization(repository: SqlAlchemyIntegrationRepository):
+def _plan_fiscalization(
+    repository: SqlAlchemyIntegrationRepository,
+    receipts: FiscalReceiptProjectionPort | None,
+):
     async def handler(envelope: EventEnvelope) -> None:
         organization_id = _organization(envelope)
         payment_id = _id(envelope, "payment_id")
         location_id = _id(envelope, "location_id")
         now = datetime.now(UTC)
-        connections = await repository.active_connections(
-            organization_id, IntegrationCapability.FISCAL, location_id
-        )
-        for connection, bound_location_id in connections:
+        resolver = getattr(receipts, "resolve_fiscal_connection", None)
+        if resolver is None:
+            connections = await repository.active_connections(
+                organization_id, IntegrationCapability.FISCAL, location_id
+            )
+        else:
+            resolved = await resolver(organization_id, "SALE", payment_id)
+            connections = [resolved] if resolved is not None else []
+        for connection, bound_location_id in connections[:1]:
+            if receipts:
+                await receipts.ensure_pending_receipt(
+                    organization_id=organization_id,
+                    location_id=location_id,
+                    connection_id=connection.id,
+                    provider_code=connection.provider_code,
+                    source_type="SALE",
+                    source_id=payment_id,
+                )
             await repository.add_job(
                 IntegrationJob(
                     id=uuid4(),
@@ -61,16 +83,33 @@ def _plan_fiscalization(repository: SqlAlchemyIntegrationRepository):
     return handler
 
 
-def _plan_refund_fiscalization(repository: SqlAlchemyIntegrationRepository):
+def _plan_refund_fiscalization(
+    repository: SqlAlchemyIntegrationRepository,
+    receipts: FiscalReceiptProjectionPort | None,
+):
     async def handler(envelope: EventEnvelope) -> None:
         organization_id = _organization(envelope)
         refund_id = _id(envelope, "refund_id")
         location_id = _id(envelope, "location_id")
         now = datetime.now(UTC)
-        connections = await repository.active_connections(
-            organization_id, IntegrationCapability.FISCAL, location_id
-        )
-        for connection, bound_location_id in connections:
+        resolver = getattr(receipts, "resolve_fiscal_connection", None)
+        if resolver is None:
+            connections = await repository.active_connections(
+                organization_id, IntegrationCapability.FISCAL, location_id
+            )
+        else:
+            resolved = await resolver(organization_id, "REFUND", refund_id)
+            connections = [resolved] if resolved is not None else []
+        for connection, bound_location_id in connections[:1]:
+            if receipts:
+                await receipts.ensure_pending_receipt(
+                    organization_id=organization_id,
+                    location_id=location_id,
+                    connection_id=connection.id,
+                    provider_code=connection.provider_code,
+                    source_type="REFUND",
+                    source_id=refund_id,
+                )
             await repository.add_job(
                 IntegrationJob(
                     id=uuid4(),

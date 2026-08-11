@@ -86,3 +86,9 @@ class InventorySalePort(Protocol):
 
 class FiscalSnapshotPort(Protocol):
     async def stage_payment_snapshot(self, organization_id: UUID, payment_id: UUID) -> None: ...
+
+
+class FiscalCheckoutPort(Protocol):
+    async def preflight(
+        self, context: TenantContext, *, order_id: UUID, location_id: UUID
+    ) -> None: ...

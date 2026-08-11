@@ -3,10 +3,12 @@
 import {
   ChevronLeft,
   Clock3,
+  CreditCard,
   Minus,
   Plus,
   Power,
   Search,
+  ShieldAlert,
   ShoppingBag,
   Trash2,
   X,
@@ -25,6 +27,7 @@ import {
   api,
   type MenuProduct,
   type MenuReadModel,
+  type ExternalPaymentAttempt,
   type PaymentMethod,
   type PaymentMethodChoice,
   type PosRegister,
@@ -32,6 +35,7 @@ import {
   type ProductVariant,
   type RegisterShift,
   type SalesOrderType,
+  type TerminalBinding,
 } from "@/lib/api";
 import { formatMenuPriceMinor, parseMenuPriceToMinor, priceMinorToInput } from "@/lib/menu";
 import {
@@ -49,12 +53,14 @@ import { readCatalog, readCurrentSession, saveSession } from "@/lib/offline/db";
 import {
   cancelLocalOrder,
   createLocalOrder,
+  markExternalPaymentApproved,
   payLocalOrder,
   updateLocalOrder,
 } from "@/lib/offline/orders";
 import { buildLocalItem, catalogSelectionIsValid } from "@/lib/offline/catalog";
 import type { OfflineOrder, OfflineOrderItem, OfflineSession } from "@/lib/offline/types";
 import { paymentRequest, type PaymentMode } from "@/lib/payment";
+import { paymentAttemptAction, terminalStatusCopy } from "@/lib/fiscal-live";
 
 type ConfigurationTarget = {
   product: MenuProduct;
@@ -66,6 +72,7 @@ type ConfigurationTarget = {
 type CompletedLocalPayment = {
   amount_minor: string;
   currency_code: string;
+  origin: "LOCAL" | "TERMINAL";
   lines: Array<{ method: PaymentMethod; change_minor: string }>;
 };
 
@@ -103,11 +110,16 @@ export default function PosPage() {
   const [cardConfirmed, setCardConfirmed] = useState(false);
   const [paymentBusy, setPaymentBusy] = useState(false);
   const [paymentError, setPaymentError] = useState("");
+  const [terminalBindings, setTerminalBindings] = useState<TerminalBinding[]>([]);
+  const [terminalSelected, setTerminalSelected] = useState(false);
+  const [terminalMethod, setTerminalMethod] = useState<"CARD" | "QR">("CARD");
+  const [terminalAttempt, setTerminalAttempt] = useState<ExternalPaymentAttempt | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [clockNow, setClockNow] = useState(0);
   const pendingPayment = useRef<{ id: string; payload: string } | null>(null);
+  const pendingTerminal = useRef<{ id: string; fingerprint: string } | null>(null);
 
   const offline = useOfflinePos(offlineSession);
 
@@ -130,6 +142,7 @@ export default function PosPage() {
   const hasOpenOrders = orders.some((order) => order.status === "OPEN" || order.status === "SYNCED_OPEN");
   const sessionActive = Boolean(offlineSession && offlineSession.status === "ACTIVE" && clockNow + offlineSession.clock_offset_ms < Date.parse(offlineSession.expires_at));
   const canWriteLocal = sessionActive && offline.isWriter;
+  const terminalBinding = terminalBindings.find((binding) => binding.is_active) ?? null;
 
   useEffect(() => {
     const tick = () => setClockNow(Date.now());
@@ -221,6 +234,25 @@ export default function PosPage() {
     void load();
     return () => { cancelled = true; };
   }, [accessToken, locationId, organizationId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadTerminalBindings() {
+      await Promise.resolve();
+      if (!accessToken || !organizationId || !selectedRegisterId || offline.networkStatus !== "ONLINE" || !canPay) {
+        setTerminalBindings([]);
+        return;
+      }
+      try {
+        const values = await api.listTerminalBindings(selectedRegisterId, organizationId, accessToken);
+        if (!cancelled) setTerminalBindings(values);
+      } catch {
+        if (!cancelled) setTerminalBindings([]);
+      }
+    }
+    void loadTerminalBindings();
+    return () => { cancelled = true; };
+  }, [accessToken, canPay, offline.networkStatus, organizationId, selectedRegisterId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -334,6 +366,12 @@ export default function PosPage() {
     [paymentMethods],
   );
   const needsSettlementConfirmation = paymentDraft.lines.some((line) => line.method === "CARD" || line.method === "OTHER");
+  const terminalOrderReady = paymentOrder?.status === "SYNCED_OPEN"
+    && Boolean(paymentOrder.server_order_id)
+    && paymentOrder.revision === paymentOrder.last_synced_revision
+    && offline.networkStatus === "ONLINE"
+    && canWriteLocal;
+  const terminalAction = terminalAttempt ? paymentAttemptAction(terminalAttempt.status) : "START";
 
   async function run(action: () => Promise<void>) {
     setBusy(true);
@@ -572,6 +610,12 @@ export default function PosPage() {
     setSplitOther("");
     setPaymentReference("");
     setCompletedPayment(null);
+    const sameTerminalAttempt = terminalAttempt?.order_id === currentOrder.server_order_id;
+    setTerminalSelected(Boolean(sameTerminalAttempt));
+    if (!sameTerminalAttempt) {
+      setTerminalAttempt(null);
+      pendingTerminal.current = null;
+    }
     setCardConfirmed(false);
     setPaymentError("");
     pendingPayment.current = null;
@@ -586,12 +630,78 @@ export default function PosPage() {
   }
 
   function choosePaymentMode(mode: PaymentMethod | "SPLIT") {
+    setTerminalSelected(false);
     setPaymentMode(mode);
     setPaymentError("");
     setCardConfirmed(false);
     if (mode === "CASH" && paymentOrder) {
       setPaymentCashReceived(priceMinorToInput(paymentOrder.total_minor));
     }
+  }
+
+  function chooseTerminalPayment() {
+    setTerminalSelected(true);
+    setPaymentMode(null);
+    setPaymentError("");
+    setCardConfirmed(false);
+  }
+
+  async function runTerminalPayment() {
+    if (!accessToken || !organizationId || !paymentOrder || !paymentOrder.server_order_id || !terminalBinding || offline.networkStatus !== "ONLINE") return;
+    const fingerprint = [paymentOrder.server_order_id, paymentOrder.total_minor, paymentOrder.currency_code, terminalBinding.id, terminalMethod].join(":");
+    if (!pendingTerminal.current || pendingTerminal.current.fingerprint !== fingerprint) pendingTerminal.current = { id: crypto.randomUUID(), fingerprint };
+    setPaymentBusy(true);
+    setPaymentError("");
+    let attempt = terminalAttempt;
+    try {
+      const action = attempt ? paymentAttemptAction(attempt.status) : "START";
+      if (action === "RETRY") {
+        pendingTerminal.current = { id: crypto.randomUUID(), fingerprint };
+        attempt = null;
+      }
+      if (!attempt) {
+        attempt = await api.createExternalPaymentAttempt({
+          client_attempt_id: pendingTerminal.current.id,
+          order_id: paymentOrder.server_order_id,
+          register_id: selectedRegisterId,
+          pos_device_id: offlineSession?.device_id ?? null,
+          connection_id: terminalBinding.connection_id,
+          provider_code: terminalBinding.provider_code,
+          method: terminalMethod,
+          amount_minor: paymentOrder.total_minor,
+          currency_code: paymentOrder.currency_code,
+        }, organizationId, accessToken);
+        setTerminalAttempt(attempt);
+      }
+      const nextAction = paymentAttemptAction(attempt.status);
+      if (nextAction === "START") attempt = await api.startExternalPaymentAttempt(attempt.id, organizationId, accessToken);
+      else if (nextAction === "RECONCILE") attempt = await api.reconcileExternalPaymentAttempt(attempt.id, organizationId, accessToken);
+      await applyTerminalAttempt(attempt);
+    } catch {
+      if (attempt?.id) {
+        try {
+          const recovered = await api.getExternalPaymentAttempt(attempt.id, organizationId, accessToken);
+          await applyTerminalAttempt(recovered);
+          if (recovered.status === "UNKNOWN" || recovered.status === "TERMINAL_PENDING") setPaymentError("Payment result is not final. Do not charge the customer again; check terminal status.");
+        } catch {
+          setPaymentError("Payment result could not be confirmed. Do not retry; recover this attempt before charging again.");
+        }
+      } else {
+        setPaymentError("Payment request status is uncertain. Use the same attempt to recover status; do not charge again.");
+      }
+    } finally {
+      setPaymentBusy(false);
+    }
+  }
+
+  async function applyTerminalAttempt(attempt: ExternalPaymentAttempt) {
+    setTerminalAttempt(attempt);
+    if (attempt.status !== "APPROVED" || !paymentOrder) return;
+    await markExternalPaymentApproved(paymentOrder.id, attempt);
+    setCompletedPayment({ amount_minor: attempt.amount_minor, currency_code: attempt.currency_code, origin: "TERMINAL", lines: [{ method: "CARD", change_minor: "0" }] });
+    await offline.reload();
+    setCurrentOrderId(orders.find((order) => order.id !== paymentOrder.id && (order.status === "OPEN" || order.status === "SYNCED_OPEN"))?.id ?? "");
+    pendingTerminal.current = null;
   }
 
   function updateSplitCash(value: string) {
@@ -626,6 +736,7 @@ export default function PosPage() {
       setCompletedPayment({
         amount_minor: paymentOrder.total_minor,
         currency_code: paymentOrder.currency_code,
+        origin: "LOCAL",
         lines: lines.map((line) => ({
           method: line.method,
           change_minor: line.method === "CASH" ? String(paymentDraft.changeMinor) : "0",
@@ -872,8 +983,9 @@ export default function PosPage() {
                 {completedPayment.lines.some((line) => BigInt(line.change_minor) > BigInt(0)) && (
                   <p>Change · {formatMenuPriceMinor(String(completedPayment.lines.reduce((sum, line) => sum + BigInt(line.change_minor), BigInt(0))), completedPayment.currency_code)}</p>
                 )}
-                <p>Recorded locally · Fiscal receipt pending sync</p>
+                <p>{completedPayment.origin === "TERMINAL" ? "Provider approved · Fiscal receipt processing" : "Recorded locally · Fiscal receipt pending sync"}</p>
                 <div className="modal-actions">
+                  {completedPayment.origin === "TERMINAL" && <Link className="secondary-button" href="/app/fiscal">Fiscal receipt</Link>}
                   <button className="secondary-button" type="button" onClick={closePayment}>Done</button>
                   {canCreate && <button className="primary-button" disabled={busy} type="button" onClick={startNewOrderAfterPayment}>+ New order</button>}
                 </div>
@@ -888,8 +1000,9 @@ export default function PosPage() {
                 ) : (
                   <>
                     <div className="pos-payment-methods" role="group" aria-label="Payment method">
+                      {terminalBinding && <button autoFocus className={terminalSelected ? "is-active pos-terminal-method" : "pos-terminal-method"} disabled={paymentBusy} type="button" onClick={chooseTerminalPayment}><CreditCard aria-hidden="true" /><span><strong>{terminalBinding.provider_code.includes("kaspi") ? "Kaspi POS" : terminalBinding.provider_code}</strong><small>Card / QR</small></span></button>}
                       {paymentMethods.map((method) => (
-                        <button autoFocus={method.code === "CASH"} className={paymentMode === method.code ? "is-active" : ""} disabled={paymentBusy} key={method.code} type="button" onClick={() => choosePaymentMode(method.code)}>{method.name}</button>
+                        <button autoFocus={!terminalBinding && method.code === "CASH"} className={paymentMode === method.code ? "is-active" : ""} disabled={paymentBusy} key={method.code} type="button" onClick={() => choosePaymentMode(method.code)}>{method.name}</button>
                       ))}
                       <button className={paymentMode === "SPLIT" ? "is-active" : ""} disabled={paymentBusy} type="button" onClick={() => choosePaymentMode("SPLIT")}>Split payment</button>
                     </div>
@@ -913,6 +1026,16 @@ export default function PosPage() {
                         <PaymentBalance label={paymentDraft.remainingMinor < BigInt(0) ? "Over" : "Remaining"} amount={paymentDraft.remainingMinor < BigInt(0) ? -paymentDraft.remainingMinor : paymentDraft.remainingMinor} currency={paymentOrder.currency_code} />
                       </div>
                     )}
+                    {terminalSelected && (
+                      <><div className="pos-terminal-method-toggle" role="group" aria-label="Terminal payment type"><button className={terminalMethod === "CARD" ? "is-active" : ""} disabled={Boolean(terminalAttempt) || paymentBusy} type="button" onClick={() => setTerminalMethod("CARD")}>Card</button><button className={terminalMethod === "QR" ? "is-active" : ""} disabled={Boolean(terminalAttempt) || paymentBusy} type="button" onClick={() => setTerminalMethod("QR")}>QR</button></div><div className={`pos-terminal-state${terminalAttempt?.status === "UNKNOWN" ? " is-unknown" : ""}`} role="status">
+                        {terminalAttempt?.status === "UNKNOWN" ? <ShieldAlert aria-hidden="true" /> : <CreditCard aria-hidden="true" />}
+                        <div>
+                          <strong>{terminalAttempt ? terminalStatusCopy(terminalAttempt.status) : terminalOrderReady ? `Send ${formatMenuPriceMinor(paymentOrder.total_minor, paymentOrder.currency_code)} to terminal` : "Terminal payment unavailable"}</strong>
+                          <p>{terminalAttempt?.status === "UNKNOWN" ? "Do not charge the customer again. Beanly must reconcile this attempt first." : terminalAttempt?.status === "TERMINAL_PENDING" ? "Keep this payment open while the customer completes Card / QR on Smart POS." : terminalAttempt?.status === "DECLINED" || terminalAttempt?.status === "CANCELLED" ? "This attempt ended definitively. A new attempt is safe." : !terminalOrderReady ? offline.networkStatus !== "ONLINE" ? "Connection is required. Offline terminal charging is not supported by this provider." : "Wait until this order is fully synced before sending the exact amount." : "The amount and order are verified by Beanly before the terminal starts."}</p>
+                          {terminalAttempt?.failure_code && <small>Reason: {terminalAttempt.failure_code}</small>}
+                        </div>
+                      </div></>
+                    )}
                   </>
                 )}
                 {needsSettlementConfirmation && !paymentDraft.error && (
@@ -920,7 +1043,7 @@ export default function PosPage() {
                 )}
                 {paymentMode && paymentDraft.error && <p className="form-message error" role="alert">{paymentDraft.error}</p>}
                 {paymentError && <p className="form-message error" role="alert">{paymentError}</p>}
-                <div className="modal-actions"><button className="secondary-button" disabled={paymentBusy} type="button" onClick={closePayment}>Cancel</button><button className="primary-button" disabled={paymentBusy || !canWriteLocal || Boolean(paymentDraft.error) || (needsSettlementConfirmation && !cardConfirmed)} type="button" onClick={completePayment}>{paymentBusy ? "Recording…" : "Record payment"}</button></div>
+                <div className="modal-actions"><button className="secondary-button" disabled={paymentBusy} type="button" onClick={closePayment}>Cancel</button>{terminalSelected ? <button className="primary-button" disabled={paymentBusy || !terminalOrderReady || terminalAttempt?.status === "APPROVED"} type="button" onClick={() => void runTerminalPayment()}>{paymentBusy ? "Checking…" : terminalAction === "RECONCILE" ? "Check status" : terminalAction === "RETRY" ? "Try again" : "Send to terminal"}</button> : <button className="primary-button" disabled={paymentBusy || !canWriteLocal || Boolean(paymentDraft.error) || (needsSettlementConfirmation && !cardConfirmed)} type="button" onClick={completePayment}>{paymentBusy ? "Recording…" : "Record payment"}</button>}</div>
               </>
             )}
           </div>

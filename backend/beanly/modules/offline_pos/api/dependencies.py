@@ -2,13 +2,14 @@ from typing import Annotated
 
 from fastapi import Cookie, Depends, HTTPException, status
 
+from beanly.core.config.settings import get_settings
 from beanly.core.events.outbox.repositories import OutboxRepository
 from beanly.core.events.outbox.writer import OutboxEventSink
 from beanly.core.security.audit import SecurityAuditRecorder
 from beanly.modules.fiscal.application.service import FiscalService
 from beanly.modules.fiscal.infrastructure.operations import SqlAlchemyFiscalOperations
 from beanly.modules.fiscal.infrastructure.payment_gateway import FiscalPaymentSnapshotGateway
-from beanly.modules.identity.api.dependencies import SessionDep
+from beanly.modules.identity.api.dependencies import SessionDep, SettingsDep
 from beanly.modules.inventory.application.services import InventoryService
 from beanly.modules.inventory.infrastructure.db.repositories import SqlAlchemyInventoryRepository
 from beanly.modules.offline_pos.application.device_service import DeviceService, credential_hash
@@ -27,6 +28,7 @@ from beanly.modules.organizations.domain.permissions import Permission
 from beanly.modules.organizations.infrastructure.db.repositories import (
     SqlAlchemyOrganizationRepository,
 )
+from beanly.modules.payments.api.dependencies import fiscal_checkout_gateway
 from beanly.modules.payments.application.payment_service import PaymentService
 from beanly.modules.payments.infrastructure.db.repositories import SqlAlchemyPaymentRepository
 from beanly.modules.payments.infrastructure.inventory_gateway import (
@@ -62,7 +64,8 @@ def session_service(session: SessionDep) -> SessionService:
     )
 
 
-def sync_service(session: SessionDep) -> OfflineSyncService:
+def sync_service(session: SessionDep, settings: SettingsDep = None) -> OfflineSyncService:
+    settings = settings or get_settings()
     offline, sales, organizations, sink = _shared(session)
     inventory = InventoryService(
         SqlAlchemyInventoryRepository(session),
@@ -75,6 +78,7 @@ def sync_service(session: SessionDep) -> OfflineSyncService:
         InventorySaleGateway(inventory, session),
         sink,
         FiscalPaymentSnapshotGateway(FiscalService(SqlAlchemyFiscalOperations(session))),
+        fiscal_checkout_gateway(session, settings),
     )
     return OfflineSyncService(
         session,

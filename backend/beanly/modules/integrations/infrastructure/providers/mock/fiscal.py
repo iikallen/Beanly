@@ -63,6 +63,15 @@ class MockFiscalProvider:
             provider_request_id=str(uuid5(NAMESPACE_URL, f"beanly:{idempotency_key}")),
         )
 
+    async def lookup_operation(
+        self,
+        correlation_id: str,
+        *,
+        credentials: Mapping[str, object],
+    ) -> FiscalReceiptResult | None:
+        self._validate(credentials)
+        return None
+
     def verify_webhook(
         self,
         raw_body: bytes,

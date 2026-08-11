@@ -1,7 +1,7 @@
-import type { SalesOrderType } from "@/lib/api";
+import type { ExternalPaymentAttempt, SalesOrderType } from "@/lib/api";
 
 import { openPosDb, requestValue, stores, transactionDone } from "./db";
-import { mergeSyncResult } from "./reconcile";
+import { mergeExternalPaymentApproval, mergeSyncResult } from "./reconcile";
 import type { OfflineOrder, OfflinePaymentLine, OfflineSession, SyncResult } from "./types";
 
 const EDITABLE = new Set<OfflineOrder["status"]>(["OPEN", "SYNCED_OPEN"]);
@@ -109,6 +109,20 @@ export async function applySyncResults(results: SyncResult[]): Promise<void> {
   await transactionDone(transaction);
   db.close();
   changed();
+}
+
+export async function markExternalPaymentApproved(clientOrderId: string, attempt: ExternalPaymentAttempt): Promise<OfflineOrder> {
+  const db = await openPosDb();
+  const transaction = db.transaction(stores.orders, "readwrite");
+  const store = transaction.objectStore(stores.orders);
+  const order = await requestValue(store.get(clientOrderId)) as OfflineOrder | undefined;
+  if (!order) throw new Error("Local order not found");
+  const next = mergeExternalPaymentApproval(order, attempt);
+  store.put(next);
+  await transactionDone(transaction);
+  db.close();
+  changed();
+  return next;
 }
 
 export async function cleanupSyncedOrders(): Promise<void> {

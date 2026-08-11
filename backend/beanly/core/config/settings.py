@@ -5,7 +5,7 @@ from functools import lru_cache
 from typing import Literal
 from urllib.parse import urlparse
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -61,6 +61,18 @@ class Settings(BaseSettings):
     integration_job_lease_safety_margin_seconds: int = Field(default=5, ge=1, le=300)
     integration_job_max_attempts: int = Field(default=10, ge=1, le=1000)
     integration_poll_interval_seconds: float = Field(default=1, gt=0, le=60)
+    nkt_api_key: SecretStr | None = None
+    live_kz_fiscalization: bool = False
+
+    @field_validator("nkt_api_key", mode="before")
+    @classmethod
+    def normalize_nkt_api_key(cls, value: object) -> object:
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        if not normalized:
+            raise ValueError("NKT_API_KEY cannot be blank")
+        return normalized
 
     @model_validator(mode="after")
     def reject_development_secret_in_production(self) -> "Settings":

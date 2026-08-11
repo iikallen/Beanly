@@ -50,6 +50,13 @@ class FiscalProvider(Protocol):
         idempotency_key: str,
     ) -> FiscalReceiptResult: ...
 
+    async def lookup_operation(
+        self,
+        correlation_id: str,
+        *,
+        credentials: Mapping[str, object],
+    ) -> FiscalReceiptResult | None: ...
+
     def verify_webhook(
         self,
         raw_body: bytes,
@@ -91,6 +98,34 @@ class ProviderRegistryPort(Protocol):
     def descriptor(self, code: str) -> ProviderDescriptor: ...
 
     def adapter(self, code: str) -> Any: ...
+
+
+class FiscalReceiptProjectionPort(Protocol):
+    async def resolve_fiscal_connection(
+        self, organization_id: UUID, source_type: str, source_id: UUID
+    ) -> tuple[IntegrationConnection, UUID] | None: ...
+
+    async def ensure_pending_receipt(self, **values: object) -> Any: ...
+    async def mark_receipt_processing(
+        self, organization_id: UUID, source_type: str, source_id: UUID
+    ) -> None: ...
+    async def mark_receipt_succeeded(
+        self,
+        organization_id: UUID,
+        source_type: str,
+        source_id: UUID,
+        result: FiscalReceiptResult,
+    ) -> None: ...
+    async def mark_receipt_failed(
+        self,
+        organization_id: UUID,
+        source_type: str,
+        source_id: UUID,
+        error: BaseException,
+        *,
+        temporary: bool,
+        unknown: bool,
+    ) -> None: ...
 
 
 class IntegrationRepository(Protocol):

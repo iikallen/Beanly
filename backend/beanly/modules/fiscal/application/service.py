@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
@@ -31,3 +31,20 @@ class FiscalService:
 
     async def create_sale_snapshot(self, organization_id: UUID, payment_id: UUID) -> Any:
         return await self.operations.create_sale_snapshot(organization_id, payment_id)
+
+    async def link_variant_nkt(
+        self,
+        context: TenantContext,
+        variant_id: UUID,
+        *,
+        ntin: str,
+        external_product_id: str,
+        verified_at: datetime,
+    ) -> Any:
+        return await self.operations.link_variant_nkt(
+            context,
+            variant_id,
+            ntin=ntin,
+            external_product_id=external_product_id,
+            verified_at=verified_at,
+        )

@@ -14,19 +14,29 @@ from beanly.modules.payments.api.dependencies import (
     PaymentCreateDep,
     PaymentReadDep,
     PaymentServiceDep,
+    TerminalManageDep,
+    TerminalPaymentServiceDep,
 )
 from beanly.modules.payments.api.schemas import (
+    ExternalPaymentAttemptCreateRequest,
+    ExternalPaymentAttemptResponse,
     PaymentCompleteRequest,
     PaymentMethodResponse,
     PaymentResponse,
     ShiftPaymentSummaryResponse,
+    TerminalBindingCreateRequest,
+    TerminalBindingPatchRequest,
+    TerminalBindingResponse,
 )
 from beanly.modules.payments.application.payment_service import (
     CompletePaymentInput,
     PaymentLineInput,
 )
+from beanly.modules.payments.application.terminal_service import ExternalAttemptInput
 from beanly.modules.payments.domain.enums import PaymentMethod
 from beanly.modules.payments.domain.exceptions import (
+    ExternalPaymentAttemptNotFound,
+    ExternalTerminalUnavailable,
     InvalidPayment,
     OrderAlreadyPaid,
     OrderNotPayable,
@@ -35,6 +45,7 @@ from beanly.modules.payments.domain.exceptions import (
     PaymentConflict,
     PaymentIdempotencyConflict,
     PaymentNotFound,
+    TerminalBindingNotFound,
 )
 
 router = APIRouter(prefix="/payments", tags=["payments"])
@@ -44,6 +55,114 @@ router = APIRouter(prefix="/payments", tags=["payments"])
 async def list_methods(_: PaymentAccessDep) -> list[PaymentMethodResponse]:
     names = {PaymentMethod.CASH: "Cash", PaymentMethod.CARD: "Card", PaymentMethod.OTHER: "Other"}
     return [PaymentMethodResponse(code=method, name=names[method]) for method in PaymentMethod]
+
+
+@router.get("/terminal-bindings", response_model=list[TerminalBindingResponse])
+async def list_terminal_bindings(
+    register_id: UUID,
+    context: PaymentCreateDep,
+    service: TerminalPaymentServiceDep,
+) -> list[TerminalBindingResponse]:
+    try:
+        values = await service.list_bindings(context, register_id)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return [TerminalBindingResponse.from_entity(value) for value in values]
+
+
+@router.post(
+    "/terminal-bindings",
+    response_model=TerminalBindingResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_terminal_binding(
+    payload: TerminalBindingCreateRequest,
+    context: TerminalManageDep,
+    service: TerminalPaymentServiceDep,
+) -> TerminalBindingResponse:
+    try:
+        value = await service.create_binding(context, **payload.model_dump())
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return TerminalBindingResponse.from_entity(value)
+
+
+@router.patch("/terminal-bindings/{binding_id}", response_model=TerminalBindingResponse)
+async def update_terminal_binding(
+    binding_id: UUID,
+    payload: TerminalBindingPatchRequest,
+    context: TerminalManageDep,
+    service: TerminalPaymentServiceDep,
+) -> TerminalBindingResponse:
+    try:
+        value = await service.update_binding(
+            context, binding_id, **payload.model_dump(exclude_unset=True)
+        )
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return TerminalBindingResponse.from_entity(value)
+
+
+@router.post(
+    "/external-attempts",
+    response_model=ExternalPaymentAttemptResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_external_attempt(
+    payload: ExternalPaymentAttemptCreateRequest,
+    context: PaymentCreateDep,
+    service: TerminalPaymentServiceDep,
+) -> ExternalPaymentAttemptResponse:
+    try:
+        value = await service.create_attempt(context, ExternalAttemptInput(**payload.model_dump()))
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return ExternalPaymentAttemptResponse.from_entity(value)
+
+
+@router.get("/external-attempts/{attempt_id}", response_model=ExternalPaymentAttemptResponse)
+async def get_external_attempt(
+    attempt_id: UUID,
+    context: PaymentCreateDep,
+    service: TerminalPaymentServiceDep,
+) -> ExternalPaymentAttemptResponse:
+    try:
+        value = await service.get_attempt(context, attempt_id)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return ExternalPaymentAttemptResponse.from_entity(value)
+
+
+@router.post(
+    "/external-attempts/{attempt_id}/start",
+    response_model=ExternalPaymentAttemptResponse,
+)
+async def start_external_attempt(
+    attempt_id: UUID,
+    context: PaymentCreateDep,
+    service: TerminalPaymentServiceDep,
+) -> ExternalPaymentAttemptResponse:
+    try:
+        value = await service.start(context, attempt_id)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return ExternalPaymentAttemptResponse.from_entity(value)
+
+
+@router.post(
+    "/external-attempts/{attempt_id}/reconcile",
+    response_model=ExternalPaymentAttemptResponse,
+)
+async def reconcile_external_attempt(
+    attempt_id: UUID,
+    context: PaymentCreateDep,
+    service: TerminalPaymentServiceDep,
+) -> ExternalPaymentAttemptResponse:
+    try:
+        value = await service.reconcile(context, attempt_id)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+    return ExternalPaymentAttemptResponse.from_entity(value)
 
 
 @router.post(
@@ -149,8 +268,12 @@ def _http_error(exc: Exception) -> HTTPException:
         "code": getattr(exc, "code", "PAYMENT_ERROR"),
         "message": str(exc) or "Payment operation failed",
     }
-    if isinstance(exc, PaymentNotFound):
+    if isinstance(
+        exc, (PaymentNotFound, ExternalPaymentAttemptNotFound, TerminalBindingNotFound)
+    ):
         return HTTPException(status.HTTP_404_NOT_FOUND, detail)
+    if isinstance(exc, ExternalTerminalUnavailable):
+        return HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail)
     if isinstance(
         exc,
         (OrganizationAccessDenied, InvalidLocationAccess),

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from beanly.core.events.outbox.writer import DomainEventSink
 from beanly.core.observability import metrics, traced
 from beanly.modules.integrations.application.ports import (
+    FiscalReceiptProjectionPort,
     IntegrationRepository,
     ProviderRegistryPort,
     SecretCipher,
@@ -16,7 +17,10 @@ from beanly.modules.integrations.domain.events import (
     IntegrationJobDeadLettered,
     IntegrationJobSucceeded,
 )
-from beanly.modules.integrations.domain.exceptions import PermanentProviderError
+from beanly.modules.integrations.domain.exceptions import (
+    PermanentProviderError,
+    ProviderOutcomeUnknown,
+)
 
 
 class IntegrationJobService:
@@ -29,6 +33,7 @@ class IntegrationJobService:
         sink: DomainEventSink,
         *,
         max_attempts: int,
+        receipts: FiscalReceiptProjectionPort | None = None,
     ) -> None:
         self.repository = repository
         self.source = source
@@ -36,6 +41,7 @@ class IntegrationJobService:
         self.cipher = cipher
         self.sink = sink
         self.max_attempts = max_attempts
+        self.receipts = receipts
 
     async def execute(self, job: IntegrationJob, worker_id: str) -> None:
         with traced(
@@ -74,6 +80,11 @@ class IntegrationJobService:
                     job.organization_id, job.source_id, job.connection_id
                 )
             )
+            source_type = "SALE" if job.job_type == "FISCALIZE_PAYMENT" else "REFUND"
+            if self.receipts:
+                await self.receipts.mark_receipt_processing(
+                    job.organization_id, source_type, job.source_id
+                )
             with traced("provider.request", provider_code=provider_code):
                 method = (
                     adapter.fiscalize_sale
@@ -84,7 +95,10 @@ class IntegrationJobService:
                     command, credentials=credentials, idempotency_key=job.idempotency_key
                 )
         except Exception as exc:
-            temporary = not isinstance(exc, (PermanentProviderError, ValueError))
+            unknown = isinstance(exc, ProviderOutcomeUnknown)
+            temporary = not isinstance(
+                exc, (PermanentProviderError, ProviderOutcomeUnknown, ValueError)
+            )
             metrics.integration_provider_errors.add(
                 1,
                 {"provider.code": provider_code, "temporary": temporary},
@@ -98,6 +112,18 @@ class IntegrationJobService:
                 started_at=started_at,
                 duration_ms=max(0, int((time.monotonic() - started) * 1000)),
             )
+            if self.receipts and job.job_type in {
+                "FISCALIZE_PAYMENT",
+                "FISCALIZE_REFUND",
+            }:
+                await self.receipts.mark_receipt_failed(
+                    job.organization_id,
+                    "SALE" if job.job_type == "FISCALIZE_PAYMENT" else "REFUND",
+                    job.source_id,
+                    exc,
+                    temporary=temporary,
+                    unknown=unknown,
+                )
             refreshed = await self.repository.get_job(job.organization_id, job.id)
             if refreshed and refreshed.status.value == "DEAD":
                 await self.sink.stage(IntegrationJobDeadLettered(job.id, job.organization_id))
@@ -115,6 +141,13 @@ class IntegrationJobService:
                     started_at=started_at,
                     duration_ms=max(0, int((time.monotonic() - started) * 1000)),
                 )
+                if self.receipts:
+                    await self.receipts.mark_receipt_succeeded(
+                        job.organization_id,
+                        "SALE" if job.job_type == "FISCALIZE_PAYMENT" else "REFUND",
+                        job.source_id,
+                        result,
+                    )
                 await self.sink.stage(IntegrationJobSucceeded(job.id, job.organization_id))
         await self.repository.commit()
         metrics.integration_duration.record(

@@ -3427,7 +3427,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
             "alembic_version",
             *APPLICATION_TABLES,
         } <= upgraded["tables"]
-        assert upgraded["revision"] == "0021_refunds_fiscal_tax"
+        assert upgraded["revision"] == "0022_kz_live_integrations"
         assert INVENTORY_OPERATION_TABLES <= upgraded["tables"]
         assert {
             "inventory_writeoff_number_seq",
@@ -3512,10 +3512,11 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
             "organization_id",
             "name",
             "timezone",
-            "address",
-            "is_active",
-            "is_primary",
-            "created_at",
+                "address",
+                "is_active",
+                "is_primary",
+                "fiscal_enforcement_mode",
+                "created_at",
             "updated_at",
         }
         assert set(upgraded["columns"]["organization_memberships"]) == {
@@ -3936,6 +3937,9 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
             "cash_received_minor",
             "change_minor",
             "reference",
+            "external_payment_attempt_id",
+            "provider_code",
+            "provider_transaction_id",
             "sort_order",
             "created_at",
         }
@@ -4262,7 +4266,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
         await asyncio.to_thread(command.upgrade, config, "head")
         reupgraded = await database_snapshot(test_url)
         assert APPLICATION_TABLES <= reupgraded["tables"]
-        assert reupgraded["revision"] == "0021_refunds_fiscal_tax"
+        assert reupgraded["revision"] == "0022_kz_live_integrations"
         assert await membership_state(test_url, legacy_membership_id) == ("ACTIVE", "ALL")
     finally:
         await admin_engine.dispose()

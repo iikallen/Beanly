@@ -23,6 +23,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from beanly.core.database.base import Base
 
 JSON_DOCUMENT = JSON().with_variant(JSONB(), "postgresql")
+_NKT_DIGITS = " AND ".join(
+    f"substr(ntin, {position}, 1) BETWEEN '0' AND '9'" for position in range(1, 14)
+)
 
 
 def utc_now() -> datetime:
@@ -94,6 +97,126 @@ class FiscalVariantProfileModel(Base):
     requires_marking: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false")
     )
+    nkt_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    nkt_external_product_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class FiscalNktCacheModel(Base):
+    __tablename__ = "fiscal_nkt_cache"
+    __table_args__ = (
+        CheckConstraint(
+            f"length(ntin) = 13 AND {_NKT_DIGITS}", name="ck_fiscal_nkt_ntin"
+        ),
+        Index("ix_fiscal_nkt_cache_name_ru", "name_ru"),
+        Index("ix_fiscal_nkt_cache_name_kk", "name_kk"),
+        Index("ix_fiscal_nkt_cache_expires_at", "expires_at"),
+        Index("ix_fiscal_nkt_cache_gtins", "gtins", postgresql_using="gin"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    external_product_id: Mapped[str] = mapped_column(String(255))
+    ntin: Mapped[str] = mapped_column(String(13), unique=True)
+    gtins: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list)
+    name_ru: Mapped[str] = mapped_column(String(500))
+    name_kk: Mapped[str] = mapped_column(String(500))
+    category_code: Mapped[str] = mapped_column(String(100))
+    unit_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    status: Mapped[str] = mapped_column(String(32))
+    source_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload_hash: Mapped[str] = mapped_column(String(64))
+
+
+class FiscalReceiptModel(Base):
+    __tablename__ = "fiscal_receipts"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "source_type", "source_id", name="uq_fiscal_receipt_source"
+        ),
+        UniqueConstraint(
+            "connection_id",
+            "provider_correlation_id",
+            name="uq_fiscal_receipt_correlation",
+        ),
+        CheckConstraint("source_type IN ('SALE','REFUND')", name="ck_fiscal_receipt_source"),
+        CheckConstraint(
+            "status IN ('PENDING','PROCESSING','SUCCEEDED','RETRYING','UNKNOWN','DEAD')",
+            name="ck_fiscal_receipt_status",
+        ),
+        Index("ix_fiscal_receipts_org_created", "organization_id", "created_at"),
+        Index("ix_fiscal_receipts_location_status", "location_id", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    organization_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("organizations.id", ondelete="CASCADE")
+    )
+    location_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("locations.id", ondelete="CASCADE")
+    )
+    connection_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("integration_connections.id", ondelete="RESTRICT")
+    )
+    source_type: Mapped[str] = mapped_column(String(16))
+    source_id: Mapped[UUID] = mapped_column(Uuid)
+    provider_code: Mapped[str] = mapped_column(String(80))
+    status: Mapped[str] = mapped_column(String(16))
+    external_receipt_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    receipt_number: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    receipt_url: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    provider_request_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    provider_correlation_id: Mapped[str] = mapped_column(String(255))
+    fiscalized_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_error_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class FiscalRouteModel(Base):
+    __tablename__ = "fiscal_routes"
+    __table_args__ = (
+        CheckConstraint(
+            "source_mode IN ('EXTERNAL_KKM','PAYMENT_TERMINAL_KKM')",
+            name="ck_fiscal_route_source_mode",
+        ),
+        Index(
+            "uq_fiscal_routes_active_register",
+            "register_id",
+            unique=True,
+            postgresql_where=text("is_active"),
+            sqlite_where=text("is_active = 1"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    organization_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    location_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("locations.id", ondelete="CASCADE"), index=True
+    )
+    register_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("pos_registers.id", ondelete="CASCADE")
+    )
+    provider_connection_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("integration_connections.id", ondelete="RESTRICT")
+    )
+    source_mode: Mapped[str] = mapped_column(String(32))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )

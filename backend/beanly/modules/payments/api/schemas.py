@@ -5,8 +5,13 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from beanly.core.money import MAX_BIGINT, MAX_NUMERIC_20_6_MINOR
-from beanly.modules.payments.domain.entities import Payment, ShiftPaymentSummary
-from beanly.modules.payments.domain.enums import PaymentMethod
+from beanly.modules.payments.domain.entities import (
+    ExternalPaymentAttempt,
+    Payment,
+    ShiftPaymentSummary,
+    TerminalBinding,
+)
+from beanly.modules.payments.domain.enums import ExternalPaymentMethod, PaymentMethod
 
 
 class PaymentLineRequest(BaseModel):
@@ -23,6 +28,101 @@ class PaymentCompleteRequest(BaseModel):
     lines: Annotated[list[PaymentLineRequest], Field(max_length=100)]
 
 
+class TerminalBindingCreateRequest(BaseModel):
+    connection_id: UUID
+    location_id: UUID
+    register_id: UUID
+    provider_code: Annotated[str, Field(min_length=1, max_length=80)]
+    external_terminal_id: Annotated[str | None, Field(max_length=255)] = None
+    is_active: bool = True
+
+
+class TerminalBindingPatchRequest(BaseModel):
+    external_terminal_id: Annotated[str | None, Field(max_length=255)] = None
+    transport_config: dict[str, object] | None = None
+    is_active: bool | None = None
+
+
+class TerminalBindingResponse(BaseModel):
+    id: UUID
+    organization_id: UUID
+    connection_id: UUID
+    location_id: UUID
+    register_id: UUID
+    provider_code: str
+    external_terminal_id: str | None
+    transport_config: dict[str, object]
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_entity(cls, value: TerminalBinding) -> "TerminalBindingResponse":
+        return cls.model_validate(value, from_attributes=True)
+
+
+class ExternalPaymentAttemptCreateRequest(BaseModel):
+    client_attempt_id: UUID
+    order_id: UUID
+    register_id: UUID
+    pos_device_id: UUID | None = None
+    connection_id: UUID
+    provider_code: Annotated[str, Field(min_length=1, max_length=80)]
+    method: ExternalPaymentMethod
+    amount_minor: Annotated[int, Field(gt=0, le=MAX_NUMERIC_20_6_MINOR)]
+    currency_code: Annotated[str, Field(min_length=3, max_length=3)]
+
+
+class ExternalPaymentAttemptResponse(BaseModel):
+    id: UUID
+    organization_id: UUID
+    location_id: UUID
+    order_id: UUID
+    register_id: UUID
+    pos_device_id: UUID | None
+    connection_id: UUID
+    client_attempt_id: UUID
+    provider_code: str
+    method: ExternalPaymentMethod
+    amount_minor: str
+    currency_code: str
+    status: str
+    provider_operation_id: str | None
+    provider_reference: str | None
+    created_by_user_id: UUID
+    payment_id: UUID | None
+    created_at: datetime
+    approved_at: datetime | None
+    failed_at: datetime | None
+    failure_code: str | None
+
+    @classmethod
+    def from_entity(cls, value: ExternalPaymentAttempt) -> "ExternalPaymentAttemptResponse":
+        return cls(
+            id=value.id,
+            organization_id=value.organization_id,
+            location_id=value.location_id,
+            order_id=value.order_id,
+            register_id=value.register_id,
+            pos_device_id=value.pos_device_id,
+            connection_id=value.connection_id,
+            client_attempt_id=value.client_attempt_id,
+            provider_code=value.provider_code,
+            method=value.method,
+            amount_minor=str(value.amount_minor),
+            currency_code=value.currency_code,
+            status=value.status.value,
+            provider_operation_id=value.provider_operation_id,
+            provider_reference=value.provider_reference,
+            created_by_user_id=value.created_by_user_id,
+            payment_id=value.payment_id,
+            created_at=_utc(value.created_at),
+            approved_at=_utc(value.approved_at) if value.approved_at else None,
+            failed_at=_utc(value.failed_at) if value.failed_at else None,
+            failure_code=value.failure_code,
+        )
+
+
 class PaymentLineResponse(BaseModel):
     id: UUID
     payment_id: UUID
@@ -33,6 +133,9 @@ class PaymentLineResponse(BaseModel):
     reference: str | None
     sort_order: int
     created_at: datetime
+    external_payment_attempt_id: UUID | None
+    provider_code: str | None
+    provider_transaction_id: str | None
 
 
 class PaymentResponse(BaseModel):
@@ -80,6 +183,9 @@ class PaymentResponse(BaseModel):
                     reference=line.reference,
                     sort_order=line.sort_order,
                     created_at=_utc(line.created_at),
+                    external_payment_attempt_id=line.external_payment_attempt_id,
+                    provider_code=line.provider_code,
+                    provider_transaction_id=line.provider_transaction_id,
                 )
                 for line in value.lines
             ],

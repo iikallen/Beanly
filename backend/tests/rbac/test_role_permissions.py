@@ -47,6 +47,7 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.PAYMENTS_READ,
                 Permission.PAYMENTS_CREATE,
                 Permission.PAYMENTS_REFUND,
+                Permission.PAYMENTS_TERMINAL_MANAGE,
                 Permission.FINANCE_READ,
                 Permission.FINANCE_WRITE,
                 Permission.ANALYTICS_READ,
@@ -160,3 +161,12 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
     for role in (MembershipRole.CASHIER, MembershipRole.BARISTA):
         assert Permission.FISCAL_READ not in permissions_for(role)
         assert Permission.FISCAL_WRITE not in permissions_for(role)
+    for role in (MembershipRole.OWNER, MembershipRole.ADMIN):
+        assert Permission.PAYMENTS_TERMINAL_MANAGE in permissions_for(role)
+    for role in (
+        MembershipRole.MANAGER,
+        MembershipRole.ACCOUNTANT,
+        MembershipRole.CASHIER,
+        MembershipRole.BARISTA,
+    ):
+        assert Permission.PAYMENTS_TERMINAL_MANAGE not in permissions_for(role)

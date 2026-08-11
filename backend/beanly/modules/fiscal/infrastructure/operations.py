@@ -182,6 +182,9 @@ class SqlAlchemyFiscalOperations:
             )
             self.session.add(value)
         else:
+            if value.nkt_code != code or value.nkt_code_type != code_type:
+                value.nkt_verified_at = None
+                value.nkt_external_product_id = None
             value.fiscal_name, value.nkt_code, value.nkt_code_type = name, code, code_type
             value.fiscal_unit_code, value.vat_rate_override = unit, rate
             value.requires_marking, value.updated_at = requires_marking, now
@@ -196,6 +199,34 @@ class SqlAlchemyFiscalOperations:
                 metadata={"variant_id": str(variant_id)},
             )
         await self.session.commit()
+        return value
+
+    async def link_variant_nkt(
+        self,
+        context: TenantContext,
+        variant_id: UUID,
+        *,
+        ntin: str,
+        external_product_id: str,
+        verified_at: datetime,
+    ) -> FiscalVariantProfileModel:
+        await self._variant(context.organization_id, variant_id)
+        value = await self.session.scalar(
+            select(FiscalVariantProfileModel)
+            .where(
+                FiscalVariantProfileModel.organization_id == context.organization_id,
+                FiscalVariantProfileModel.product_variant_id == variant_id,
+            )
+            .with_for_update()
+        )
+        if value is None:
+            raise FiscalVariantNotFound("Fiscal variant profile not found")
+        value.nkt_code = ntin
+        value.nkt_code_type = "NTIN"
+        value.nkt_external_product_id = external_product_id
+        value.nkt_verified_at = verified_at
+        value.updated_at = verified_at
+        await self.session.flush()
         return value
 
     async def readiness(self, organization_id: UUID) -> dict[str, object]:
@@ -216,7 +247,8 @@ class SqlAlchemyFiscalOperations:
                 ProductVariantModel.organization_id == organization_id,
                 ProductVariantModel.status == "ACTIVE",
                 (FiscalVariantProfileModel.id.is_(None))
-                | (FiscalVariantProfileModel.nkt_code.is_(None)),
+                | (FiscalVariantProfileModel.nkt_code.is_(None))
+                | (FiscalVariantProfileModel.nkt_verified_at.is_(None)),
             )
             .order_by(ProductModel.name, ProductVariantModel.name)
         )

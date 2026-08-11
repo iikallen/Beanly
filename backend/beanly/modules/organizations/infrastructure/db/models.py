@@ -3,6 +3,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -38,6 +39,12 @@ class OrganizationModel(Base):
 
 class LocationModel(Base):
     __tablename__ = "locations"
+    __table_args__ = (
+        CheckConstraint(
+            "fiscal_enforcement_mode IN ('DISABLED','TEST','LIVE_REQUIRED')",
+            name="ck_location_fiscal_enforcement_mode",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
     organization_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("organizations.id"), index=True)
@@ -46,6 +53,9 @@ class LocationModel(Base):
     address: Mapped[str | None] = mapped_column(Text, default=None)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    fiscal_enforcement_mode: Mapped[str] = mapped_column(
+        String(24), default="DISABLED", server_default=text("'DISABLED'")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now

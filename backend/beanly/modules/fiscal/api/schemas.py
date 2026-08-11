@@ -4,6 +4,13 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from beanly.modules.fiscal.domain.enums import (
+    FiscalEnforcementMode,
+    FiscalReceiptSource,
+    FiscalReceiptStatus,
+    FiscalRouteSourceMode,
+)
+
 _MAX_RATE = Decimal("999.9999")
 
 
@@ -59,6 +66,8 @@ class FiscalVariantResponse(BaseModel):
     fiscal_unit_code: str
     vat_rate_override: str | None
     requires_marking: bool
+    nkt_verified_at: datetime | None
+    nkt_external_product_id: str | None
     updated_at: datetime
 
 
@@ -74,3 +83,98 @@ class FiscalReadinessResponse(BaseModel):
     tax_profile: str
     location: str
     unmapped_variants: list[UnmappedVariantResponse]
+
+
+class NktProductResponse(BaseModel):
+    external_id: str
+    ntin: str
+    gtins: list[str]
+    name_ru: str
+    name_kk: str
+    category_code: str
+    unit_code: str | None
+    status: str
+    updated_at: datetime | None
+
+
+class NktVariantLinkRequest(BaseModel):
+    ntin: str = Field(pattern=r"^[0-9]{13}$")
+
+
+class FiscalReceiptResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    organization_id: UUID
+    location_id: UUID
+    connection_id: UUID
+    source_type: FiscalReceiptSource
+    source_id: UUID
+    provider_code: str
+    status: FiscalReceiptStatus
+    external_receipt_id: str | None
+    receipt_number: str | None
+    receipt_url: str | None
+    provider_request_id: str | None
+    provider_correlation_id: str
+    fiscalized_at: datetime | None
+    last_error_code: str | None
+    last_error_message: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class FiscalReceiptListResponse(BaseModel):
+    items: list[FiscalReceiptResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class FiscalOperationsResponse(BaseModel):
+    provider_code: str | None
+    connected: bool
+    receipts_today: int
+    successful_today: int
+    pending: int
+    failed: int
+    unknown: int
+    oldest_pending_seconds: int | None
+
+
+class FiscalEnforcementRequest(BaseModel):
+    mode: FiscalEnforcementMode
+
+
+class FiscalEnforcementResponse(BaseModel):
+    location_id: UUID
+    mode: FiscalEnforcementMode
+
+
+class FiscalRouteCreateRequest(BaseModel):
+    location_id: UUID
+    register_id: UUID
+    provider_connection_id: UUID
+    source_mode: FiscalRouteSourceMode
+    is_active: bool = True
+
+
+class FiscalRoutePatchRequest(BaseModel):
+    is_active: bool
+
+
+class FiscalRouteResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    organization_id: UUID
+    location_id: UUID
+    register_id: UUID
+    provider_connection_id: UUID
+    source_mode: FiscalRouteSourceMode
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class GoLiveReadinessResponse(BaseModel):
+    ready: bool
+    checks: dict[str, bool]

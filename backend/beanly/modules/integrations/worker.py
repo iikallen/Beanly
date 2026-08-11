@@ -16,6 +16,9 @@ from beanly.core.observability import (
     shutdown_telemetry,
 )
 from beanly.core.runtime import ShutdownSignal
+from beanly.modules.fiscal.infrastructure.live_repository import (
+    SqlAlchemyFiscalLiveRepository,
+)
 from beanly.modules.integrations.application.job_service import IntegrationJobService
 from beanly.modules.integrations.domain.events import IntegrationWebhookProcessed
 from beanly.modules.integrations.infrastructure.crypto import FernetSecretCipher
@@ -25,6 +28,12 @@ from beanly.modules.integrations.infrastructure.db.repositories import (
 from beanly.modules.integrations.infrastructure.providers import build_provider_registry
 from beanly.modules.integrations.infrastructure.source_reader import (
     SqlAlchemyIntegrationSourceReader,
+)
+from beanly.modules.organizations.application.services.organization_service import (
+    OrganizationService,
+)
+from beanly.modules.organizations.infrastructure.db.repositories import (
+    SqlAlchemyOrganizationRepository,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,6 +57,10 @@ async def run_worker(shutdown: ShutdownSignal | None = None) -> None:
             cipher,
             sink,
             max_attempts=settings.integration_job_max_attempts,
+            receipts=SqlAlchemyFiscalLiveRepository(
+                session,
+                OrganizationService(SqlAlchemyOrganizationRepository(session)),
+            ),
         )
         while not shutdown.is_set:
             claimed = await repository.claim_jobs(

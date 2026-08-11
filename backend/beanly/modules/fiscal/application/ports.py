@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Protocol
 from uuid import UUID
@@ -26,3 +26,13 @@ class FiscalOperationsPort(Protocol):
     async def set_variant(self, context: TenantContext, variant_id: UUID, **values: Any) -> Any: ...
     async def readiness(self, organization_id: UUID) -> dict[str, object]: ...
     async def create_sale_snapshot(self, organization_id: UUID, payment_id: UUID) -> Any: ...
+
+    async def link_variant_nkt(
+        self,
+        context: TenantContext,
+        variant_id: UUID,
+        *,
+        ntin: str,
+        external_product_id: str,
+        verified_at: datetime,
+    ) -> Any: ...

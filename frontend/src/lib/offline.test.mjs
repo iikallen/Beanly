@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { assertPublicCatalog, buildLocalItem } from "./offline/catalog.ts";
-import { mergeSyncResult } from "./offline/reconcile.ts";
+import { mergeExternalPaymentApproval, mergeSyncResult } from "./offline/reconcile.ts";
 
 test("an open order keeps snapshot A pricing after catalog B arrives", () => {
   const productA = product("180000", "20000");
@@ -47,6 +47,37 @@ test("a stale conflict cannot freeze a newer local revision", () => {
 
   const current = mergeSyncResult(order, { client_order_id: "order", revision: 3, status: "CONFLICT", code: "ORDER_CHANGED_ON_SERVER" });
   assert.equal(current.status, "CONFLICT");
+});
+
+test("approved terminal attempt closes the local projection without queuing another payment", () => {
+  const order = {
+    client_order_id: "local-order",
+    server_order_id: "server-order",
+    revision: 3,
+    last_synced_revision: 3,
+    status: "SYNCED_OPEN",
+    total_minor: "280000",
+    currency_code: "KZT",
+    payment: null,
+    updated_at: "2026-08-11T10:00:00Z",
+    sync_error: null,
+  };
+  const next = mergeExternalPaymentApproval(order, {
+    status: "APPROVED",
+    payment_id: "payment",
+    order_id: "server-order",
+    amount_minor: "280000",
+    currency_code: "KZT",
+    client_attempt_id: "attempt-client",
+    provider_reference: "kaspi-reference",
+    provider_code: "kaspi_smart_pos",
+    approved_at: "2026-08-11T10:01:00Z",
+    created_at: "2026-08-11T10:00:30Z",
+  });
+  assert.equal(next.status, "SYNCED_PAID");
+  assert.equal(next.last_synced_revision, next.revision);
+  assert.equal(next.payment.client_payment_id, "attempt-client");
+  assert.equal(next.payment.lines[0].reference, "kaspi-reference");
 });
 
 function product(price, modifierPrice) {

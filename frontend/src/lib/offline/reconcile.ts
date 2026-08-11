@@ -1,3 +1,5 @@
+import type { ExternalPaymentAttempt } from "@/lib/api";
+
 import type { OfflineOrder, SyncResult } from "./types";
 
 export function mergeSyncResult(order: OfflineOrder, result: SyncResult): OfflineOrder {
@@ -20,4 +22,27 @@ export function mergeSyncResult(order: OfflineOrder, result: SyncResult): Offlin
     else next.status = "SYNCED_OPEN";
   }
   return next;
+}
+
+export function mergeExternalPaymentApproval(order: OfflineOrder, attempt: ExternalPaymentAttempt): OfflineOrder {
+  if (attempt.status !== "APPROVED" || !attempt.payment_id) throw new Error("Terminal payment is not approved");
+  if (order.server_order_id !== attempt.order_id) throw new Error("Terminal payment belongs to another order");
+  if (order.total_minor !== attempt.amount_minor || order.currency_code !== attempt.currency_code) throw new Error("Terminal payment amount does not match order");
+  return {
+    ...order,
+    status: "SYNCED_PAID",
+    last_synced_revision: order.revision,
+    payment: {
+      client_payment_id: attempt.client_attempt_id,
+      completed_at: attempt.approved_at ?? attempt.created_at,
+      lines: [{
+        method: "CARD",
+        amount_minor: attempt.amount_minor,
+        reference: attempt.provider_reference ?? attempt.provider_code,
+        external_settlement_confirmed: true,
+      }],
+    },
+    updated_at: attempt.approved_at ?? attempt.created_at,
+    sync_error: null,
+  };
 }

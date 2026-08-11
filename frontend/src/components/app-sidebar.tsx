@@ -9,6 +9,7 @@ import {
   LayoutDashboard,
   LogOut,
   Monitor,
+  ReceiptText,
   Settings as SettingsIcon,
   ShoppingCart,
   Users,
@@ -28,7 +29,7 @@ export function AppSidebar({
   settingsCanReadIntegrations,
   settingsCanReadFiscal,
 }: {
-  active: "dashboard" | "analytics" | "pos" | "inventory" | "menu" | "purchasing" | "finance" | "team" | "settings";
+  active: "dashboard" | "analytics" | "pos" | "fiscal" | "inventory" | "menu" | "purchasing" | "finance" | "team" | "settings";
   teamView?: "employees" | "invitations";
   onTeamView?: (view: "employees" | "invitations") => void;
   settingsCanReadIntegrations?: boolean;
@@ -109,6 +110,7 @@ export function AppSidebar({
           <Monitor aria-hidden="true" />
           POS
         </button>
+        {active === "fiscal" && <button className="app-nav-item is-active" type="button" onClick={() => router.push("/app/fiscal")}><ReceiptText aria-hidden="true" />Fiscal</button>}
         <button
           className={active === "team" ? "app-nav-item is-active" : "app-nav-item"}
           type="button"
@@ -271,12 +273,10 @@ export function AppSidebar({
               </Link>
             )}
             {settingsCanReadFiscal && (
-              <Link
-                className={pathname.startsWith("/app/settings/fiscal") ? "is-active" : ""}
-                href="/app/settings/fiscal"
-              >
-                Fiscal &amp; Taxes
-              </Link>
+              <>
+                <Link className={pathname === "/app/fiscal" ? "is-active" : ""} href="/app/fiscal">Fiscal Operations</Link>
+                <Link className={pathname.startsWith("/app/settings/fiscal") ? "is-active" : ""} href="/app/settings/fiscal">Fiscal &amp; Taxes</Link>
+              </>
             )}
           </div>
         )}

@@ -454,6 +454,9 @@ export type PaymentLine = {
   cash_received_minor: string | null;
   change_minor: string;
   reference: string | null;
+  external_payment_attempt_id: string | null;
+  provider_code: string | null;
+  provider_transaction_id: string | null;
   sort_order: number;
   created_at: string;
 };
@@ -598,6 +601,8 @@ export type FiscalVariantProfile = {
   fiscal_unit_code: string;
   vat_rate_override: string | null;
   requires_marking: boolean;
+  nkt_verified_at: string | null;
+  nkt_external_product_id: string | null;
   updated_at: string;
 };
 
@@ -607,6 +612,135 @@ export type FiscalReadiness = {
   tax_profile: "COMPLETE" | "MISSING";
   location: "COMPLETE" | "MISSING";
   unmapped_variants: Array<{ variant_id: string; name: string; reason: string }>;
+};
+
+export type NktProduct = {
+  external_id: string;
+  ntin: string;
+  gtins: string[];
+  name_ru: string;
+  name_kk: string;
+  category_code: string;
+  unit_code: string | null;
+  status: string;
+  updated_at: string | null;
+};
+
+export type FiscalReceiptStatus =
+  | "PENDING"
+  | "PROCESSING"
+  | "SUCCEEDED"
+  | "RETRYING"
+  | "UNKNOWN"
+  | "DEAD";
+
+export type FiscalReceipt = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  connection_id: string;
+  source_type: "SALE" | "REFUND";
+  source_id: string;
+  provider_code: string;
+  status: FiscalReceiptStatus;
+  external_receipt_id: string | null;
+  receipt_number: string | null;
+  receipt_url: string | null;
+  provider_request_id: string | null;
+  provider_correlation_id: string;
+  fiscalized_at: string | null;
+  last_error_code: string | null;
+  last_error_message: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type FiscalOperations = {
+  provider_code: string | null;
+  connected: boolean;
+  receipts_today: number;
+  successful_today: number;
+  pending: number;
+  failed: number;
+  unknown: number;
+  oldest_pending_seconds: number | null;
+};
+
+export type FiscalReceiptList = {
+  items: FiscalReceipt[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type FiscalEnforcementMode = "DISABLED" | "TEST" | "LIVE_REQUIRED";
+
+export type FiscalEnforcement = {
+  location_id: string;
+  mode: FiscalEnforcementMode;
+};
+
+export type FiscalGoLiveReadiness = {
+  ready: boolean;
+  checks: Record<string, boolean>;
+};
+
+export type FiscalRoute = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  register_id: string;
+  provider_connection_id: string;
+  source_mode: "EXTERNAL_KKM" | "PAYMENT_TERMINAL_KKM";
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TerminalBinding = {
+  id: string;
+  organization_id: string;
+  connection_id: string;
+  location_id: string;
+  register_id: string;
+  provider_code: string;
+  external_terminal_id: string | null;
+  transport_config: Record<string, unknown>;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ExternalPaymentAttemptStatus =
+  | "CREATED"
+  | "TERMINAL_PENDING"
+  | "APPROVED"
+  | "DECLINED"
+  | "CANCELLED"
+  | "UNKNOWN";
+
+export type ExternalPaymentAttempt = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  order_id: string;
+  register_id: string;
+  pos_device_id: string | null;
+  connection_id: string;
+  client_attempt_id: string;
+  provider_code: string;
+  method: "CARD" | "QR";
+  amount_minor: string;
+  currency_code: string;
+  status: ExternalPaymentAttemptStatus;
+  provider_operation_id: string | null;
+  provider_reference: string | null;
+  created_by_user_id: string;
+  created_at: string;
+  approved_at: string | null;
+  failed_at: string | null;
+  failure_code: string | null;
+  payment_id: string | null;
 };
 
 export type WarehouseResponse = {
@@ -2323,6 +2457,139 @@ export const api = {
   }),
   getFiscalReadiness: (organizationId: string, accessToken: string) =>
     request<FiscalReadiness>("/api/v1/fiscal/readiness", {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  searchNkt: (query: string, organizationId: string, accessToken: string, limit = 20) => {
+    const params = new URLSearchParams({ query, limit: String(limit) });
+    return request<NktProduct[]>(`/api/v1/fiscal/nkt/search?${params}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    });
+  },
+  getNktByNtin: (ntin: string, organizationId: string, accessToken: string) =>
+    request<NktProduct>(`/api/v1/fiscal/nkt/ntin/${encodeURIComponent(ntin)}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  getNktByGtin: (gtin: string, organizationId: string, accessToken: string) =>
+    request<NktProduct[]>(`/api/v1/fiscal/nkt/gtin/${encodeURIComponent(gtin)}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  linkFiscalVariantNkt: (variantId: string, ntin: string, organizationId: string, accessToken: string) =>
+    request<FiscalVariantProfile>(`/api/v1/fiscal/variants/${variantId}/nkt`, {
+      method: "PUT",
+      body: JSON.stringify({ ntin }),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  refreshFiscalVariantNkt: (variantId: string, organizationId: string, accessToken: string) =>
+    request<FiscalVariantProfile>(`/api/v1/fiscal/variants/${variantId}/nkt/refresh`, {
+      method: "POST",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  getFiscalOperations: (locationId: string, organizationId: string, accessToken: string) =>
+    request<FiscalOperations>(`/api/v1/fiscal/operations?location_id=${encodeURIComponent(locationId)}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  listFiscalReceipts: (
+    organizationId: string,
+    accessToken: string,
+    filters: { locationId?: string; status?: FiscalReceiptStatus | ""; limit?: string; offset?: string } = {},
+  ) => request<FiscalReceiptList>(`/api/v1/fiscal/receipts?${operationFilters(filters)}`, {
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  getFiscalReceipt: (receiptId: string, organizationId: string, accessToken: string) =>
+    request<FiscalReceipt>(`/api/v1/fiscal/receipts/${receiptId}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  retryFiscalReceipt: (receiptId: string, organizationId: string, accessToken: string) =>
+    request<FiscalReceipt>(`/api/v1/fiscal/receipts/${receiptId}/retry`, {
+      method: "POST",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  reconcileFiscalReceipt: (receiptId: string, organizationId: string, accessToken: string) =>
+    request<FiscalReceipt>(`/api/v1/fiscal/receipts/${receiptId}/reconcile`, {
+      method: "POST",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  getFiscalEnforcement: (locationId: string, organizationId: string, accessToken: string) =>
+    request<FiscalEnforcement>(`/api/v1/fiscal/locations/${locationId}/enforcement`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  updateFiscalEnforcement: (locationId: string, mode: FiscalEnforcementMode, organizationId: string, accessToken: string) =>
+    request<FiscalEnforcement>(`/api/v1/fiscal/locations/${locationId}/enforcement`, {
+      method: "PUT",
+      body: JSON.stringify({ mode }),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  getFiscalGoLiveReadiness: (locationId: string, organizationId: string, accessToken: string) =>
+    request<FiscalGoLiveReadiness>(`/api/v1/fiscal/locations/${locationId}/go-live-readiness`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  listFiscalRoutes: (locationId: string, organizationId: string, accessToken: string) =>
+    request<FiscalRoute[]>(`/api/v1/fiscal/routes?location_id=${encodeURIComponent(locationId)}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  createFiscalRoute: (
+    input: Pick<FiscalRoute, "location_id" | "register_id" | "provider_connection_id" | "source_mode" | "is_active">,
+    organizationId: string,
+    accessToken: string,
+  ) => request<FiscalRoute>("/api/v1/fiscal/routes", {
+    method: "POST",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  updateFiscalRoute: (
+    routeId: string,
+    input: Pick<FiscalRoute, "is_active">,
+    organizationId: string,
+    accessToken: string,
+  ) => request<FiscalRoute>(`/api/v1/fiscal/routes/${routeId}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  listTerminalBindings: (registerId: string, organizationId: string, accessToken: string) =>
+    request<TerminalBinding[]>(`/api/v1/payments/terminal-bindings?register_id=${encodeURIComponent(registerId)}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  createTerminalBinding: (
+    input: Pick<TerminalBinding, "connection_id" | "location_id" | "register_id" | "provider_code"> & { external_terminal_id?: string | null; is_active?: boolean },
+    organizationId: string,
+    accessToken: string,
+  ) => request<TerminalBinding>("/api/v1/payments/terminal-bindings", {
+    method: "POST",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  updateTerminalBinding: (
+    bindingId: string,
+    input: Partial<Pick<TerminalBinding, "external_terminal_id" | "transport_config" | "is_active">>,
+    organizationId: string,
+    accessToken: string,
+  ) => request<TerminalBinding>(`/api/v1/payments/terminal-bindings/${bindingId}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  createExternalPaymentAttempt: (
+    input: Pick<ExternalPaymentAttempt, "client_attempt_id" | "order_id" | "register_id" | "pos_device_id" | "connection_id" | "provider_code" | "method" | "amount_minor" | "currency_code">,
+    organizationId: string,
+    accessToken: string,
+  ) => request<ExternalPaymentAttempt>("/api/v1/payments/external-attempts", {
+    method: "POST",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  getExternalPaymentAttempt: (attemptId: string, organizationId: string, accessToken: string) =>
+    request<ExternalPaymentAttempt>(`/api/v1/payments/external-attempts/${attemptId}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  startExternalPaymentAttempt: (attemptId: string, organizationId: string, accessToken: string) =>
+    request<ExternalPaymentAttempt>(`/api/v1/payments/external-attempts/${attemptId}/start`, {
+      method: "POST",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  reconcileExternalPaymentAttempt: (attemptId: string, organizationId: string, accessToken: string) =>
+    request<ExternalPaymentAttempt>(`/api/v1/payments/external-attempts/${attemptId}/reconcile`, {
+      method: "POST",
       headers: tenantAuthorization(organizationId, accessToken),
     }),
   listSuppliers: (

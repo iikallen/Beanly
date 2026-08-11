@@ -7,6 +7,7 @@ from beanly.core.money import MAX_BIGINT, MAX_NUMERIC_20_6_MINOR
 from beanly.core.observability import metrics, traced
 from beanly.modules.organizations.domain.entities import TenantContext
 from beanly.modules.payments.application.ports import (
+    FiscalCheckoutPort,
     FiscalSnapshotPort,
     InventorySalePort,
     SalesSettlementPort,
@@ -35,6 +36,9 @@ class PaymentLineInput:
     amount_minor: int
     cash_received_minor: int | None = None
     reference: str | None = None
+    external_payment_attempt_id: UUID | None = None
+    provider_code: str | None = None
+    provider_transaction_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,12 +57,14 @@ class PaymentService:
         inventory: InventorySalePort,
         sink: DomainEventSink | None = None,
         fiscal: FiscalSnapshotPort | None = None,
+        fiscal_checkout: FiscalCheckoutPort | None = None,
     ) -> None:
         self.repository = repository
         self.sales = sales
         self.inventory = inventory
         self.sink = sink or NullDomainEventSink()
         self.fiscal = fiscal
+        self.fiscal_checkout = fiscal_checkout
 
     async def complete(
         self,
@@ -119,6 +125,10 @@ class PaymentService:
             raise OrderShiftClosed("Order shift is not OPEN")
         if not order.has_items:
             raise OrderNotPayable("Order must contain at least one item")
+        if self.fiscal_checkout is not None:
+            await self.fiscal_checkout.preflight(
+                context, order_id=order.id, location_id=order.location_id
+            )
         amount_minor = sum(line.amount_minor for line in lines)
         if amount_minor > MAX_NUMERIC_20_6_MINOR:
             raise InvalidPayment("Payment total exceeds the finance ledger limit")
@@ -180,6 +190,9 @@ class PaymentService:
                     line.reference,
                     sort_order,
                     recorded_at,
+                    line.external_payment_attempt_id,
+                    line.provider_code,
+                    line.provider_transaction_id,
                 )
                 for sort_order, line in enumerate(lines)
             ),
@@ -291,6 +304,9 @@ class _NormalizedLine:
     cash_received_minor: int | None
     change_minor: int
     reference: str | None
+    external_payment_attempt_id: UUID | None
+    provider_code: str | None
+    provider_transaction_id: str | None
 
 
 def _normalize_lines(values: tuple[PaymentLineInput, ...]) -> tuple[_NormalizedLine, ...]:
@@ -301,6 +317,13 @@ def _normalize_lines(values: tuple[PaymentLineInput, ...]) -> tuple[_NormalizedL
         if not 0 <= value.amount_minor <= MAX_NUMERIC_20_6_MINOR:
             raise InvalidPayment("Payment line amount exceeds the finance ledger limit")
         reference = _reference(value.reference)
+        provider_code = _provider_value(value.provider_code, "Provider code", 80)
+        provider_transaction_id = _provider_value(
+            value.provider_transaction_id, "Provider transaction ID", 255
+        )
+        has_external = value.external_payment_attempt_id is not None
+        if has_external != (provider_code is not None and provider_transaction_id is not None):
+            raise InvalidPayment("External payment metadata must be complete")
         if value.method == PaymentMethod.CASH:
             if value.cash_received_minor is None:
                 raise InvalidPayment("Cash received is required for CASH")
@@ -320,6 +343,9 @@ def _normalize_lines(values: tuple[PaymentLineInput, ...]) -> tuple[_NormalizedL
                 value.cash_received_minor,
                 change_minor,
                 reference,
+                value.external_payment_attempt_id,
+                provider_code,
+                provider_transaction_id,
             )
         )
     return tuple(normalized)
@@ -332,6 +358,15 @@ def _reference(value: str | None) -> str | None:
     if len(normalized) > 200:
         raise InvalidPayment("Payment reference cannot exceed 200 characters")
     return normalized or None
+
+
+def _provider_value(value: str | None, label: str, maximum: int) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized or len(normalized) > maximum:
+        raise InvalidPayment(f"{label} must contain between 1 and {maximum} characters")
+    return normalized
 
 
 def _idempotent(
@@ -348,6 +383,9 @@ def _idempotent(
             line.cash_received_minor,
             line.change_minor,
             line.reference,
+            line.external_payment_attempt_id,
+            line.provider_code,
+            line.provider_transaction_id,
         )
         for line in existing.lines
     )

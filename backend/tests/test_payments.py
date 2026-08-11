@@ -8,7 +8,12 @@ from sqlalchemy import func, select, update
 
 from beanly.core.events.outbox.models import OutboxEventModel
 from beanly.core.money import MAX_NUMERIC_20_6_MINOR
+from beanly.modules.integrations.infrastructure.db.models import IntegrationConnectionModel
 from beanly.modules.inventory.infrastructure.db.models import InventoryTransactionModel
+from beanly.modules.organizations.infrastructure.db.models import (
+    LocationModel,
+    OrganizationMembershipModel,
+)
 from beanly.modules.payments.application.payment_service import _idempotent, _NormalizedLine
 from beanly.modules.payments.domain.entities import Payment, PaymentLine
 from beanly.modules.payments.domain.enums import PaymentMethod
@@ -49,7 +54,9 @@ def test_offline_payment_idempotency_includes_business_time_and_session() -> Non
         (line,),
         offline_session_id,
     )
-    requested = (_NormalizedLine(PaymentMethod.CARD, 180000, None, 0, "terminal-1"),)
+    requested = (
+        _NormalizedLine(PaymentMethod.CARD, 180000, None, 0, "terminal-1", None, None, None),
+    )
 
     assert _idempotent(payment, order_id, requested, now, offline_session_id) is payment
     with pytest.raises(PaymentIdempotencyConflict):
@@ -215,6 +222,154 @@ async def _order(
 def _coded(response, status: int, code: str) -> None:
     assert response.status_code == status, response.text
     assert response.json()["detail"]["code"] == code
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "lines",
+    [
+        [{"method": "CASH", "amount_minor": 320000, "cash_received_minor": 320000}],
+        [{"method": "CARD", "amount_minor": 320000}],
+        [{"method": "OTHER", "amount_minor": 320000}],
+        [
+            {"method": "CASH", "amount_minor": 120000, "cash_received_minor": 120000},
+            {"method": "CARD", "amount_minor": 100000},
+            {"method": "OTHER", "amount_minor": 100000},
+        ],
+    ],
+    ids=("cash", "card", "other", "split"),
+)
+async def test_live_required_preflight_blocks_payment_before_any_side_effect(
+    app_client,
+    lines: list[dict[str, object]],
+) -> None:
+    client, sessions = app_client
+    headers, organization_id, location_id, warehouse_id = await _workspace(
+        client, f"live-preflight-{lines[0]['method']}@example.com", "Live preflight"
+    )
+    shift = await _register_shift(client, headers, location_id, warehouse_id)
+    variant_id = await _variant(client, headers, "Unmapped live item", 320000)
+    order = await _order(client, headers, shift["id"], variant_id)
+    async with sessions() as session:
+        await session.execute(
+            update(LocationModel)
+            .where(LocationModel.id == location_id)
+            .values(fiscal_enforcement_mode="LIVE_REQUIRED")
+        )
+        await session.commit()
+
+    response = await client.post(
+        f"/api/v1/payments/orders/{order['id']}/complete",
+        headers=headers,
+        json={"client_payment_id": str(uuid4()), "lines": lines},
+    )
+    _coded(response, 409, "FISCAL_NOT_READY")
+
+    async with sessions() as session:
+        persisted_order = await session.get(SalesOrderModel, UUID(order["id"]))
+        assert persisted_order is not None and persisted_order.status == "OPEN"
+        assert await session.scalar(select(func.count()).select_from(PaymentModel)) == 0
+        assert (
+            await session.scalar(select(func.count()).select_from(InventoryTransactionModel))
+            == 0
+        )
+
+
+@pytest.mark.anyio
+async def test_terminal_attempt_is_exact_idempotent_and_fails_closed_without_bridge(
+    app_client,
+) -> None:
+    client, sessions = app_client
+    headers, organization_id, location_id, warehouse_id = await _workspace(
+        client, "terminal-foundation@example.com", "Terminal foundation"
+    )
+    shift = await _register_shift(client, headers, location_id, warehouse_id)
+    variant_id = await _variant(client, headers, "Terminal order", 280000)
+    order = await _order(client, headers, shift["id"], variant_id)
+    connection_id = uuid4()
+    async with sessions() as session:
+        user_id = await session.scalar(
+            select(OrganizationMembershipModel.user_id).where(
+                OrganizationMembershipModel.organization_id == organization_id
+            )
+        )
+        assert user_id is not None
+        now = datetime.now(UTC)
+        session.add(
+            IntegrationConnectionModel(
+                id=connection_id,
+                organization_id=organization_id,
+                provider_code="kaspi_smart_pos",
+                display_name="Kaspi Smart POS",
+                status="ACTIVE",
+                auth_type="NONE",
+                config={},
+                created_by=user_id,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        await session.commit()
+
+    binding = await client.post(
+        "/api/v1/payments/terminal-bindings",
+        headers=headers,
+        json={
+            "connection_id": str(connection_id),
+            "location_id": str(location_id),
+            "register_id": shift["register_id"],
+            "provider_code": "kaspi_smart_pos",
+        },
+    )
+    assert binding.status_code == 201, binding.text
+    assert binding.json()["transport_config"] == {}
+
+    client_attempt_id = uuid4()
+    payload = {
+        "client_attempt_id": str(client_attempt_id),
+        "order_id": order["id"],
+        "register_id": shift["register_id"],
+        "pos_device_id": None,
+        "connection_id": str(connection_id),
+        "provider_code": "kaspi_smart_pos",
+        "method": "CARD",
+        "amount_minor": 280000,
+        "currency_code": "KZT",
+    }
+    created = await client.post(
+        "/api/v1/payments/external-attempts", headers=headers, json=payload
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["status"] == "CREATED"
+    retried = await client.post(
+        "/api/v1/payments/external-attempts", headers=headers, json=payload
+    )
+    assert retried.status_code == 201, retried.text
+    assert retried.json()["id"] == created.json()["id"]
+
+    unavailable = await client.post(
+        f"/api/v1/payments/external-attempts/{created.json()['id']}/start",
+        headers=headers,
+    )
+    _coded(unavailable, 503, "PAYMENT_TERMINAL_UNAVAILABLE")
+    async with sessions() as session:
+        assert (
+            await session.scalar(
+                select(func.count(PaymentModel.id)).where(
+                    PaymentModel.order_id == UUID(order["id"])
+                )
+            )
+            == 0
+        )
+        assert (
+            await session.scalar(
+                select(func.count(OutboxEventModel.id)).where(
+                    OutboxEventModel.organization_id == organization_id,
+                    OutboxEventModel.event_name == "payment.completed",
+                )
+            )
+            == 0
+        )
 
 
 @pytest.mark.anyio

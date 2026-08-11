@@ -55,3 +55,18 @@ class PermanentProviderError(RuntimeError):
         self.code = code
         self.http_status = http_status
         self.public_message = public_message
+
+
+class ProviderOutcomeUnknown(RuntimeError):
+    """The provider may have accepted the operation; blind retry is forbidden."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "PROVIDER_OUTCOME_UNKNOWN",
+        public_message: str = "Provider operation outcome is unknown",
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.public_message = public_message

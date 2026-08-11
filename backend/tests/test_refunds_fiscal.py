@@ -11,7 +11,7 @@ from alembic.config import Config
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete, event, func, inspect, select, update
 from sqlalchemy.engine import make_url
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from beanly.core.config.settings import Settings
 from beanly.core.database.session import get_session
@@ -35,12 +35,16 @@ from beanly.modules.finance.infrastructure.db.models import CashEntryModel, Fina
 from beanly.modules.finance.infrastructure.db.repositories import SqlAlchemyFinanceRepository
 from beanly.modules.finance.infrastructure.handlers import register_finance_handlers
 from beanly.modules.finance.infrastructure.source_reader import SqlAlchemyFinanceSourceReader
+from beanly.modules.fiscal.application.nkt_dto import NktProduct
+from beanly.modules.fiscal.application.nkt_service import NktService
 from beanly.modules.fiscal.domain.tax import vat_minor
 from beanly.modules.fiscal.infrastructure.db.models import (
+    FiscalNktCacheModel,
     FiscalSaleSnapshotModel,
     FiscalTaxProfileModel,
     FiscalVariantProfileModel,
 )
+from beanly.modules.fiscal.infrastructure.nkt.cache_repository import NktCacheRepository
 from beanly.modules.fiscal.infrastructure.operations import SqlAlchemyFiscalOperations
 from beanly.modules.identity.api.dependencies import SessionDep, SettingsDep
 from beanly.modules.integrations.application.job_service import IntegrationJobService
@@ -60,6 +64,10 @@ from beanly.modules.integrations.infrastructure.source_reader import (
 )
 from beanly.modules.inventory.infrastructure.db.models import InventoryTransactionLineModel
 from beanly.modules.menu.infrastructure.db.models import RecipeComponentModel, RecipeModel
+from beanly.modules.organizations.domain.entities import TenantContext
+from beanly.modules.organizations.domain.enums import LocationAccess, MembershipRole
+from beanly.modules.organizations.domain.permissions import permissions_for
+from beanly.modules.organizations.infrastructure.db.models import OrganizationMembershipModel
 from beanly.modules.refunds.api.dependencies import refund_service as refund_service_dependency
 from beanly.modules.refunds.infrastructure.db.models import RefundModel
 from beanly.modules.refunds.infrastructure.db.repositories import (
@@ -71,6 +79,17 @@ class _BrokenSink:
     async def stage(self, event: object, *, occurred_at=None) -> None:
         del event, occurred_at
         raise RuntimeError("forced refund outbox failure")
+
+
+class _FailingNktAudit:
+    async def record(self, **values: object) -> None:
+        del values
+        raise RuntimeError("forced NKT audit failure")
+
+
+class _UnusedNktLookup:
+    async def lookup(self, tin: str):
+        raise AssertionError(f"fresh cached NTIN unexpectedly called upstream: {tin}")
 
     async def stage_many(self, events: tuple[object, ...], *, occurred_at=None) -> None:
         del events, occurred_at
@@ -280,6 +299,156 @@ def test_vat_inclusive_rounding_is_per_line_half_up() -> None:
     assert vat_minor(180000, None) == 0
     with pytest.raises(ValueError, match="exact decimal"):
         vat_minor(180000, 16.0)  # type: ignore[arg-type]
+
+
+@pytest.mark.anyio
+async def test_nkt_link_and_security_audit_roll_back_atomically(app_client) -> None:
+    client, sessions = app_client
+    headers, organization_id, _, _ = await _workspace(
+        client, "nkt-atomic@example.com", "NKT atomic"
+    )
+    variant_id = await _variant(client, headers, "NKT atomic variant")
+    configured = await client.put(
+        f"/api/v1/fiscal/variants/{variant_id}",
+        headers=headers,
+        json={
+            "fiscal_name": "Atomic coffee",
+            "nkt_code": None,
+            "nkt_code_type": None,
+            "fiscal_unit_code": "pcs",
+            "vat_rate_override": None,
+            "requires_marking": False,
+        },
+    )
+    assert configured.status_code == 200, configured.text
+
+    product = NktProduct(
+        external_id="nkt-external-1",
+        ntin="0200120931509",
+        gtins=("0954353542345",),
+        name_ru="Кофе",
+        name_kk="Кофе",
+        category_code="1024",
+        unit_code=None,
+        status="UNKNOWN",
+        updated_at=datetime(2026, 8, 11, 12, tzinfo=UTC),
+        payload_hash="0" * 64,
+    )
+    async with sessions() as session:
+        membership = await session.scalar(
+            select(OrganizationMembershipModel).where(
+                OrganizationMembershipModel.organization_id == organization_id
+            )
+        )
+        assert membership is not None
+        cache = NktCacheRepository(session)
+        await cache.upsert((product,))
+        await cache.commit()
+        context = TenantContext(
+            user_id=membership.user_id,
+            organization_id=organization_id,
+            membership_id=membership.id,
+            role=MembershipRole.OWNER,
+            permissions=permissions_for(MembershipRole.OWNER),
+            location_access=LocationAccess.ALL,
+        )
+        service = NktService(
+            cache,
+            _UnusedNktLookup(),
+            SqlAlchemyFiscalOperations(session),
+            _FailingNktAudit(),
+        )
+        with pytest.raises(RuntimeError, match="forced NKT audit failure"):
+            await service.link(context, variant_id, product.ntin)
+
+    async with sessions() as session:
+        persisted = await session.scalar(
+            select(FiscalVariantProfileModel).where(
+                FiscalVariantProfileModel.organization_id == organization_id,
+                FiscalVariantProfileModel.product_variant_id == variant_id,
+            )
+        )
+        assert persisted is not None
+        assert persisted.nkt_code is None
+        assert persisted.nkt_code_type is None
+        assert persisted.nkt_external_product_id is None
+        assert persisted.nkt_verified_at is None
+
+
+@pytest.mark.anyio
+async def test_live_enforcement_rejects_unready_location_without_mutating_mode(
+    app_client,
+) -> None:
+    client, _ = app_client
+    headers, _, location_id, _ = await _workspace(
+        client, "live-gate@example.com", "Live gate"
+    )
+    endpoint = f"/api/v1/fiscal/locations/{location_id}/enforcement"
+
+    before = await client.get(endpoint, headers=headers)
+    assert before.status_code == 200, before.text
+    assert before.json()["mode"] == "DISABLED"
+
+    rejected = await client.put(endpoint, headers=headers, json={"mode": "LIVE_REQUIRED"})
+    _coded(rejected, 409, "FISCAL_NOT_READY")
+
+    after = await client.get(endpoint, headers=headers)
+    assert after.status_code == 200, after.text
+    assert after.json()["mode"] == "DISABLED"
+
+
+@pytest.mark.anyio
+async def test_postgres_concurrent_nkt_upsert_is_one_row_and_newest_source_wins(
+    postgres_stage21_app,
+) -> None:
+    _, sessions, _, engine = postgres_stage21_app
+    barrier = asyncio.Barrier(2)
+
+    class RacingSession(AsyncSession):
+        async def scalar(self, statement, *args, **kwargs):
+            value = await super().scalar(statement, *args, **kwargs)
+            if value is None and "fiscal_nkt_cache" in str(statement):
+                await barrier.wait()
+            return value
+
+    racing_sessions = async_sessionmaker(
+        engine,
+        class_=RacingSession,
+        expire_on_commit=False,
+    )
+    ntin = "0200120931509"
+
+    def product(external_id: str, hour: int) -> NktProduct:
+        return NktProduct(
+            external_id=external_id,
+            ntin=ntin,
+            gtins=("0954353542345",),
+            name_ru=external_id,
+            name_kk=external_id,
+            category_code="1024",
+            unit_code=None,
+            status="UNKNOWN",
+            updated_at=datetime(2026, 8, 11, hour, tzinfo=UTC),
+            payload_hash=("1" if external_id == "new" else "0") * 64,
+        )
+
+    async def write(value: NktProduct) -> None:
+        async with racing_sessions() as session:
+            cache = NktCacheRepository(session)
+            await cache.upsert((value,))
+            await cache.commit()
+
+    await asyncio.gather(write(product("new", 12)), write(product("old", 10)))
+
+    async with sessions() as session:
+        rows = (
+            await session.scalars(
+                select(FiscalNktCacheModel).where(FiscalNktCacheModel.ntin == ntin)
+            )
+        ).all()
+        assert len(rows) == 1
+        assert rows[0].external_product_id == "new"
+        assert rows[0].source_updated_at == datetime(2026, 8, 11, 12, tzinfo=UTC)
 
 
 @pytest.mark.anyio
@@ -998,7 +1167,7 @@ async def test_refund_event_projects_finance_analytics_and_fiscal_job_exactly_on
 
 @pytest.mark.anyio
 async def test_fiscal_profile_validation_readiness_and_tenant_isolation(app_client) -> None:
-    client, _ = app_client
+    client, sessions = app_client
     headers, _, _, _ = await _workspace(client, "fiscal-profile@example.com", "Fiscal profile")
     other_headers, _, _, _ = await _workspace(
         client, "fiscal-profile-other@example.com", "Other fiscal profile"
@@ -1086,6 +1255,15 @@ async def test_fiscal_profile_validation_readiness_and_tenant_isolation(app_clie
         },
     )
     assert oversized.status_code == 422, oversized.text
+    async with sessions() as session:
+        profile_model = await session.scalar(
+            select(FiscalVariantProfileModel).where(
+                FiscalVariantProfileModel.product_variant_id == variant_id
+            )
+        )
+        assert profile_model is not None
+        profile_model.nkt_verified_at = datetime.now(UTC)
+        await session.commit()
     assert (await client.get("/api/v1/fiscal/readiness", headers=headers)).json()["ready"] is True
     _coded(
         await client.get(f"/api/v1/fiscal/variants/{variant_id}", headers=other_headers),
