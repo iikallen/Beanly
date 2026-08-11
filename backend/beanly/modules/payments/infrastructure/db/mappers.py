@@ -42,6 +42,7 @@ def to_payment(model: PaymentModel) -> Payment:
                 model.__dict__.get("lines", ()), key=lambda value: value.sort_order
             )
         ),
+        model.offline_session_id,
     )
 
 

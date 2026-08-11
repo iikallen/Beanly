@@ -269,6 +269,7 @@ def _payment_values(value: Payment) -> dict[str, object]:
         "location_id": value.location_id,
         "order_id": value.order_id,
         "shift_id": value.shift_id,
+        "offline_session_id": value.offline_session_id,
         "client_payment_id": value.client_payment_id,
         "currency_code": value.currency_code,
         "amount_minor": value.amount_minor,

@@ -145,4 +145,9 @@ def to_order(model: SalesOrderModel) -> SalesOrder:
         model.inventory_transaction_id,
         model.cogs_amount,
         SaleCostStatus(model.cogs_status) if model.cogs_status else None,
+        model.version,
+        model.pos_device_id,
+        model.offline_session_id,
+        model.client_created_at,
+        model.offline_display_number,
     )

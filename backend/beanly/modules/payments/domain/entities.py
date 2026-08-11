@@ -33,6 +33,7 @@ class Payment:
     created_at: datetime
     updated_at: datetime
     lines: tuple[PaymentLine, ...] = ()
+    offline_session_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)

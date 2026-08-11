@@ -12,6 +12,7 @@ from beanly.modules.integrations.api.webhook_router import (
 )
 from beanly.modules.inventory.api.router import router as inventory_router
 from beanly.modules.menu.api.router import router as menu_router
+from beanly.modules.offline_pos.api.router import router as offline_pos_router
 from beanly.modules.organizations.api.router import router as organizations_router
 from beanly.modules.organizations.api.team_router import router as team_router
 from beanly.modules.payments.api.router import router as payments_router
@@ -24,6 +25,7 @@ api_v1_router.include_router(integration_webhook_router)
 api_v1_router.include_router(integration_oauth_router)
 api_v1_router.include_router(integrations_router)
 api_v1_router.include_router(inventory_router)
+api_v1_router.include_router(offline_pos_router)
 api_v1_router.include_router(menu_router)
 api_v1_router.include_router(organizations_router)
 api_v1_router.include_router(employees_router)

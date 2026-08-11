@@ -22,13 +22,13 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.INVENTORY_COUNT,
                 Permission.INVENTORY_TRANSFER,
                 Permission.INVENTORY_MOVEMENT_READ,
-                    Permission.PURCHASING_READ,
-                    Permission.PURCHASING_WRITE,
-                    Permission.PURCHASING_CREATE,
-                    Permission.PURCHASING_UPDATE,
-                    Permission.PURCHASING_RECEIVE,
-                    Permission.PURCHASING_CANCEL,
-                    Permission.PURCHASING_RETURN,
+                Permission.PURCHASING_READ,
+                Permission.PURCHASING_WRITE,
+                Permission.PURCHASING_CREATE,
+                Permission.PURCHASING_UPDATE,
+                Permission.PURCHASING_RECEIVE,
+                Permission.PURCHASING_CANCEL,
+                Permission.PURCHASING_RETURN,
                 Permission.MENU_READ,
                 Permission.MENU_WRITE,
                 Permission.MENU_PRODUCT_CREATE,
@@ -52,6 +52,7 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.ANALYTICS_READ,
                 Permission.INTEGRATIONS_READ,
                 Permission.INTEGRATIONS_WRITE,
+                Permission.POS_DEVICE_MANAGE,
             }
         ),
         MembershipRole.MANAGER: frozenset(
@@ -66,12 +67,12 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.INVENTORY_COUNT,
                 Permission.INVENTORY_TRANSFER,
                 Permission.INVENTORY_MOVEMENT_READ,
-                    Permission.PURCHASING_READ,
-                    Permission.PURCHASING_WRITE,
-                    Permission.PURCHASING_CREATE,
-                    Permission.PURCHASING_UPDATE,
-                    Permission.PURCHASING_RECEIVE,
-                    Permission.PURCHASING_RETURN,
+                Permission.PURCHASING_READ,
+                Permission.PURCHASING_WRITE,
+                Permission.PURCHASING_CREATE,
+                Permission.PURCHASING_UPDATE,
+                Permission.PURCHASING_RECEIVE,
+                Permission.PURCHASING_RETURN,
                 Permission.MENU_READ,
                 Permission.MENU_WRITE,
                 Permission.MENU_PRODUCT_CREATE,
@@ -90,6 +91,7 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.PAYMENTS_REFUND,
                 Permission.ANALYTICS_READ,
                 Permission.INTEGRATIONS_READ,
+                Permission.POS_DEVICE_MANAGE,
             }
         ),
         MembershipRole.ACCOUNTANT: frozenset(
@@ -135,3 +137,13 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
 
     assert Permission.ORGANIZATION_TRANSFER_OWNERSHIP in permissions_for(MembershipRole.OWNER)
     assert Permission.ORGANIZATION_TRANSFER_OWNERSHIP not in permissions_for(MembershipRole.ADMIN)
+    for role in (MembershipRole.OWNER, MembershipRole.ADMIN, MembershipRole.MANAGER):
+        assert Permission.POS_DEVICE_MANAGE in permissions_for(role)
+    for role in (
+        MembershipRole.ACCOUNTANT,
+        MembershipRole.CASHIER,
+        MembershipRole.BARISTA,
+    ):
+        assert Permission.POS_DEVICE_MANAGE not in permissions_for(role)
+    for role in (MembershipRole.CASHIER, MembershipRole.BARISTA):
+        assert Permission.SALES_CREATE in permissions_for(role)

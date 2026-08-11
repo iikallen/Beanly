@@ -88,7 +88,7 @@ class FinanceEntryModel(Base):
         CheckConstraint("length(currency_code) = 3", name="ck_finance_currency"),
         CheckConstraint(
             "(entry_type = 'COGS' AND quality_status IS NOT NULL "
-            "AND quality_status IN ('COMPLETE','INCOMPLETE')) OR "
+            "AND quality_status IN ('COMPLETE','INCOMPLETE','ESTIMATED')) OR "
             "(entry_type <> 'COGS' AND quality_status IS NULL)",
             name="ck_finance_entry_quality",
         ),

@@ -66,7 +66,7 @@ class AnalyticsProjectionService:
                 "Product COGS does not reconcile with SalesOrder.cogs_amount"
             )
         order_type = sale.order_type
-        incomplete = int(sale.cogs_status == "INCOMPLETE")
+        incomplete = int(sale.cogs_status != "COMPLETE")
         await self.repository.upsert_sales(
             SalesDailyDelta(
                 organization_id,
@@ -309,7 +309,7 @@ def _product_deltas(sale, local_date) -> tuple[ProductSalesDailyDelta, ...]:
         raise AnalyticsProjectionError(
             "Product COGS does not reconcile with SalesOrder.cogs_amount"
         )
-    incomplete = int(sale.cogs_status == "INCOMPLETE")
+    incomplete = int(sale.cogs_status != "COMPLETE")
     deltas = tuple(
         ProductSalesDailyDelta(
             sale.organization_id,

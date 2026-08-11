@@ -327,6 +327,7 @@ class SqlAlchemySalesRepository:
                 cogs_amount=cogs_amount,
                 cogs_status=cogs_status.value,
                 updated_at=paid_at,
+                version=SalesOrderModel.version + 1,
             )
         )
         if result.rowcount != 1:
@@ -441,7 +442,12 @@ class SqlAlchemySalesRepository:
                 SalesOrderModel.id == order_id,
                 SalesOrderModel.status == OrderStatus.OPEN.value,
             )
-            .values(subtotal_minor=total, total_minor=total, updated_at=datetime.now(UTC))
+            .values(
+                subtotal_minor=total,
+                total_minor=total,
+                updated_at=datetime.now(UTC),
+                version=SalesOrderModel.version + 1,
+            )
         )
         await self.session.flush()
         saved = await self._order(organization_id, order_id)
@@ -506,6 +512,11 @@ def _order_values(value: SalesOrder) -> dict[str, object]:
         "warehouse_id": value.warehouse_id,
         "number": value.number,
         "client_order_id": value.client_order_id,
+        "version": value.version,
+        "pos_device_id": value.pos_device_id,
+        "offline_session_id": value.offline_session_id,
+        "client_created_at": value.client_created_at,
+        "offline_display_number": value.offline_display_number,
         "order_type": value.order_type.value,
         "status": value.status.value,
         "currency_code": value.currency_code,

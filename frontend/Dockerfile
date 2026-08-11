@@ -29,6 +29,8 @@ LABEL org.opencontainers.image.version=$APP_VERSION \
       org.opencontainers.image.created=$BUILD_TIME
 COPY --chown=node:node --from=builder /app/.next/standalone ./
 COPY --chown=node:node --from=builder /app/.next/static ./.next/static
+COPY --chown=node:node --from=builder /app/public ./public
+RUN sed -i "s/__BEANLY_BUILD__/${GIT_SHA}/g" public/sw.js
 USER node
 EXPOSE 3000
 CMD ["node", "server.js"]

@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from uuid import UUID, uuid4
 
@@ -9,8 +9,53 @@ from sqlalchemy import func, select, update
 from beanly.core.events.outbox.models import OutboxEventModel
 from beanly.core.money import MAX_NUMERIC_20_6_MINOR
 from beanly.modules.inventory.infrastructure.db.models import InventoryTransactionModel
+from beanly.modules.payments.application.payment_service import _idempotent, _NormalizedLine
+from beanly.modules.payments.domain.entities import Payment, PaymentLine
+from beanly.modules.payments.domain.enums import PaymentMethod
+from beanly.modules.payments.domain.exceptions import PaymentIdempotencyConflict
 from beanly.modules.payments.infrastructure.db.models import PaymentModel
 from beanly.modules.sales.infrastructure.db.models import RegisterShiftModel, SalesOrderModel
+
+
+def test_offline_payment_idempotency_includes_business_time_and_session() -> None:
+    now = datetime.now(UTC)
+    order_id = uuid4()
+    payment_id = uuid4()
+    offline_session_id = uuid4()
+    line = PaymentLine(
+        uuid4(),
+        payment_id,
+        PaymentMethod.CARD,
+        180000,
+        None,
+        0,
+        "terminal-1",
+        0,
+        now,
+    )
+    payment = Payment(
+        payment_id,
+        uuid4(),
+        uuid4(),
+        order_id,
+        uuid4(),
+        uuid4(),
+        "KZT",
+        180000,
+        uuid4(),
+        now,
+        now,
+        now,
+        (line,),
+        offline_session_id,
+    )
+    requested = (_NormalizedLine(PaymentMethod.CARD, 180000, None, 0, "terminal-1"),)
+
+    assert _idempotent(payment, order_id, requested, now, offline_session_id) is payment
+    with pytest.raises(PaymentIdempotencyConflict):
+        _idempotent(payment, order_id, requested, now + timedelta(seconds=1), offline_session_id)
+    with pytest.raises(PaymentIdempotencyConflict):
+        _idempotent(payment, order_id, requested, now, uuid4())
 
 
 async def _user(client: AsyncClient, email: str) -> dict[str, str]:

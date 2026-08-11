@@ -394,6 +394,32 @@ async def test_actual_product_cogs_reconciles_and_incomplete_flag_is_not_hidden(
     assert repository.sales[-1].incomplete_cogs_orders == 1
     assert repository.locations[-1].incomplete_cogs_orders == 1
 
+    estimated = _sale(
+        order_cogs=Decimal("8"),
+        cogs_status="ESTIMATED",
+        items=(
+            _item(
+                uuid4(),
+                uuid4(),
+                "Delayed offline COGS",
+                1,
+                "1000",
+                (AnalyticsSaleComponentSnapshot(uuid4(), Decimal(1), Decimal(8)),),
+            ),
+        ),
+    )
+    sources.sales[estimated.payment_id] = estimated
+    await service.apply_payment_completed(
+        uuid4(),
+        estimated.organization_id,
+        estimated.payment_id,
+        estimated.order_id,
+        estimated.paid_at,
+    )
+    assert repository.products[-1].incomplete_cogs_orders == 1
+    assert repository.sales[-1].incomplete_cogs_orders == 1
+    assert repository.locations[-1].incomplete_cogs_orders == 1
+
 
 @pytest.mark.anyio
 async def test_multi_product_cogs_reconciles_at_six_decimal_precision() -> None:

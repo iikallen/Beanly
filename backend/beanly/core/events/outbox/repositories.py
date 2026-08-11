@@ -25,6 +25,7 @@ class OutboxRepository:
         self.session = session
 
     async def add_many(self, envelopes: tuple[EventEnvelope, ...]) -> None:
+        recorded_at = datetime.now(UTC)
         self.session.add_all(
             OutboxEventModel(
                 id=value.id,
@@ -35,9 +36,9 @@ class OutboxRepository:
                 aggregate_id=value.aggregate_id,
                 payload=value.payload,
                 occurred_at=value.occurred_at,
-                available_at=value.occurred_at,
+                available_at=recorded_at,
                 attempts=0,
-                created_at=value.occurred_at,
+                created_at=recorded_at,
             )
             for value in envelopes
         )

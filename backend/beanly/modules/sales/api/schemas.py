@@ -196,6 +196,7 @@ class OrderResponse(BaseModel):
     warehouse_id: UUID
     number: str
     client_order_id: UUID
+    version: int
     order_type: OrderType
     status: OrderStatus
     currency_code: str
@@ -212,6 +213,10 @@ class OrderResponse(BaseModel):
     paid_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    pos_device_id: UUID | None
+    offline_session_id: UUID | None
+    client_created_at: datetime | None
+    offline_display_number: int | None
     items: list[OrderItemResponse]
 
     @classmethod
@@ -224,6 +229,7 @@ class OrderResponse(BaseModel):
             warehouse_id=value.warehouse_id,
             number=str(value.number),
             client_order_id=value.client_order_id,
+            version=value.version,
             order_type=value.order_type,
             status=value.status,
             currency_code=value.currency_code,
@@ -240,5 +246,9 @@ class OrderResponse(BaseModel):
             paid_at=value.paid_at,
             created_at=value.created_at,
             updated_at=value.updated_at,
+            pos_device_id=value.pos_device_id,
+            offline_session_id=value.offline_session_id,
+            client_created_at=value.client_created_at,
+            offline_display_number=value.offline_display_number,
             items=[OrderItemResponse.from_entity(item) for item in value.items],
         )

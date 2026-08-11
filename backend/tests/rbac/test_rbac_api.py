@@ -1,4 +1,5 @@
 from hashlib import sha256
+from uuid import uuid4
 
 import pytest
 from httpx import AsyncClient
@@ -430,6 +431,16 @@ async def test_owner_admin_manager_and_barista_api_permissions(app_client, monke
             json={"base_price_minor": 1},
         )
     ).status_code == 403
+    recipe = await client.put(
+        f"/api/v1/menu/variants/{variant_id}/recipe",
+        headers=owner_headers,
+        json={
+            "components": [
+                {"inventory_item_id": item.json()["id"], "quantity": "1", "unit": "g"}
+            ]
+        },
+    )
+    assert recipe.status_code == 200, recipe.text
     activated = await client.patch(
         f"/api/v1/menu/products/{menu_product.json()['id']}",
         headers=manager_headers,
@@ -495,3 +506,95 @@ async def test_owner_admin_manager_and_barista_api_permissions(app_client, monke
             headers=barista_headers,
         )
     ).status_code == 403
+
+    devices: list[tuple[dict[str, str], dict, str]] = []
+    for index, pair_headers in enumerate((owner_headers, admin_headers, manager_headers), start=1):
+        register = await client.post(
+            "/api/v1/sales/registers",
+            headers=owner_headers,
+            json={"location_id": location_id, "name": f"Offline RBAC {index}"},
+        )
+        assert register.status_code == 201, register.text
+        shift = await client.post(
+            "/api/v1/sales/shifts/open",
+            headers=owner_headers,
+            json={
+                "register_id": register.json()["id"],
+                "warehouse_id": warehouse.json()["id"],
+            },
+        )
+        assert shift.status_code == 201, shift.text
+        paired = await client.post(
+            "/api/v1/pos/offline/devices/pair",
+            headers=pair_headers,
+            json={"register_id": register.json()["id"], "name": f"Device {index}"},
+        )
+        assert paired.status_code == 201, paired.text
+        devices.append((paired.json(), shift.json(), paired.cookies["beanly_pos_device"]))
+
+    for headers in (cashier_headers, barista_headers):
+        denied_pair = await client.post(
+            "/api/v1/pos/offline/devices/pair",
+            headers=headers,
+            json={"register_id": devices[2][0]["register_id"], "name": "Forbidden"},
+        )
+        assert denied_pair.status_code == 403, denied_pair.text
+        denied_revoke = await client.post(
+            f"/api/v1/pos/offline/devices/{devices[2][0]['id']}/revoke",
+            headers=headers,
+        )
+        assert denied_revoke.status_code == 403, denied_revoke.text
+
+    started_sessions = []
+    for headers, (_, shift, credential) in zip(
+        (cashier_headers, barista_headers, manager_headers), devices, strict=True
+    ):
+        started = await client.post(
+            "/api/v1/pos/offline/sessions/start",
+            headers={**headers, "cookie": f"beanly_pos_device={credential}"},
+            json={"shift_id": shift["id"]},
+        )
+        assert started.status_code == 201, started.text
+        started_sessions.append((started.json(), credential))
+
+    async def sync_as(index: int, status: str, *, payment: bool = False):
+        offline_session, credential = started_sessions[index]
+        timestamp = offline_session["server_time"]
+        order = {
+            "client_order_id": str(uuid4()),
+            "revision": 1,
+            "catalog_snapshot_id": offline_session["catalog_snapshot_id"],
+            "created_at": timestamp,
+            "updated_at": timestamp,
+            "order_type": "DINE_IN",
+            "status": status,
+            "items": [
+                {
+                    "client_item_id": str(uuid4()),
+                    "variant_id": variant_id,
+                    "selected_option_ids": [option.json()["id"]],
+                    "quantity": 1,
+                }
+            ],
+        }
+        if payment:
+            order["payment"] = {
+                "client_payment_id": str(uuid4()),
+                "completed_at": timestamp,
+                "lines": [{"method": "CASH", "amount_minor": "190000"}],
+            }
+        response = await client.post(
+            "/api/v1/pos/offline/sync",
+            headers={"cookie": f"beanly_pos_device={credential}"},
+            json={"session_id": offline_session["id"], "orders": [order]},
+        )
+        assert response.status_code == 200, response.text
+        return response.json()["results"][0]
+
+    assert (await sync_as(2, "OPEN"))["code"] == "OFFLINE_PERMISSION_DENIED"
+    assert (await sync_as(1, "PAID", payment=True))["code"] == "OFFLINE_PERMISSION_DENIED"
+    assert (await sync_as(0, "CANCELLED"))["code"] == "OFFLINE_PERMISSION_DENIED"
+    cashier_open = await sync_as(0, "OPEN")
+    assert cashier_open["status"] == "SYNCED", cashier_open
+    barista_open = await sync_as(1, "OPEN")
+    assert barista_open["status"] == "SYNCED", barista_open

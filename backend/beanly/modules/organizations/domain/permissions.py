@@ -53,6 +53,7 @@ class Permission(StrEnum):
     ANALYTICS_READ = "analytics.read"
     INTEGRATIONS_READ = "integrations.read"
     INTEGRATIONS_WRITE = "integrations.write"
+    POS_DEVICE_MANAGE = "pos.device.manage"
 
 
 _ALL = frozenset(Permission)
@@ -106,6 +107,7 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.ANALYTICS_READ,
             Permission.INTEGRATIONS_READ,
             Permission.INTEGRATIONS_WRITE,
+            Permission.POS_DEVICE_MANAGE,
         }
     ),
     MembershipRole.MANAGER: frozenset(
@@ -144,6 +146,7 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.PAYMENTS_REFUND,
             Permission.ANALYTICS_READ,
             Permission.INTEGRATIONS_READ,
+            Permission.POS_DEVICE_MANAGE,
         }
     ),
     MembershipRole.ACCOUNTANT: frozenset(

@@ -208,6 +208,12 @@ FINANCE_TABLES = {
     "cash_entries",
     "cash_movements",
 }
+OFFLINE_POS_TABLES = {
+    "pos_devices",
+    "pos_catalog_snapshots",
+    "pos_offline_sessions",
+    "pos_offline_order_syncs",
+}
 APPLICATION_TABLES = (
     ORGANIZATION_TABLES
     | TEAM_TABLES
@@ -220,6 +226,7 @@ APPLICATION_TABLES = (
     | OUTBOX_TABLES
     | INVENTORY_OPERATION_TABLES
     | FINANCE_TABLES
+    | OFFLINE_POS_TABLES
 )
 
 
@@ -3420,7 +3427,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
             "alembic_version",
             *APPLICATION_TABLES,
         } <= upgraded["tables"]
-        assert upgraded["revision"] == "0019_production_hardening"
+        assert upgraded["revision"] == "0020_offline_pos"
         assert INVENTORY_OPERATION_TABLES <= upgraded["tables"]
         assert {
             "inventory_writeoff_number_seq",
@@ -3916,6 +3923,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
             "currency_code",
             "amount_minor",
             "created_by_user_id",
+            "offline_session_id",
             "completed_at",
             "created_at",
             "updated_at",
@@ -4090,6 +4098,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
             | OUTBOX_TABLES
             | INVENTORY_OPERATION_TABLES
             | FINANCE_TABLES
+            | OFFLINE_POS_TABLES
         ) <= sales_downgraded["tables"]
         assert "sales_order_number_seq" not in sales_downgraded["sequences"]
         assert sales_downgraded["revision"] == "0009_modifiers"
@@ -4253,7 +4262,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
         await asyncio.to_thread(command.upgrade, config, "head")
         reupgraded = await database_snapshot(test_url)
         assert APPLICATION_TABLES <= reupgraded["tables"]
-        assert reupgraded["revision"] == "0019_production_hardening"
+        assert reupgraded["revision"] == "0020_offline_pos"
         assert await membership_state(test_url, legacy_membership_id) == ("ACTIVE", "ALL")
     finally:
         await admin_engine.dispose()
