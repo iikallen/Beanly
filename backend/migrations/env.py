@@ -12,6 +12,7 @@ from beanly.core.security import audit as security_audit_models  # noqa: F401
 from beanly.modules.analytics.infrastructure.db import models as analytics_models  # noqa: F401
 from beanly.modules.employees.infrastructure.db import models as employee_models  # noqa: F401
 from beanly.modules.finance.infrastructure.db import models as finance_models  # noqa: F401
+from beanly.modules.fiscal.infrastructure.db import models as fiscal_models  # noqa: F401
 from beanly.modules.identity.infrastructure.db import models  # noqa: F401
 from beanly.modules.integrations.infrastructure.db import (
     models as integration_models,  # noqa: F401
@@ -26,6 +27,7 @@ from beanly.modules.payments.infrastructure.db import models as payment_models  
 from beanly.modules.purchasing.infrastructure.db import (
     models as purchasing_models,  # noqa: F401
 )
+from beanly.modules.refunds.infrastructure.db import models as refund_models  # noqa: F401
 from beanly.modules.sales.infrastructure.db import models as sales_models  # noqa: F401
 
 config = context.config

@@ -22,11 +22,78 @@ _SIX = Decimal("0.000001")
 class AnalyticsProjectionService:
     """Receipt-first, additive projections; the dispatcher owns transactions."""
 
-    def __init__(
-        self, repository: AnalyticsRepository, sources: AnalyticsSourceReader
-    ) -> None:
+    def __init__(self, repository: AnalyticsRepository, sources: AnalyticsSourceReader) -> None:
         self.repository = repository
         self.sources = sources
+
+    async def apply_refund_completed(
+        self,
+        event_id: UUID | None,
+        organization_id: UUID,
+        refund_id: UUID,
+        occurred_at: datetime,
+    ) -> bool:
+        if not await self.repository.add_receipt(
+            "REFUND_ANALYTICS",
+            "REFUND",
+            refund_id,
+            organization_id,
+            event_id,
+            occurred_at,
+        ):
+            return False
+        refund = await self.sources.refund(organization_id, refund_id)
+        local_date = _local(refund.completed_at, refund.timezone).date()
+        refunded_items = sum(item.quantity for item in refund.items)
+        await self.repository.upsert_sales(
+            SalesDailyDelta(
+                organization_id,
+                refund.location_id,
+                local_date,
+                refund.timezone,
+                refund.currency_code,
+                Decimal(0),
+                0,
+                0,
+                Decimal(0),
+                0,
+                0,
+                0,
+                0,
+                _amount(refund.amount),
+                1,
+                refunded_items,
+            )
+        )
+        for item in refund.items:
+            await self.repository.upsert_product(
+                ProductSalesDailyDelta(
+                    organization_id,
+                    refund.location_id,
+                    local_date,
+                    item.product_id,
+                    item.product_variant_id,
+                    item.product_name,
+                    item.variant_name,
+                    0,
+                    0,
+                    Decimal(0),
+                    Decimal(0),
+                    0,
+                    _amount(item.amount),
+                    item.quantity,
+                    1,
+                )
+            )
+        await self.repository.upsert_location(
+            LocationMetricsDailyDelta(
+                organization_id,
+                refund.location_id,
+                local_date,
+                refund_amount=_amount(refund.amount),
+            )
+        )
+        return True
 
     async def apply_payment_completed(
         self,
@@ -58,9 +125,7 @@ class AnalyticsProjectionService:
                 "Inventory SALE COGS does not reconcile with SalesOrder.cogs_amount"
             )
         product_deltas = _product_deltas(sale, local.date())
-        allocated_cogs = sum(
-            (delta.cogs_amount for delta in product_deltas), Decimal(0)
-        )
+        allocated_cogs = sum((delta.cogs_amount for delta in product_deltas), Decimal(0))
         if abs(allocated_cogs - sale.order_cogs) > _SIX:
             raise AnalyticsProjectionError(
                 "Product COGS does not reconcile with SalesOrder.cogs_amount"
@@ -128,9 +193,7 @@ class AnalyticsProjectionService:
             occurred_at,
         ):
             return False
-        source = await self.sources.inventory_transaction(
-            organization_id, transaction_id
-        )
+        source = await self.sources.inventory_transaction(organization_id, transaction_id)
         if source.transaction_type not in {"SALE", "WRITE_OFF", "ADJUSTMENT"}:
             return True
         local_date = _local(source.posted_at, source.timezone).date()
@@ -289,21 +352,13 @@ def _product_deltas(sale, local_date) -> tuple[ProductSalesDailyDelta, ...]:
         current["quantity"] = int(current["quantity"]) + item.quantity
         current["revenue"] = Decimal(current["revenue"]) + item.revenue_amount
         current["cogs"] = Decimal(current["cogs"]) + cogs
-    raw_total = sum(
-        (Decimal(values["cogs"]) for values in grouped.values()), Decimal(0)
-    )
+    raw_total = sum((Decimal(values["cogs"]) for values in grouped.values()), Decimal(0))
     inventory_items = {
-        component.inventory_item_id
-        for item in sale.items
-        for component in item.components
+        component.inventory_item_id for item in sale.items for component in item.components
     }
-    rounding_tolerance = max(
-        _SIX, Decimal(len(inventory_items)) * _SIX / Decimal(2)
-    )
+    rounding_tolerance = max(_SIX, Decimal(len(inventory_items)) * _SIX / Decimal(2))
     canonical_cogs = (
-        sale.actual_inventory_cogs
-        if sale.actual_inventory_cogs is not None
-        else sale.order_cogs
+        sale.actual_inventory_cogs if sale.actual_inventory_cogs is not None else sale.order_cogs
     )
     if abs(raw_total - canonical_cogs) > rounding_tolerance:
         raise AnalyticsProjectionError(
@@ -329,9 +384,7 @@ def _product_deltas(sale, local_date) -> tuple[ProductSalesDailyDelta, ...]:
     )
     if not deltas:
         return deltas
-    residual = _amount(sale.order_cogs) - sum(
-        (delta.cogs_amount for delta in deltas), Decimal(0)
-    )
+    residual = _amount(sale.order_cogs) - sum((delta.cogs_amount for delta in deltas), Decimal(0))
     if residual:
         deltas = (
             replace(deltas[0], cogs_amount=_amount(deltas[0].cogs_amount + residual)),

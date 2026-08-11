@@ -6,6 +6,7 @@ import {
   Boxes,
   ClipboardCheck,
   ClipboardList,
+  CircleAlert,
   Percent,
   ReceiptText,
   ShoppingBag,
@@ -131,12 +132,20 @@ export default function AppPage() {
 
   const finance = permissions.canReadFinance ? dashboard?.finance : null;
   const currency = finance?.currency_code ?? currentOrganization.currency_code;
+  const hasRefundBreakdown = dashboard?.sales.gross_sales_minor !== undefined
+    && dashboard.sales.refund_amount_minor !== undefined
+    && dashboard.sales.net_sales_minor !== undefined;
   const mainMetrics = dashboard ? [
     {
-      label: "Revenue",
-      value: formatDashboardMoney(dashboard.sales.revenue.current, currency),
+      label: hasRefundBreakdown ? "Net Sales" : "Revenue",
+      value: hasRefundBreakdown
+        ? formatDashboardMinor(dashboard.sales.net_sales_minor!, currency)
+        : formatDashboardMoney(dashboard.sales.revenue.current, currency),
       metric: dashboard.sales.revenue,
       icon: <Banknote />,
+      breakdown: hasRefundBreakdown
+        ? `Gross ${formatDashboardMinor(dashboard.sales.gross_sales_minor!, currency)} · Refunds −${formatDashboardMinor(dashboard.sales.refund_amount_minor!, currency)}`
+        : undefined,
     },
     {
       label: "Orders",
@@ -198,6 +207,7 @@ export default function AppPage() {
                 />
               )}
             </section>
+            {finance && finance.incomplete_cogs_sales > 0 && <div className="finance-quality-warning" role="status"><CircleAlert aria-hidden="true" /><div><strong>Estimated or incomplete COGS</strong><p>{new Intl.NumberFormat().format(finance.incomplete_cogs_sales)} sales need recipe or cost review. Revenue and refund totals remain available.</p></div></div>}
 
             <DashboardMetricRail metrics={finance ? [
               { label: "Gross Margin", value: formatPercent(finance.gross_margin_percent), icon: <Percent /> },

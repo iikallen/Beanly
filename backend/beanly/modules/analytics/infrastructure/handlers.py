@@ -11,9 +11,8 @@ def register_analytics_handlers(
     registry: EventHandlerRegistry, service: AnalyticsProjectionService
 ) -> None:
     registry.register("payment.completed", 1, _payment(service))
-    registry.register(
-        "inventory.transaction_posted", 1, _inventory_transaction(service)
-    )
+    registry.register("refund.completed", 1, _refund(service))
+    registry.register("inventory.transaction_posted", 1, _inventory_transaction(service))
     registry.register("finance.expense_posted", 1, _expense(service, reversed_=False))
     registry.register("finance.expense_reversed", 1, _expense(service, reversed_=True))
 
@@ -44,6 +43,18 @@ def _payment(service: AnalyticsProjectionService):
     return handler
 
 
+def _refund(service: AnalyticsProjectionService):
+    async def handler(envelope: EventEnvelope) -> None:
+        await service.apply_refund_completed(
+            envelope.id,
+            _organization(envelope),
+            _id(envelope, "refund_id"),
+            envelope.occurred_at,
+        )
+
+    return handler
+
+
 def _inventory_transaction(service: AnalyticsProjectionService):
     async def handler(envelope: EventEnvelope) -> None:
         await service.apply_inventory_transaction_posted(
@@ -58,11 +69,7 @@ def _inventory_transaction(service: AnalyticsProjectionService):
 
 def _expense(service: AnalyticsProjectionService, *, reversed_: bool):
     async def handler(envelope: EventEnvelope) -> None:
-        method = (
-            service.apply_expense_reversed
-            if reversed_
-            else service.apply_expense_posted
-        )
+        method = service.apply_expense_reversed if reversed_ else service.apply_expense_posted
         await method(
             envelope.id,
             _organization(envelope),

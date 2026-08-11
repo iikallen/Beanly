@@ -9,6 +9,8 @@ from beanly.modules.finance.application.source_ports import (
     FinanceCountSnapshot,
     FinancePaymentLineSnapshot,
     FinancePaymentSnapshot,
+    FinanceRefundPaymentLineSnapshot,
+    FinanceRefundSnapshot,
     FinanceSaleSnapshot,
     FinanceWriteOffSnapshot,
 )
@@ -19,6 +21,7 @@ from beanly.modules.inventory.infrastructure.db.models import (
     WriteOffModel,
 )
 from beanly.modules.payments.infrastructure.db.models import PaymentModel
+from beanly.modules.refunds.infrastructure.db.models import RefundModel
 from beanly.modules.sales.infrastructure.db.models import SalesOrderModel
 
 
@@ -26,9 +29,34 @@ class SqlAlchemyFinanceSourceReader:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def payment(
-        self, organization_id: UUID, payment_id: UUID
-    ) -> FinancePaymentSnapshot:
+    async def refund(self, organization_id: UUID, refund_id: UUID) -> FinanceRefundSnapshot:
+        value = await self.session.scalar(
+            select(RefundModel)
+            .options(selectinload(RefundModel.payment_lines))
+            .where(
+                RefundModel.organization_id == organization_id,
+                RefundModel.id == refund_id,
+                RefundModel.status == "COMPLETED",
+            )
+        )
+        if value is None or value.completed_at is None:
+            raise FinanceNotFound("Completed refund not found")
+        return FinanceRefundSnapshot(
+            value.id,
+            value.organization_id,
+            value.location_id,
+            value.currency_code,
+            value.total_amount_minor,
+            value.cogs_reversal_amount,
+            value.cogs_quality_status,
+            value.completed_at,
+            tuple(
+                FinanceRefundPaymentLineSnapshot(line.id, line.method, line.amount_minor)
+                for line in value.payment_lines
+            ),
+        )
+
+    async def payment(self, organization_id: UUID, payment_id: UUID) -> FinancePaymentSnapshot:
         model = await self.session.scalar(
             select(PaymentModel)
             .options(selectinload(PaymentModel.lines))
@@ -53,9 +81,7 @@ class SqlAlchemyFinanceSourceReader:
             ),
         )
 
-    async def sale(
-        self, organization_id: UUID, order_id: UUID
-    ) -> FinanceSaleSnapshot:
+    async def sale(self, organization_id: UUID, order_id: UUID) -> FinanceSaleSnapshot:
         model = await self.session.scalar(
             select(SalesOrderModel).where(
                 SalesOrderModel.organization_id == organization_id,
@@ -75,9 +101,7 @@ class SqlAlchemyFinanceSourceReader:
             model.paid_at,
         )
 
-    async def writeoff(
-        self, organization_id: UUID, writeoff_id: UUID
-    ) -> FinanceWriteOffSnapshot:
+    async def writeoff(self, organization_id: UUID, writeoff_id: UUID) -> FinanceWriteOffSnapshot:
         model = await self.session.scalar(
             select(WriteOffModel).where(
                 WriteOffModel.organization_id == organization_id,
@@ -97,9 +121,7 @@ class SqlAlchemyFinanceSourceReader:
             model.reversed_at,
         )
 
-    async def count(
-        self, organization_id: UUID, inventory_count_id: UUID
-    ) -> FinanceCountSnapshot:
+    async def count(self, organization_id: UUID, inventory_count_id: UUID) -> FinanceCountSnapshot:
         count = await self.session.scalar(
             select(InventoryCountModel).where(
                 InventoryCountModel.organization_id == organization_id,

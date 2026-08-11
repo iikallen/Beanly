@@ -82,6 +82,9 @@ class SalesBlock:
     average_check: DecimalMetric
     open_orders: int
     open_shifts: int
+    gross_sales_minor: str = "0"
+    refund_amount_minor: str = "0"
+    net_sales_minor: str = "0"
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +161,9 @@ class TrendPoint:
     bucket_start: datetime
     revenue: Decimal
     orders: int
+    gross_sales_minor: str = "0"
+    refund_amount_minor: str = "0"
+    net_sales_minor: str = "0"
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,6 +193,25 @@ class LocationScorecardRow:
     paid_orders: int
     average_check: Decimal
     operating_profit: Decimal | None
+    gross_sales_minor: str = "0"
+    refund_amount_minor: str = "0"
+    net_sales_minor: str = "0"
+
+
+@dataclass(frozen=True, slots=True)
+class RefundAggregate:
+    amount_minor: int
+
+
+@dataclass(frozen=True, slots=True)
+class RefundTrendRow:
+    amount_minor: int
+
+
+@dataclass(frozen=True, slots=True)
+class RefundLocationRow:
+    location_id: UUID
+    amount_minor: int
 
 
 @dataclass(frozen=True, slots=True)

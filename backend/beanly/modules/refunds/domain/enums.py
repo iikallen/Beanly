@@ -1,0 +1,17 @@
+from enum import StrEnum
+
+
+class RefundStatus(StrEnum):
+    PENDING = "PENDING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class RefundReason(StrEnum):
+    QUALITY_ISSUE = "QUALITY_ISSUE"
+    WRONG_ITEM = "WRONG_ITEM"
+    ORDER_ERROR = "ORDER_ERROR"
+    CUSTOMER_RETURN = "CUSTOMER_RETURN"
+    DUPLICATE_PAYMENT = "DUPLICATE_PAYMENT"
+    GOODWILL = "GOODWILL"
+    OTHER = "OTHER"

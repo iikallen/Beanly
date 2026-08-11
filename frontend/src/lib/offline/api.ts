@@ -24,7 +24,10 @@ export async function pingOfflineApi(signal?: AbortSignal): Promise<boolean> {
       cache: "no-store",
       signal: signal ?? AbortSignal.timeout(5000),
     });
-    return response.ok;
+    // The ping endpoint also verifies the optional POS device cookie. A 401/403
+    // still proves that the API is reachable; authorization is enforced by the
+    // operation-specific request that follows.
+    return response.status < 500;
   } catch {
     return false;
   }

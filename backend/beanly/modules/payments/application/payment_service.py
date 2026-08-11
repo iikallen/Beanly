@@ -7,6 +7,7 @@ from beanly.core.money import MAX_BIGINT, MAX_NUMERIC_20_6_MINOR
 from beanly.core.observability import metrics, traced
 from beanly.modules.organizations.domain.entities import TenantContext
 from beanly.modules.payments.application.ports import (
+    FiscalSnapshotPort,
     InventorySalePort,
     SalesSettlementPort,
     SaleStockLine,
@@ -51,11 +52,13 @@ class PaymentService:
         sales: SalesSettlementPort,
         inventory: InventorySalePort,
         sink: DomainEventSink | None = None,
+        fiscal: FiscalSnapshotPort | None = None,
     ) -> None:
         self.repository = repository
         self.sales = sales
         self.inventory = inventory
         self.sink = sink or NullDomainEventSink()
+        self.fiscal = fiscal
 
     async def complete(
         self,
@@ -192,6 +195,8 @@ class PaymentService:
                 staged_sale.cogs_amount,
                 staged_sale.cogs_status,
             )
+            if self.fiscal is not None:
+                await self.fiscal.stage_payment_snapshot(saved.organization_id, saved.id)
         with traced("outbox.stage", aggregate_id=str(saved.id)):
             events = (
                 *staged_sale.events,
@@ -209,15 +214,11 @@ class PaymentService:
                 await self.sink.stage_many(events)
         return saved
 
-    async def get(
-        self, context: TenantContext, payment_id: UUID
-    ) -> Payment:
+    async def get(self, context: TenantContext, payment_id: UUID) -> Payment:
         value = await self.repository.get(context.organization_id, payment_id)
         return await self._accessible(context, value)
 
-    async def get_by_order(
-        self, context: TenantContext, order_id: UUID
-    ) -> Payment:
+    async def get_by_order(self, context: TenantContext, order_id: UUID) -> Payment:
         value = await self.repository.get_by_order(context.organization_id, order_id)
         return await self._accessible(context, value)
 
@@ -231,10 +232,7 @@ class PaymentService:
         date_to: datetime | None,
         method: PaymentMethod | None,
     ) -> list[Payment]:
-        if any(
-            value is not None and value.utcoffset() is None
-            for value in (date_from, date_to)
-        ):
+        if any(value is not None and value.utcoffset() is None for value in (date_from, date_to)):
             raise ValueError("Payment date filters must include a timezone")
         if date_from is not None and date_to is not None and date_from > date_to:
             raise ValueError("date_from cannot be after date_to")
@@ -254,9 +252,7 @@ class PaymentService:
             method=method,
         )
 
-    async def shift_summary(
-        self, context: TenantContext, shift_id: UUID
-    ) -> ShiftPaymentSummary:
+    async def shift_summary(self, context: TenantContext, shift_id: UUID) -> ShiftPaymentSummary:
         await self.sales.ensure_shift_access(context, shift_id)
         return await self.repository.shift_summary(context.organization_id, shift_id)
 
@@ -268,9 +264,7 @@ class PaymentService:
         original: PaymentConflict,
     ) -> Payment:
         lines = _normalize_lines(value.lines)
-        existing = await self.repository.get_by_client_id(
-            organization_id, value.client_payment_id
-        )
+        existing = await self.repository.get_by_client_id(organization_id, value.client_payment_id)
         if existing is not None:
             return _idempotent(
                 existing,
@@ -283,9 +277,7 @@ class PaymentService:
             raise OrderAlreadyPaid("Order is already paid") from original
         raise original
 
-    async def _accessible(
-        self, context: TenantContext, value: Payment | None
-    ) -> Payment:
+    async def _accessible(self, context: TenantContext, value: Payment | None) -> Payment:
         if value is None:
             raise PaymentNotFound("Payment not found")
         await self.sales.ensure_location_access(context, value.location_id)
@@ -374,10 +366,7 @@ def _idempotent(
             requested_completed_at is not None
             and existing_completed_at.astimezone(UTC) != requested_completed_at
         )
-        or (
-            offline_session_id is not None
-            and existing.offline_session_id != offline_session_id
-        )
+        or (offline_session_id is not None and existing.offline_session_id != offline_session_id)
     ):
         raise PaymentIdempotencyConflict(
             "client_payment_id was already used with a different request"

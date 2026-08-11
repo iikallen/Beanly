@@ -661,7 +661,7 @@ async def test_payment_zero_total_nonempty_tenant_and_create_only_rbac(
     ).status_code == 404
 
 
-def test_payment_openapi_does_not_accept_order_money_or_refunds() -> None:
+def test_payment_openapi_keeps_completion_trust_boundary_and_refunds_read_only() -> None:
     from beanly.main import app
 
     paths = app.openapi()["paths"]
@@ -672,10 +672,12 @@ def test_payment_openapi_does_not_accept_order_money_or_refunds() -> None:
         "/api/v1/payments/shifts/{shift_id}/summary": {"get"},
         "/api/v1/payments": {"get"},
         "/api/v1/payments/{payment_id}": {"get"},
+        "/api/v1/payments/{payment_id}/refunds": {"get"},
     }
     for path, operations in expected.items():
         assert operations <= paths[path].keys()
-    assert not any("refund" in path.casefold() for path in paths)
+    refund_operations = paths["/api/v1/payments/{payment_id}/refunds"]
+    assert not {"post", "put", "patch", "delete"}.intersection(refund_operations)
     operation = paths["/api/v1/payments/orders/{order_id}/complete"]["post"]
     schema_ref = operation["requestBody"]["content"]["application/json"]["schema"]["$ref"]
     complete_schema = app.openapi()["components"]["schemas"][schema_ref.rsplit("/", 1)[-1]]

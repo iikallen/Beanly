@@ -9,6 +9,7 @@ export function DashboardKpi({
   metric,
   icon,
   detail,
+  breakdown,
   favorable = "UP",
 }: {
   label: string;
@@ -16,6 +17,7 @@ export function DashboardKpi({
   metric?: DashboardMetric<string | number>;
   icon: ReactNode;
   detail?: string;
+  breakdown?: string;
   favorable?: "UP" | "DOWN" | "NONE";
 }) {
   const tone = metric ? comparisonTone(metric.direction, favorable) : "neutral";
@@ -26,6 +28,7 @@ export function DashboardKpi({
         <strong>{value}</strong>
       </div>
       <span className="dashboard-kpi-icon" aria-hidden="true">{icon}</span>
+      {breakdown && <span className="dashboard-kpi-breakdown">{breakdown}</span>}
       <small className={`dashboard-comparison is-${tone}`}>
         {metric ? comparisonLabel(metric) : detail}
       </small>

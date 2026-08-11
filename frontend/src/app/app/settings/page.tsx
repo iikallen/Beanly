@@ -1,6 +1,6 @@
 "use client";
 
-import { PlugZap } from "lucide-react";
+import { Landmark, PlugZap } from "lucide-react";
 import Link from "next/link";
 
 import { useIntegrationPermissions } from "@/hooks/use-integration-permissions";
@@ -23,7 +23,14 @@ export default function SettingsPage() {
             <span aria-hidden="true">→</span>
           </Link>
         )}
-        {!integrations.loading && !integrations.canRead && (
+        {!integrations.loading && integrations.canReadFiscal && (
+          <Link className="settings-entry-card" href="/app/settings/fiscal">
+            <span className="settings-entry-icon" aria-hidden="true"><Landmark /></span>
+            <span><strong>Fiscal &amp; Taxes</strong><small>Tax profile, readiness and product fiscal identity</small></span>
+            <span aria-hidden="true">→</span>
+          </Link>
+        )}
+        {!integrations.loading && !integrations.canRead && !integrations.canReadFiscal && (
           <div className="settings-empty-card">
             <strong>No organization settings available</strong>
             <span>Your current role does not manage organization settings.</span>

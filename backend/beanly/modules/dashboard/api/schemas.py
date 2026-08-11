@@ -48,6 +48,9 @@ class CountMetricResponse(DashboardModel):
 
 class SalesResponse(DashboardModel):
     revenue: DecimalMetricResponse
+    gross_sales_minor: str
+    refund_amount_minor: str
+    net_sales_minor: str
     paid_orders: CountMetricResponse
     average_check: DecimalMetricResponse
     open_orders: int
@@ -94,6 +97,9 @@ class TrendPointResponse(DashboardModel):
     bucket_start: datetime
     revenue: Decimal
     orders: int
+    gross_sales_minor: str
+    refund_amount_minor: str
+    net_sales_minor: str
 
 
 class LocationScorecardResponse(DashboardModel):
@@ -103,6 +109,9 @@ class LocationScorecardResponse(DashboardModel):
     paid_orders: int
     average_check: Decimal
     operating_profit: Decimal | None
+    gross_sales_minor: str
+    refund_amount_minor: str
+    net_sales_minor: str
 
 
 class AlertResponse(DashboardModel):

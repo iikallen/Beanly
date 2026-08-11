@@ -3,6 +3,7 @@ from uuid import UUID, uuid4
 
 from beanly.core.events.envelope import EventEnvelope
 from beanly.core.events.handlers.registry import EventHandlerRegistry
+from beanly.core.observability import metrics
 from beanly.modules.integrations.domain.entities import IntegrationJob
 from beanly.modules.integrations.domain.enums import (
     IntegrationCapability,
@@ -17,6 +18,7 @@ def register_integration_handlers(
     registry: EventHandlerRegistry, repository: SqlAlchemyIntegrationRepository
 ) -> None:
     registry.register("payment.completed", 1, _plan_fiscalization(repository))
+    registry.register("refund.completed", 1, _plan_refund_fiscalization(repository))
 
 
 def _plan_fiscalization(repository: SqlAlchemyIntegrationRepository):
@@ -55,6 +57,47 @@ def _plan_fiscalization(repository: SqlAlchemyIntegrationRepository):
                     updated_at=now,
                 )
             )
+
+    return handler
+
+
+def _plan_refund_fiscalization(repository: SqlAlchemyIntegrationRepository):
+    async def handler(envelope: EventEnvelope) -> None:
+        organization_id = _organization(envelope)
+        refund_id = _id(envelope, "refund_id")
+        location_id = _id(envelope, "location_id")
+        now = datetime.now(UTC)
+        connections = await repository.active_connections(
+            organization_id, IntegrationCapability.FISCAL, location_id
+        )
+        for connection, bound_location_id in connections:
+            await repository.add_job(
+                IntegrationJob(
+                    id=uuid4(),
+                    organization_id=organization_id,
+                    connection_id=connection.id,
+                    location_id=bound_location_id,
+                    capability=IntegrationCapability.FISCAL,
+                    job_type="FISCALIZE_REFUND",
+                    source_event_id=envelope.id,
+                    source_type="REFUND",
+                    source_id=refund_id,
+                    idempotency_key=f"fiscalize:refund:{refund_id}",
+                    status=IntegrationJobStatus.PENDING,
+                    available_at=now,
+                    attempts=0,
+                    locked_by=None,
+                    locked_until=None,
+                    external_id=None,
+                    completed_at=None,
+                    dead_lettered_at=None,
+                    last_error_code=None,
+                    last_error_message=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            metrics.fiscal_refund_jobs.add(1)
 
     return handler
 

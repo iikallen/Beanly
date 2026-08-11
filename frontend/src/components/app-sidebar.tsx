@@ -26,11 +26,13 @@ export function AppSidebar({
   teamView,
   onTeamView,
   settingsCanReadIntegrations,
+  settingsCanReadFiscal,
 }: {
   active: "dashboard" | "analytics" | "pos" | "inventory" | "menu" | "purchasing" | "finance" | "team" | "settings";
   teamView?: "employees" | "invitations";
   onTeamView?: (view: "employees" | "invitations") => void;
   settingsCanReadIntegrations?: boolean;
+  settingsCanReadFiscal?: boolean;
 }) {
   const {
     organizations,
@@ -266,6 +268,14 @@ export function AppSidebar({
                 href="/app/settings/integrations"
               >
                 Integrations
+              </Link>
+            )}
+            {settingsCanReadFiscal && (
+              <Link
+                className={pathname.startsWith("/app/settings/fiscal") ? "is-active" : ""}
+                href="/app/settings/fiscal"
+              >
+                Fiscal &amp; Taxes
               </Link>
             )}
           </div>

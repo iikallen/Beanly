@@ -8,6 +8,10 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from beanly.modules.fiscal.infrastructure.db.models import (
+    FiscalTaxProfileModel,
+    FiscalVariantProfileModel,
+)
 from beanly.modules.inventory.infrastructure.db.models import InventoryItemModel
 from beanly.modules.menu.infrastructure.db.models import (
     MenuCategoryModel,
@@ -69,6 +73,26 @@ class CatalogSnapshotBuilder:
             else []
         )
         variant_ids = [value.id for value in variants]
+        fiscal_profiles = (
+            {
+                value.product_variant_id: value
+                for value in await self.session.scalars(
+                    select(FiscalVariantProfileModel).where(
+                        FiscalVariantProfileModel.organization_id == organization_id,
+                        FiscalVariantProfileModel.product_variant_id.in_(variant_ids),
+                    )
+                )
+            }
+            if variant_ids
+            else {}
+        )
+        tax_profiles = list(
+            await self.session.scalars(
+                select(FiscalTaxProfileModel)
+                .where(FiscalTaxProfileModel.organization_id == organization_id)
+                .order_by(FiscalTaxProfileModel.effective_from)
+            )
+        )
 
         product_settings = (
             {
@@ -300,6 +324,22 @@ class CatalogSnapshotBuilder:
                 "base_price_minor": str(price),
                 "components": components_by_recipe[recipe.id],
                 "modifier_groups": private_groups_by_variant[variant.id],
+                "fiscal": (
+                    {
+                        "fiscal_name": fiscal_profiles[variant.id].fiscal_name,
+                        "nkt_code": fiscal_profiles[variant.id].nkt_code,
+                        "nkt_code_type": fiscal_profiles[variant.id].nkt_code_type,
+                        "unit_code": fiscal_profiles[variant.id].fiscal_unit_code,
+                        "vat_rate_override": (
+                            str(fiscal_profiles[variant.id].vat_rate_override)
+                            if fiscal_profiles[variant.id].vat_rate_override is not None
+                            else None
+                        ),
+                        "requires_marking": fiscal_profiles[variant.id].requires_marking,
+                    }
+                    if variant.id in fiscal_profiles
+                    else None
+                ),
             }
 
         products_by_category: dict[UUID, list[dict[str, object]]] = defaultdict(list)
@@ -342,7 +382,27 @@ class CatalogSnapshotBuilder:
                 if products_by_category[category.id]
             ],
         }
-        private = {"variants": private_variants}
+        private = {
+            "variants": private_variants,
+            "tax_profiles": [
+                {
+                    "id": str(profile.id),
+                    "country_code": profile.country_code,
+                    "tax_regime_code": profile.tax_regime_code,
+                    "vat_registered": profile.vat_registered,
+                    "default_vat_rate": (
+                        str(profile.default_vat_rate)
+                        if profile.default_vat_rate is not None
+                        else None
+                    ),
+                    "effective_from": profile.effective_from.isoformat(),
+                    "effective_to": (
+                        profile.effective_to.isoformat() if profile.effective_to else None
+                    ),
+                }
+                for profile in tax_profiles
+            ],
+        }
         digest = hashlib.sha256(_canonical({"public": public, "private": private})).hexdigest()
         now = datetime.now(UTC)
         return PosCatalogSnapshotModel(

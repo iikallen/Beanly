@@ -62,19 +62,26 @@ class IntegrationJobService:
                 )
             credentials = self._credentials(connection.credentials_ciphertext)
             adapter = self.registry.adapter(connection.provider_code)
-            if (
-                job.capability is not IntegrationCapability.FISCAL
-                or job.job_type != "FISCALIZE_PAYMENT"
-            ):
-                raise PermanentProviderError(
-                    "Unsupported integration job", code="UNSUPPORTED_JOB"
+            if job.capability is not IntegrationCapability.FISCAL or job.job_type not in {
+                "FISCALIZE_PAYMENT",
+                "FISCALIZE_REFUND",
+            }:
+                raise PermanentProviderError("Unsupported integration job", code="UNSUPPORTED_JOB")
+            command = (
+                await self.source.fiscal_sale(job.organization_id, job.source_id)
+                if job.job_type == "FISCALIZE_PAYMENT"
+                else await self.source.fiscal_refund(
+                    job.organization_id, job.source_id, job.connection_id
                 )
-            command = await self.source.fiscal_sale(job.organization_id, job.source_id)
+            )
             with traced("provider.request", provider_code=provider_code):
-                result = await adapter.fiscalize_sale(
-                    command,
-                    credentials=credentials,
-                    idempotency_key=job.idempotency_key,
+                method = (
+                    adapter.fiscalize_sale
+                    if job.job_type == "FISCALIZE_PAYMENT"
+                    else adapter.fiscalize_refund
+                )
+                result = await method(
+                    command, credentials=credentials, idempotency_key=job.idempotency_key
                 )
         except Exception as exc:
             temporary = not isinstance(exc, (PermanentProviderError, ValueError))
@@ -102,13 +109,13 @@ class IntegrationJobService:
                     job.id,
                     worker_id,
                     external_id=result.external_receipt_id,
+                    external_number=result.receipt_number,
+                    external_url=result.receipt_url,
                     provider_request_id=result.provider_request_id,
                     started_at=started_at,
                     duration_ms=max(0, int((time.monotonic() - started) * 1000)),
                 )
-                await self.sink.stage(
-                    IntegrationJobSucceeded(job.id, job.organization_id)
-                )
+                await self.sink.stage(IntegrationJobSucceeded(job.id, job.organization_id))
         await self.repository.commit()
         metrics.integration_duration.record(
             max(0, int((time.monotonic() - started) * 1000)),

@@ -40,6 +40,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
       <AppSidebar
         active="settings"
         settingsCanReadIntegrations={!integrations.loading && integrations.canRead}
+        settingsCanReadFiscal={!integrations.loading && integrations.canReadFiscal}
       />
       <section className="settings-content">{children}</section>
     </main>

@@ -6,6 +6,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from beanly.modules.integrations.application.dto import (
     FiscalReceiptResult,
+    FiscalRefundCommand,
     FiscalSaleCommand,
     NormalizedWebhookEvent,
 )
@@ -38,6 +39,26 @@ class MockFiscalProvider:
         return FiscalReceiptResult(
             external_receipt_id=f"mock-receipt-{suffix}",
             receipt_number=f"M-{command.order_number}",
+            receipt_url=None,
+            provider_request_id=str(uuid5(NAMESPACE_URL, f"beanly:{idempotency_key}")),
+        )
+
+    async def fiscalize_refund(
+        self,
+        command: FiscalRefundCommand,
+        *,
+        credentials: Mapping[str, object],
+        idempotency_key: str,
+    ) -> FiscalReceiptResult:
+        self._validate(credentials)
+        if credentials.get("simulate") == "temporary_failure":
+            raise TemporaryProviderError("Mock temporary failure", code="MOCK_TEMPORARY")
+        if credentials.get("simulate") == "permanent_failure":
+            raise PermanentProviderError("Mock permanent failure", code="MOCK_PERMANENT")
+        suffix = hashlib.sha256(idempotency_key.encode()).hexdigest()[:12]
+        return FiscalReceiptResult(
+            external_receipt_id=f"mock-refund-{suffix}",
+            receipt_number=f"R-{str(command.refund_id)[:8]}",
             receipt_url=None,
             provider_request_id=str(uuid5(NAMESPACE_URL, f"beanly:{idempotency_key}")),
         )

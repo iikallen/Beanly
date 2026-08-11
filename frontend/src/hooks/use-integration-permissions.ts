@@ -47,11 +47,13 @@ export function useIntegrationPermissions() {
   }, [accessToken, currentOrganization]);
 
   if (!currentOrganization || state.organizationId !== currentOrganization.id) {
-    return { loading: true, canRead: false, canWrite: false };
+    return { loading: true, canRead: false, canWrite: false, canReadFiscal: false, canWriteFiscal: false };
   }
   return {
     loading: state.loading,
     canRead: state.permissions.includes("integrations.read"),
     canWrite: state.permissions.includes("integrations.write"),
+    canReadFiscal: state.permissions.includes("fiscal.read"),
+    canWriteFiscal: state.permissions.includes("fiscal.write"),
   };
 }

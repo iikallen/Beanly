@@ -17,6 +17,9 @@ from beanly.modules.dashboard.infrastructure.organization_gateway import (
 from beanly.modules.dashboard.infrastructure.payments_gateway import (
     PaymentsDashboardGateway,
 )
+from beanly.modules.dashboard.infrastructure.refunds_gateway import (
+    RefundsDashboardGateway,
+)
 from beanly.modules.dashboard.infrastructure.sales_gateway import SalesDashboardGateway
 from beanly.modules.finance.application.finance_query_service import FinanceQueryService
 from beanly.modules.finance.infrastructure.db.repositories import SqlAlchemyFinanceRepository
@@ -45,6 +48,10 @@ from beanly.modules.payments.application.reporting_service import (
 from beanly.modules.payments.infrastructure.db.repositories import (
     SqlAlchemyPaymentRepository,
 )
+from beanly.modules.refunds.application.reporting_service import RefundReportingService
+from beanly.modules.refunds.infrastructure.db.repositories import (
+    SqlAlchemyRefundRepository,
+)
 from beanly.modules.sales.application.reporting_service import SalesReportingService
 from beanly.modules.sales.infrastructure.db.repositories import SqlAlchemySalesRepository
 
@@ -53,9 +60,7 @@ def dashboard_query_service(session: SessionDep) -> DashboardQueryService:
     organization_service = OrganizationService(SqlAlchemyOrganizationRepository(session))
     payments = PaymentsReportingService(SqlAlchemyPaymentRepository(session))
     return DashboardQueryService(
-        OrganizationDashboardGateway(
-            OrganizationReportingService(organization_service)
-        ),
+        OrganizationDashboardGateway(OrganizationReportingService(organization_service)),
         SalesDashboardGateway(
             payments,
             SalesReportingService(SqlAlchemySalesRepository(session)),
@@ -65,16 +70,13 @@ def dashboard_query_service(session: SessionDep) -> DashboardQueryService:
             InventoryReportingService(SqlAlchemyInventoryRepository(session))
         ),
         FinanceDashboardGateway(
-            FinanceQueryService(
-                SqlAlchemyFinanceRepository(session), organization_service
-            )
+            FinanceQueryService(SqlAlchemyFinanceRepository(session), organization_service)
+        ),
+        refunds=RefundsDashboardGateway(
+            RefundReportingService(SqlAlchemyRefundRepository(session))
         ),
     )
 
 
-DashboardQueryServiceDep = Annotated[
-    DashboardQueryService, Depends(dashboard_query_service)
-]
-DashboardReadDep = Annotated[
-    TenantContext, Depends(require_permission(Permission.ANALYTICS_READ))
-]
+DashboardQueryServiceDep = Annotated[DashboardQueryService, Depends(dashboard_query_service)]
+DashboardReadDep = Annotated[TenantContext, Depends(require_permission(Permission.ANALYTICS_READ))]

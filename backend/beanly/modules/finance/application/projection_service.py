@@ -17,6 +17,76 @@ class FinanceProjectionService:
         self.repository = repository
         self.sources = sources
 
+    async def apply_refund_completed(
+        self, event_id: UUID, organization_id: UUID, refund_id: UUID
+    ) -> None:
+        refund = await self.sources.refund(organization_id, refund_id)
+        now = datetime.now(UTC)
+        await self.repository.add_finance_entry(
+            FinanceEntry(
+                uuid4(),
+                organization_id,
+                refund.location_id,
+                FinanceEntryType.REVENUE,
+                _amount(-Decimal(refund.amount_minor) / 100),
+                refund.currency_code,
+                refund.completed_at,
+                "Refund revenue reversal",
+                None,
+                "REFUND",
+                refund.refund_id,
+                event_id,
+                "REVENUE_REFUND",
+                None,
+                None,
+                now,
+            )
+        )
+        if refund.cogs_reversal_amount:
+            await self.repository.add_finance_entry(
+                FinanceEntry(
+                    uuid4(),
+                    organization_id,
+                    refund.location_id,
+                    FinanceEntryType.COGS,
+                    _amount(refund.cogs_reversal_amount),
+                    refund.currency_code,
+                    refund.completed_at,
+                    "Refund COGS reversal",
+                    None,
+                    "REFUND",
+                    refund.refund_id,
+                    event_id,
+                    "COGS_REFUND_REVERSAL",
+                    None,
+                    refund.cogs_quality_status or "INCOMPLETE",
+                    now,
+                )
+            )
+        for line in refund.payment_lines:
+            account = await self.repository.system_account(
+                organization_id, refund.location_id, line.method, refund.currency_code
+            )
+            await self.repository.add_cash_entry(
+                CashEntry(
+                    uuid4(),
+                    organization_id,
+                    account.location_id,
+                    account.id,
+                    -line.amount_minor,
+                    refund.currency_code,
+                    CashFlowActivity.OPERATING,
+                    refund.completed_at,
+                    f"Refund {line.method.lower()}",
+                    "REFUND",
+                    refund.refund_id,
+                    event_id,
+                    f"REFUND_PAYMENT_LINE:{line.id}",
+                    None,
+                    now,
+                )
+            )
+
     async def apply_payment_completed(
         self,
         event_id: UUID,

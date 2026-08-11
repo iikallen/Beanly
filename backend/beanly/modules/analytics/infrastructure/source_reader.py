@@ -11,6 +11,8 @@ from beanly.modules.analytics.application.source_ports import (
     AnalyticsExpenseSnapshot,
     AnalyticsInventoryLineSnapshot,
     AnalyticsInventorySnapshot,
+    AnalyticsRefundItemSnapshot,
+    AnalyticsRefundSnapshot,
     AnalyticsSaleComponentSnapshot,
     AnalyticsSaleItemSnapshot,
     AnalyticsSaleSnapshot,
@@ -24,6 +26,7 @@ from beanly.modules.inventory.infrastructure.db.models import (
 )
 from beanly.modules.organizations.infrastructure.db.models import LocationModel
 from beanly.modules.payments.infrastructure.db.models import PaymentModel
+from beanly.modules.refunds.infrastructure.db.models import RefundModel
 from beanly.modules.sales.infrastructure.db.models import (
     SalesOrderItemModel,
     SalesOrderModel,
@@ -34,9 +37,53 @@ class SqlAlchemyAnalyticsSourceReader:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def sale(
-        self, organization_id: UUID, payment_id: UUID
-    ) -> AnalyticsSaleSnapshot:
+    async def refund(self, organization_id: UUID, refund_id: UUID) -> AnalyticsRefundSnapshot:
+        refund = await self.session.scalar(
+            select(RefundModel)
+            .options(selectinload(RefundModel.lines))
+            .where(
+                RefundModel.organization_id == organization_id,
+                RefundModel.id == refund_id,
+                RefundModel.status == "COMPLETED",
+            )
+        )
+        if refund is None or refund.completed_at is None:
+            raise AnalyticsProjectionError("Completed refund not found")
+        item_ids = [line.order_item_id for line in refund.lines]
+        items = {
+            item.id: item
+            for item in await self.session.scalars(
+                select(SalesOrderItemModel).where(
+                    SalesOrderItemModel.order_id == refund.order_id,
+                    SalesOrderItemModel.id.in_(item_ids),
+                )
+            )
+        }
+        if len(items) != len(item_ids):
+            raise AnalyticsProjectionError("Refund item snapshot not found")
+        timezone = await self._timezone(organization_id, refund.location_id)
+        return AnalyticsRefundSnapshot(
+            refund.id,
+            organization_id,
+            refund.location_id,
+            _as_utc(refund.completed_at),
+            timezone,
+            refund.currency_code,
+            Decimal(refund.total_amount_minor) / 100,
+            tuple(
+                AnalyticsRefundItemSnapshot(
+                    items[line.order_item_id].product_id,
+                    items[line.order_item_id].product_variant_id,
+                    items[line.order_item_id].product_name,
+                    items[line.order_item_id].variant_name,
+                    line.quantity,
+                    Decimal(line.total_refund_minor) / 100,
+                )
+                for line in refund.lines
+            ),
+        )
+
+    async def sale(self, organization_id: UUID, payment_id: UUID) -> AnalyticsSaleSnapshot:
         payment = await self.session.scalar(
             select(PaymentModel).where(
                 PaymentModel.organization_id == organization_id,
@@ -48,9 +95,7 @@ class SqlAlchemyAnalyticsSourceReader:
         order = await self.session.scalar(
             select(SalesOrderModel)
             .options(
-                selectinload(SalesOrderModel.items).selectinload(
-                    SalesOrderItemModel.components
-                )
+                selectinload(SalesOrderModel.items).selectinload(SalesOrderItemModel.components)
             )
             .where(
                 SalesOrderModel.organization_id == organization_id,
@@ -92,9 +137,7 @@ class SqlAlchemyAnalyticsSourceReader:
             if any(row[2] is None for row in rows):
                 raise AnalyticsProjectionError("Posted SALE cost snapshot is missing")
             actual_costs = {row[0]: row[1] for row in rows}
-            actual_inventory_cogs = -sum(
-                (Decimal(row[2]) for row in rows), Decimal(0)
-            )
+            actual_inventory_cogs = -sum((Decimal(row[2]) for row in rows), Decimal(0))
         items = tuple(
             AnalyticsSaleItemSnapshot(
                 item.id,
@@ -126,7 +169,7 @@ class SqlAlchemyAnalyticsSourceReader:
             order.id,
             organization_id,
             order.location_id,
-            payment.completed_at,
+            _as_utc(payment.completed_at),
             timezone,
             order.currency_code,
             order.order_type,
@@ -154,8 +197,7 @@ class SqlAlchemyAnalyticsSourceReader:
             select(InventoryTransactionLineModel, InventoryItemModel)
             .join(
                 InventoryItemModel,
-                InventoryItemModel.id
-                == InventoryTransactionLineModel.inventory_item_id,
+                InventoryItemModel.id == InventoryTransactionLineModel.inventory_item_id,
             )
             .where(
                 InventoryTransactionLineModel.transaction_id == transaction.id,
@@ -169,7 +211,7 @@ class SqlAlchemyAnalyticsSourceReader:
             transaction.location_id,
             transaction.warehouse_id,
             transaction.type,
-            transaction.posted_at,
+            _as_utc(transaction.posted_at),
             timezone,
             tuple(
                 AnalyticsInventoryLineSnapshot(
@@ -183,9 +225,7 @@ class SqlAlchemyAnalyticsSourceReader:
             ),
         )
 
-    async def expense(
-        self, organization_id: UUID, expense_id: UUID
-    ) -> AnalyticsExpenseSnapshot:
+    async def expense(self, organization_id: UUID, expense_id: UUID) -> AnalyticsExpenseSnapshot:
         expense = await self.session.scalar(
             select(ExpenseModel).where(
                 ExpenseModel.organization_id == organization_id,
@@ -205,8 +245,8 @@ class SqlAlchemyAnalyticsSourceReader:
             organization_id,
             expense.location_id,
             Decimal(expense.amount_minor) / 100,
-            expense.occurred_at,
-            expense.reversed_at,
+            _as_utc(expense.occurred_at),
+            _as_utc(expense.reversed_at) if expense.reversed_at else None,
             timezone,
             expense.status,
         )
@@ -245,7 +285,9 @@ class SqlAlchemyAnalyticsSourceReader:
             after,
         )
         rows = await self.session.execute(statement)
-        return tuple(AnalyticsBackfillSource(*row) for row in rows)
+        return tuple(
+            AnalyticsBackfillSource(row[0], row[1], _as_utc(row[2])) for row in rows
+        )
 
     async def posted_inventory_transactions(
         self,
@@ -270,7 +312,9 @@ class SqlAlchemyAnalyticsSourceReader:
         )
         statement = _page(statement, model.posted_at, model.id, limit, after)
         rows = await self.session.execute(statement)
-        return tuple(AnalyticsBackfillSource(*row) for row in rows)
+        return tuple(
+            AnalyticsBackfillSource(row[0], row[1], _as_utc(row[2])) for row in rows
+        )
 
     async def posted_expenses(
         self,
@@ -297,7 +341,9 @@ class SqlAlchemyAnalyticsSourceReader:
             )
         statement = _page(statement, model.occurred_at, model.id, limit, after)
         rows = await self.session.execute(statement)
-        return tuple(AnalyticsBackfillSource(*row) for row in rows)
+        return tuple(
+            AnalyticsBackfillSource(row[0], row[1], _as_utc(row[2])) for row in rows
+        )
 
     async def _timezone(self, organization_id: UUID, location_id: UUID) -> str:
         value = await self.session.scalar(
@@ -325,6 +371,12 @@ def _source_filters(
         start, end = _utc_bounds(date_from, date_to)
         statement = statement.where(timestamp_column.between(start, end))
     return statement
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _utc_bounds(date_from: date | None, date_to: date | None) -> tuple[datetime, datetime]:
