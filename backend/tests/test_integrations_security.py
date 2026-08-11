@@ -34,13 +34,25 @@ from beanly.modules.integrations.infrastructure.providers.registry import (
 )
 
 
-def _production_settings(key: str) -> Settings:
+def _production_settings(
+    key: str, *, oauth_public_base_url: str = "https://beanly.example"
+) -> Settings:
     return Settings(
         environment="production",
         jwt_secret="a-unique-production-secret-that-is-long-enough",
         cookie_secure=True,
+        enforce_https=True,
+        rate_limit_enabled=True,
+        audit_enabled=True,
+        audit_ip_hash_secret="a-unique-audit-secret-that-is-long-enough",
+        otel_enabled=True,
+        otel_exporter_otlp_endpoint="https://otel.beanly.example",
+        trusted_hosts=["beanly.example"],
+        frontend_url="https://beanly.example",
+        cors_origins=["https://beanly.example"],
+        git_sha="0123456789abcdef",
         integration_encryption_keys=key,
-        integration_oauth_public_base_url="https://beanly.example",
+        integration_oauth_public_base_url=oauth_public_base_url,
     )
 
 
@@ -66,12 +78,9 @@ def test_production_requires_non_default_integration_encryption_key() -> None:
     with pytest.raises(ValidationError, match="invalid Fernet key"):
         Settings(environment="test", integration_encryption_keys="not-a-fernet-key")
     with pytest.raises(ValidationError, match="must use HTTPS"):
-        Settings(
-            environment="production",
-            jwt_secret="a-unique-production-secret-that-is-long-enough",
-            cookie_secure=True,
-            integration_encryption_keys=Fernet.generate_key().decode(),
-            integration_oauth_public_base_url="http://beanly.example",
+        _production_settings(
+            Fernet.generate_key().decode(),
+            oauth_public_base_url="http://beanly.example",
         )
 
 

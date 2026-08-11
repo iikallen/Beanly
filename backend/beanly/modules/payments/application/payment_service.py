@@ -4,6 +4,7 @@ from uuid import UUID, uuid4
 
 from beanly.core.events import DomainEventSink, NullDomainEventSink
 from beanly.core.money import MAX_BIGINT, MAX_NUMERIC_20_6_MINOR
+from beanly.core.observability import metrics, traced
 from beanly.modules.organizations.domain.entities import TenantContext
 from beanly.modules.payments.application.ports import (
     InventorySalePort,
@@ -60,8 +61,29 @@ class PaymentService:
         order_id: UUID,
         value: CompletePaymentInput,
     ) -> Payment:
+        with traced(
+            "payment.complete",
+            organization_id=str(context.organization_id),
+            order_id=str(order_id),
+        ):
+            try:
+                result = await self._complete(context, order_id, value)
+            except Exception:
+                metrics.payment_failed.add(1)
+                raise
+            metrics.payment_completed.add(1)
+            metrics.inventory_sales.add(1)
+            return result
+
+    async def _complete(
+        self,
+        context: TenantContext,
+        order_id: UUID,
+        value: CompletePaymentInput,
+    ) -> Payment:
         try:
-            order = await self.sales.lock_order_for_payment(context, order_id)
+            with traced("order.lock", order_id=str(order_id)):
+                order = await self.sales.lock_order_for_payment(context, order_id)
             lines = _normalize_lines(value.lines)
             existing = await self.repository.get_by_client_id(
                 context.organization_id, value.client_payment_id
@@ -81,20 +103,21 @@ class PaymentService:
                 raise InvalidPayment("Payment total exceeds the finance ledger limit")
             if amount_minor != order.total_minor:
                 raise PaymentAmountMismatch("Payment lines must equal the order total")
-            staged_sale = await self.inventory.stage_sale(
-                context,
-                order_id=order.id,
-                order_number=order.order_number,
-                warehouse_id=order.warehouse_id,
-                lines=tuple(
-                    SaleStockLine(
-                        component.inventory_item_id,
-                        component.base_unit,
-                        component.quantity,
-                    )
-                    for component in order.sale_components
-                ),
-            )
+            with traced("inventory.sale", order_id=str(order.id)):
+                staged_sale = await self.inventory.stage_sale(
+                    context,
+                    order_id=order.id,
+                    order_number=order.order_number,
+                    warehouse_id=order.warehouse_id,
+                    lines=tuple(
+                        SaleStockLine(
+                            component.inventory_item_id,
+                            component.base_unit,
+                            component.quantity,
+                        )
+                        for component in order.sale_components
+                    ),
+                )
             now = datetime.now(UTC)
             payment_id = uuid4()
             payment = Payment(
@@ -125,28 +148,31 @@ class PaymentService:
                     for sort_order, line in enumerate(lines)
                 ),
             )
-            saved = await self.repository.add(payment)
-            await self.sales.mark_order_paid(
-                order.id,
-                context.user_id,
-                now,
-                staged_sale.inventory_transaction_id,
-                staged_sale.cogs_amount,
-                staged_sale.cogs_status,
-            )
-            await self.sink.stage_many(
-                (
-                    *staged_sale.events,
-                    PaymentCompleted(
-                        saved.id,
-                        saved.order_id,
-                        saved.organization_id,
-                        saved.location_id,
-                        saved.amount_minor,
-                    ),
+            with traced("payment.persist", payment_id=str(payment.id)):
+                saved = await self.repository.add(payment)
+                await self.sales.mark_order_paid(
+                    order.id,
+                    context.user_id,
+                    now,
+                    staged_sale.inventory_transaction_id,
+                    staged_sale.cogs_amount,
+                    staged_sale.cogs_status,
                 )
-            )
-            await self.repository.commit()
+            with traced("outbox.stage", aggregate_id=str(saved.id)):
+                await self.sink.stage_many(
+                    (
+                        *staged_sale.events,
+                        PaymentCompleted(
+                            saved.id,
+                            saved.order_id,
+                            saved.organization_id,
+                            saved.location_id,
+                            saved.amount_minor,
+                        ),
+                    )
+                )
+            with traced("transaction.commit"):
+                await self.repository.commit()
         except PaymentConflict as exc:
             await self.repository.rollback()
             return await self._recover_conflict(

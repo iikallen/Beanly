@@ -2,6 +2,7 @@ import logging
 
 from beanly.core.events.handlers.registry import EventHandlerRegistry
 from beanly.core.events.outbox.repositories import OutboxRepository
+from beanly.core.observability import metrics, traced
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,12 @@ class OutboxDispatcher:
 
         for envelope in claimed:
             try:
-                await self.handlers.dispatch(envelope)
+                with traced(
+                    "outbox.event.dispatch",
+                    event_name=envelope.event_name,
+                    event_id=str(envelope.id),
+                ):
+                    await self.handlers.dispatch(envelope)
             except Exception as exc:
                 logger.exception(
                     "Outbox event handler failed: event_id=%s event_name=%s",
@@ -69,6 +75,9 @@ class OutboxDispatcher:
             try:
                 await self.repository.mark_processed(envelope.id, self.worker_id)
                 await self.repository.commit()
+                metrics.outbox_processed.add(1)
+                if envelope.event_name == "inventory.stock_went_negative":
+                    metrics.negative_stock.add(1)
             except Exception:
                 await self.repository.rollback()
                 logger.exception(

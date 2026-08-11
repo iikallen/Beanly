@@ -1,5 +1,6 @@
 import random
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -32,6 +33,13 @@ from beanly.modules.integrations.infrastructure.db.models import (
     IntegrationLocationBindingModel,
     IntegrationOAuthSessionModel,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class IntegrationQueueStats:
+    pending: int
+    oldest_pending_at: datetime | None
+    dead_lettered: int
 
 
 class SqlAlchemyIntegrationRepository:
@@ -619,6 +627,28 @@ class SqlAlchemyIntegrationRepository:
 
     async def rollback(self) -> None:
         await self.session.rollback()
+
+    async def queue_stats(self) -> IntegrationQueueStats:
+        pending_statuses = (
+            IntegrationJobStatus.PENDING.value,
+            IntegrationJobStatus.RETRYING.value,
+        )
+        pending, oldest, dead = (
+            await self.session.execute(
+                select(
+                    func.count(IntegrationJobModel.id).filter(
+                        IntegrationJobModel.status.in_(pending_statuses)
+                    ),
+                    func.min(IntegrationJobModel.created_at).filter(
+                        IntegrationJobModel.status.in_(pending_statuses)
+                    ),
+                    func.count(IntegrationJobModel.id).filter(
+                        IntegrationJobModel.status == IntegrationJobStatus.DEAD.value
+                    ),
+                )
+            )
+        ).one()
+        return IntegrationQueueStats(int(pending), oldest, int(dead))
 
     async def _owned_job(
         self, job_id: UUID, worker_id: str, timestamp: datetime

@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 from beanly.core.events import DomainEventSink
 from beanly.core.money import MAX_NUMERIC_20_6
+from beanly.core.security.audit import SecurityAuditRecorder
 from beanly.modules.inventory.application.commands import CreateAndPostCommand, QuantityInput
 from beanly.modules.inventory.application.operation_ports import InventoryOperationsRepository
 from beanly.modules.inventory.application.services import InventoryService
@@ -56,10 +57,12 @@ class InventoryOperationsService:
         repository: InventoryOperationsRepository,
         inventory: InventoryService,
         sink: DomainEventSink,
+        audit: SecurityAuditRecorder | None = None,
     ) -> None:
         self.repository = repository
         self.inventory = inventory
         self.sink = sink
+        self.audit = audit
 
     async def list_reasons(self, context: TenantContext) -> list[WriteOffReason]:
         return await self.repository.list_reasons(context.organization_id)
@@ -874,6 +877,14 @@ class InventoryOperationsService:
                     in_reversal.detail.transaction.id,
                 ))
             )
+            if self.audit:
+                await self.audit.record(
+                    action="TRANSFER_REVERSED",
+                    resource_type="inventory_transfer",
+                    organization_id=context.organization_id,
+                    actor_user_id=context.user_id,
+                    resource_id=value.id,
+                )
             await self.repository.commit()
         except Exception:
             await self.repository.rollback()

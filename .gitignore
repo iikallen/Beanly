@@ -1,4 +1,7 @@
 .env
+deployment/env/*.env
+!deployment/env/*.env.example
+backups/
 __pycache__/
 *.py[cod]
 .pytest_cache/

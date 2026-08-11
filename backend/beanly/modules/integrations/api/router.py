@@ -144,9 +144,8 @@ async def disconnect_connection(
     service: ConnectionServiceDep,
 ) -> ConnectionResponse:
     try:
-        return await _connection(
-            service, context, await service.disconnect(context, connection_id)
-        )
+        value = await service.disconnect(context, connection_id)
+        return await _connection(service, context, value)
     except Exception as exc:
         raise _http_error(exc) from exc
 

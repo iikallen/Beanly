@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from beanly.core.config.settings import Settings
+from beanly.core.security.audit import SecurityAuditRecorder
 from beanly.core.security.tokens import create_invitation_token, hash_invitation_token
 from beanly.modules.employees.domain.entities import Employee
 from beanly.modules.employees.domain.enums import EmployeeStatus
@@ -56,12 +57,14 @@ class InvitationService:
         employees: EmployeeRepository,
         email_sender: EmailSender,
         settings: Settings,
+        audit: SecurityAuditRecorder | None = None,
     ) -> None:
         self.invitations = invitations
         self.organizations = organizations
         self.employees = employees
         self.email_sender = email_sender
         self.settings = settings
+        self.audit = audit
 
     async def create(self, command: CreateInvitationCommand) -> OrganizationInvitation:
         email = command.email.strip().casefold()
@@ -106,6 +109,15 @@ class InvitationService:
         )
         try:
             await self.invitations.add(invitation)
+            if self.audit:
+                await self.audit.record(
+                    action="TEAM_INVITATION_CREATED",
+                    resource_type="invitation",
+                    organization_id=command.organization_id,
+                    actor_user_id=command.invited_by,
+                    resource_id=invitation.id,
+                    metadata={"role": invitation.role.value},
+                )
             await self.invitations.commit()
         except Exception:
             await self.invitations.rollback()

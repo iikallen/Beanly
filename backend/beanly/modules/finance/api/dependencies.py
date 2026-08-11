@@ -4,11 +4,12 @@ from fastapi import Depends
 
 from beanly.core.events.outbox.repositories import OutboxRepository
 from beanly.core.events.outbox.writer import OutboxEventSink
+from beanly.core.security.audit import SecurityAuditRecorder
 from beanly.modules.finance.application.cash_service import CashService
 from beanly.modules.finance.application.expense_service import ExpenseService
 from beanly.modules.finance.application.finance_query_service import FinanceQueryService
 from beanly.modules.finance.infrastructure.db.repositories import SqlAlchemyFinanceRepository
-from beanly.modules.identity.api.dependencies import SessionDep
+from beanly.modules.identity.api.dependencies import SessionDep, SettingsDep
 from beanly.modules.organizations.api.dependencies import require_permission
 from beanly.modules.organizations.application.services.organization_service import (
     OrganizationService,
@@ -20,11 +21,12 @@ from beanly.modules.organizations.infrastructure.db.repositories import (
 )
 
 
-def expense_service(session: SessionDep) -> ExpenseService:
+def expense_service(session: SessionDep, settings: SettingsDep) -> ExpenseService:
     return ExpenseService(
         SqlAlchemyFinanceRepository(session),
         OutboxEventSink(OutboxRepository(session)),
         OrganizationService(SqlAlchemyOrganizationRepository(session)),
+        SecurityAuditRecorder(session) if settings.audit_enabled else None,
     )
 
 

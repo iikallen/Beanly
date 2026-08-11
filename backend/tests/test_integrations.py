@@ -12,13 +12,14 @@ from cryptography.fernet import Fernet
 from httpx import AsyncClient
 from sqlalchemy import func, select
 
-from beanly.core.config.settings import Settings
+from beanly.core.config.settings import Settings, get_settings
 from beanly.core.events.handlers.registry import EventHandlerRegistry
 from beanly.core.events.outbox.dispatcher import OutboxDispatcher
 from beanly.core.events.outbox.models import OutboxEventModel
 from beanly.core.events.outbox.repositories import OutboxRepository
 from beanly.core.events.outbox.writer import OutboxEventSink
 from beanly.core.events.registry import to_envelope
+from beanly.core.security.audit import SecurityAuditEventModel
 from beanly.modules.integrations.application.connection_service import (
     IntegrationConnectionService,
 )
@@ -433,6 +434,7 @@ async def test_oauth_uses_hashed_one_use_state_pkce_s256_and_encrypted_tokens() 
 async def test_integrations_api_encrypts_secrets_and_enforces_rbac_tenant_location(
     app_client, monkeypatch
 ) -> None:
+    monkeypatch.setattr(get_settings(), "audit_enabled", True)
     client, sessions = app_client
     tokens = {
         role: f"stage18-{role.casefold()}-invitation-token-more-than-thirty-two"
@@ -759,6 +761,14 @@ async def test_integrations_api_encrypts_secrets_and_enforces_rbac_tenant_locati
                 )
             )
         )
+        audit_events = (
+            await session.scalars(
+                select(SecurityAuditEventModel).where(
+                    SecurityAuditEventModel.organization_id == UUID(organization_id),
+                    SecurityAuditEventModel.resource_id == UUID(connection_id),
+                )
+            )
+        ).all()
     assert {
         "integration.connection_created",
         "integration.connection_activated",
@@ -766,6 +776,8 @@ async def test_integrations_api_encrypts_secrets_and_enforces_rbac_tenant_locati
         "integration.connection_revoked",
         "integration.job_succeeded",
     } <= lifecycle_events
+    assert [event.action for event in audit_events] == ["INTEGRATION_DISCONNECTED"]
+    assert audit_events[0].event_metadata == {}
 
 
 @pytest.mark.anyio

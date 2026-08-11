@@ -1,0 +1,301 @@
+name: beanly-production
+
+x-backend-image: &backend-image
+  image: ${REGISTRY:?Set REGISTRY}/beanly-api:${GIT_SHA:?Set the 40-character GIT_SHA}
+  pull_policy: always
+  env_file:
+    - path: ${ENV_FILE:-deployment/env/production.env}
+      required: false
+  environment: &backend-environment
+    ENVIRONMENT: production
+    APP_VERSION: ${APP_VERSION:-0.1.0}
+    GIT_SHA: ${GIT_SHA:?Set the 40-character GIT_SHA}
+    BUILD_TIME: ${BUILD_TIME:?Set the UTC image build timestamp}
+    DATABASE_URL: ${DATABASE_URL:?Set production DATABASE_URL}
+    REDIS_URL: ${REDIS_URL:?Set production REDIS_URL}
+    CELERY_BROKER_URL: ${CELERY_BROKER_URL:?Set production CELERY_BROKER_URL}
+    JWT_SECRET: ${JWT_SECRET:?Set a production JWT_SECRET}
+    INTEGRATION_ENCRYPTION_KEYS: ${INTEGRATION_ENCRYPTION_KEYS:?Set production Fernet keys}
+    INTEGRATION_OAUTH_PUBLIC_BASE_URL: https://${BEANLY_HOST:?Set BEANLY_HOST}
+    FRONTEND_URL: https://${BEANLY_HOST:?Set BEANLY_HOST}
+    CORS_ORIGINS: ${CORS_ORIGINS:?Set the exact production frontend origin JSON list}
+    TRUSTED_HOSTS: ${TRUSTED_HOSTS:?Set the exact production host JSON list}
+    COOKIE_SECURE: "true"
+    ENFORCE_HTTPS: "true"
+    RATE_LIMIT_ENABLED: "true"
+    AUDIT_ENABLED: "true"
+    AUDIT_IP_HASH_SECRET: ${AUDIT_IP_HASH_SECRET:?Set a separate 32+ character audit hash secret}
+    FORWARDED_ALLOW_IPS: 172.28.0.10
+    DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+    DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-5}
+    DB_POOL_TIMEOUT_SECONDS: ${DB_POOL_TIMEOUT_SECONDS:-5}
+    DB_POOL_RECYCLE_SECONDS: ${DB_POOL_RECYCLE_SECONDS:-1800}
+    DB_STATEMENT_TIMEOUT_MS: ${DB_STATEMENT_TIMEOUT_MS:-10000}
+    DB_LOCK_TIMEOUT_MS: ${DB_LOCK_TIMEOUT_MS:-3000}
+    DB_CONNECTION_BUDGET: ${DB_CONNECTION_BUDGET:-80}
+    DB_PROCESS_COUNT: ${DB_PROCESS_COUNT:-5}
+    DB_ADMIN_RESERVE: ${DB_ADMIN_RESERVE:-10}
+    OTEL_ENABLED: "true"
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  cap_drop: [ALL]
+  init: true
+  stop_grace_period: 45s
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193}
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+    stop_grace_period: 60s
+    cpus: 1.0
+    mem_limit: 1g
+
+  redis:
+    image: ${REDIS_IMAGE:-redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2}
+    user: redis
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?Set REDIS_PASSWORD}
+    command: ["sh", "-c", "exec redis-server --save '' --appendonly no --requirepass \"$$REDIS_PASSWORD\""]
+    networks: [data]
+    read_only: true
+    tmpfs:
+      - /data:size=64m,mode=0700,uid=999,gid=999
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    stop_grace_period: 20s
+    cpus: 0.5
+    mem_limit: 256m
+
+  migrate:
+    <<: *backend-image
+    profiles: [tools]
+    environment:
+      <<: *backend-environment
+      SERVICE_NAME: beanly-migrate
+    command: ["alembic", "upgrade", "head"]
+    networks: [data, telemetry]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    cpus: 0.5
+    mem_limit: 512m
+
+  api:
+    <<: *backend-image
+    environment:
+      <<: *backend-environment
+      SERVICE_NAME: beanly-api
+    command:
+      - sh
+      - -c
+      - >-
+        exec uvicorn beanly.main:app --host 0.0.0.0 --port 8000
+        --workers $${WEB_CONCURRENCY:-2}
+        --forwarded-allow-ips $${FORWARDED_ALLOW_IPS}
+        --no-server-header
+        --timeout-graceful-shutdown $${API_GRACEFUL_SHUTDOWN_SECONDS:-30}
+    expose: ["8000"]
+    networks: [edge, data, telemetry]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    cpus: 1.0
+    mem_limit: 768m
+
+  worker:
+    <<: *backend-image
+    environment:
+      <<: *backend-environment
+      SERVICE_NAME: beanly-celery-worker
+    command: ["celery", "-A", "beanly.worker.app", "worker", "--loglevel=INFO"]
+    networks: [data, telemetry]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    stop_grace_period: 60s
+    cpus: 0.75
+    mem_limit: 512m
+
+  outbox-worker:
+    <<: *backend-image
+    environment:
+      <<: *backend-environment
+      SERVICE_NAME: beanly-outbox-worker
+    command: ["python", "-m", "beanly.core.events.worker"]
+    networks: [data, telemetry]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    stop_grace_period: 60s
+    cpus: 0.5
+    mem_limit: 384m
+
+  integration-worker:
+    <<: *backend-image
+    environment:
+      <<: *backend-environment
+      SERVICE_NAME: beanly-integration-worker
+    command: ["python", "-m", "beanly.modules.integrations.worker"]
+    networks: [data, telemetry]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    stop_grace_period: 60s
+    cpus: 0.75
+    mem_limit: 512m
+
+  frontend:
+    image: ${REGISTRY:?Set REGISTRY}/beanly-frontend:${GIT_SHA:?Set the 40-character GIT_SHA}
+    pull_policy: always
+    environment:
+      NODE_ENV: production
+      API_URL: http://api:8000
+      APP_VERSION: ${APP_VERSION:-0.1.0}
+      GIT_SHA: ${GIT_SHA:?Set the 40-character GIT_SHA}
+      BUILD_TIME: ${BUILD_TIME:?Set the UTC image build timestamp}
+    expose: ["3000"]
+    networks: [edge]
+    depends_on:
+      api:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+      - /app/.next/cache:size=64m,mode=0700,uid=1000,gid=1000
+    cap_drop: [ALL]
+    init: true
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+    stop_grace_period: 30s
+    cpus: 0.5
+    mem_limit: 512m
+
+  reverse-proxy:
+    image: ${PROXY_IMAGE:?Set a digest-pinned nginxinc/nginx-unprivileged image}
+    environment:
+      BEANLY_HOST: ${BEANLY_HOST:?Set BEANLY_HOST}
+    volumes:
+      - type: bind
+        source: ./deployment/nginx/templates/beanly.conf.template
+        target: /etc/nginx/templates/beanly.conf.template
+        read_only: true
+      - type: bind
+        source: ${TLS_CERT_PATH:?Set TLS_CERT_PATH}
+        target: /etc/nginx/tls/tls.crt
+        read_only: true
+      - type: bind
+        source: ${TLS_KEY_PATH:?Set TLS_KEY_PATH}
+        target: /etc/nginx/tls/tls.key
+        read_only: true
+    ports:
+      - "80:8080"
+      - "443:8443"
+    networks:
+      edge:
+        ipv4_address: 172.28.0.10
+    depends_on:
+      api:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /var/cache/nginx:size=32m,mode=0755,uid=101,gid=101
+      - /var/run:size=8m,mode=0755,uid=101,gid=101
+    cap_drop: [ALL]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+    stop_grace_period: 20s
+    cpus: 0.25
+    mem_limit: 128m
+
+  otel-collector:
+    image: ${OTEL_COLLECTOR_IMAGE:?Set a digest-pinned OpenTelemetry Collector image}
+    command: ["--config=/etc/otelcol/config.yaml"]
+    environment:
+      DEPLOYMENT_ENVIRONMENT: production
+      OTEL_BACKEND_OTLP_ENDPOINT: ${OTEL_BACKEND_OTLP_ENDPOINT:?Set the external OTLP endpoint}
+      OTEL_BACKEND_AUTH_TOKEN: ${OTEL_BACKEND_AUTH_TOKEN:?Set the external OTLP token}
+    volumes:
+      - type: bind
+        source: ./deployment/otel/collector.yaml
+        target: /etc/otelcol/config.yaml
+        read_only: true
+    expose: ["4317", "4318", "13133"]
+    networks: [telemetry]
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop: [ALL]
+    restart: unless-stopped
+    stop_grace_period: 30s
+    cpus: 0.5
+    mem_limit: 512m
+
+networks:
+  edge:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+  data:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.28.1.0/24
+  telemetry: {}
+
+volumes:
+  postgres_data:
