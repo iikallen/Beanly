@@ -56,6 +56,9 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.POS_DEVICE_MANAGE,
                 Permission.FISCAL_READ,
                 Permission.FISCAL_WRITE,
+                Permission.ONBOARDING_READ,
+                Permission.ONBOARDING_WRITE,
+                Permission.MENU_IMPORT,
             }
         ),
         MembershipRole.MANAGER: frozenset(
@@ -97,6 +100,8 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.INTEGRATIONS_READ,
                 Permission.POS_DEVICE_MANAGE,
                 Permission.FISCAL_READ,
+                Permission.ONBOARDING_READ,
+                Permission.MENU_IMPORT,
             }
         ),
         MembershipRole.ACCOUNTANT: frozenset(
@@ -170,3 +175,24 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
         MembershipRole.BARISTA,
     ):
         assert Permission.PAYMENTS_TERMINAL_MANAGE not in permissions_for(role)
+    for role in (MembershipRole.OWNER, MembershipRole.ADMIN):
+        assert {
+            Permission.ONBOARDING_READ,
+            Permission.ONBOARDING_WRITE,
+            Permission.MENU_IMPORT,
+        } <= permissions_for(role)
+    assert {
+        Permission.ONBOARDING_READ,
+        Permission.MENU_IMPORT,
+    } <= permissions_for(MembershipRole.MANAGER)
+    assert Permission.ONBOARDING_WRITE not in permissions_for(MembershipRole.MANAGER)
+    for role in (
+        MembershipRole.ACCOUNTANT,
+        MembershipRole.CASHIER,
+        MembershipRole.BARISTA,
+    ):
+        assert {
+            Permission.ONBOARDING_READ,
+            Permission.ONBOARDING_WRITE,
+            Permission.MENU_IMPORT,
+        }.isdisjoint(permissions_for(role))

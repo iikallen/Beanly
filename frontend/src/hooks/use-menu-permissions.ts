@@ -47,5 +47,6 @@ export function useMenuPermissions() {
     canWriteRecipe: legacyWrite || permissions.includes("menu.recipe.write"),
     canWritePrice: legacyWrite || permissions.includes("menu.price.write"),
     canWriteModifier: legacyWrite || permissions.includes("menu.modifier.write"),
+    canImport: permissions.includes("menu.import"),
   };
 }

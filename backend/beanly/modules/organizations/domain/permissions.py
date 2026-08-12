@@ -57,6 +57,9 @@ class Permission(StrEnum):
     POS_DEVICE_MANAGE = "pos.device.manage"
     FISCAL_READ = "fiscal.read"
     FISCAL_WRITE = "fiscal.write"
+    ONBOARDING_READ = "onboarding.read"
+    ONBOARDING_WRITE = "onboarding.write"
+    MENU_IMPORT = "menu.import"
 
 
 _ALL = frozenset(Permission)
@@ -114,6 +117,9 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.POS_DEVICE_MANAGE,
             Permission.FISCAL_READ,
             Permission.FISCAL_WRITE,
+            Permission.ONBOARDING_READ,
+            Permission.ONBOARDING_WRITE,
+            Permission.MENU_IMPORT,
         }
     ),
     MembershipRole.MANAGER: frozenset(
@@ -155,6 +161,8 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.INTEGRATIONS_READ,
             Permission.POS_DEVICE_MANAGE,
             Permission.FISCAL_READ,
+            Permission.ONBOARDING_READ,
+            Permission.MENU_IMPORT,
         }
     ),
     MembershipRole.ACCOUNTANT: frozenset(

@@ -80,6 +80,10 @@ class _BrokenSink:
         del event, occurred_at
         raise RuntimeError("forced refund outbox failure")
 
+    async def stage_many(self, events: tuple[object, ...], *, occurred_at=None) -> None:
+        del events, occurred_at
+        raise RuntimeError("forced refund outbox failure")
+
 
 class _FailingNktAudit:
     async def record(self, **values: object) -> None:
@@ -90,10 +94,6 @@ class _FailingNktAudit:
 class _UnusedNktLookup:
     async def lookup(self, tin: str):
         raise AssertionError(f"fresh cached NTIN unexpectedly called upstream: {tin}")
-
-    async def stage_many(self, events: tuple[object, ...], *, occurred_at=None) -> None:
-        del events, occurred_at
-        raise RuntimeError("forced refund outbox failure")
 
 
 @pytest_asyncio.fixture

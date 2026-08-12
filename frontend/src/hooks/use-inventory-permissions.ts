@@ -44,5 +44,6 @@ export function useInventoryPermissions() {
     canCount: permissions.includes("inventory.count"),
     canTransfer: permissions.includes("inventory.transfer"),
     canReadMovements: permissions.includes("inventory.movement.read"),
+    canImport: permissions.includes("menu.import"),
   };
 }

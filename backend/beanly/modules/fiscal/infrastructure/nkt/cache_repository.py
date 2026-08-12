@@ -54,7 +54,9 @@ class NktCacheRepository:
         now = datetime.now(UTC)
         for product in products:
             value = await self.session.scalar(
-                select(FiscalNktCacheModel).where(FiscalNktCacheModel.ntin == product.ntin)
+                select(FiscalNktCacheModel)
+                .where(FiscalNktCacheModel.ntin == product.ntin)
+                .with_for_update()
             )
             if value is None:
                 value = FiscalNktCacheModel(
@@ -78,12 +80,14 @@ class NktCacheRepository:
                         await self.session.flush()
                 except IntegrityError:
                     value = await self.session.scalar(
-                        select(FiscalNktCacheModel).where(
-                            FiscalNktCacheModel.ntin == product.ntin
-                        )
+                        select(FiscalNktCacheModel)
+                        .where(FiscalNktCacheModel.ntin == product.ntin)
+                        .with_for_update()
                     )
                     if value is None:
                         raise
+            if _as_utc(value.source_updated_at) > _as_utc(product.updated_at):
+                continue
             value.external_product_id = product.external_id
             value.gtins = list(product.gtins)
             value.name_ru = product.name_ru
@@ -117,3 +121,7 @@ def _product(value: FiscalNktCacheModel) -> NktProduct:
         value.source_updated_at,
         value.payload_hash,
     )
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)

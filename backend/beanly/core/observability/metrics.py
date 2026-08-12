@@ -34,6 +34,23 @@ class BeanlyMetrics:
         self.nkt_requests = meter.create_counter("nkt.requests.total")
         self.nkt_cache_hits = meter.create_counter("nkt.cache.hits.total")
         self.nkt_rate_limit = meter.create_counter("nkt.rate_limit.total")
+        self.onboarding_started = meter.create_counter("onboarding.started.total")
+        self.onboarding_completed = meter.create_counter("onboarding.completed.total")
+        self.onboarding_time_to_pos_ready = meter.create_histogram(
+            "onboarding.time_to_pos_ready", unit="s"
+        )
+        self.onboarding_time_to_first_sale = meter.create_histogram(
+            "onboarding.time_to_first_sale", unit="s"
+        )
+        self.menu_import_started = meter.create_counter("menu_import.started.total")
+        self.menu_import_applied = meter.create_counter("menu_import.applied.total")
+        self.menu_import_failed = meter.create_counter("menu_import.failed.total")
+        self.menu_import_entities = meter.create_counter("menu_import.entities.total")
+        self.menu_import_errors = meter.create_counter("menu_import.errors.total")
+        self.ai_menu_extraction = meter.create_counter("ai_menu_extraction.total")
+        self.ai_menu_extraction_review_rate = meter.create_histogram(
+            "ai_menu_extraction.review_rate"
+        )
         self.negative_stock = meter.create_counter("inventory.negative_stock.total")
         self.pos_offline_sessions_started = meter.create_counter(
             "pos.offline.sessions.started.total"

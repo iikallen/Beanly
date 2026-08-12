@@ -13,6 +13,7 @@ from beanly.core.events.outbox.repositories import OutboxRepository
 from beanly.core.logging.config import configure_logging
 from beanly.core.observability import configure_telemetry, metrics, shutdown_telemetry
 from beanly.core.runtime import ShutdownSignal
+from beanly.core.security.audit import SecurityAuditRecorder
 from beanly.modules.analytics.application.projection_service import (
     AnalyticsProjectionService,
 )
@@ -40,6 +41,12 @@ from beanly.modules.integrations.infrastructure.db.repositories import (
 from beanly.modules.integrations.infrastructure.handlers import (
     register_integration_handlers,
 )
+from beanly.modules.onboarding.application.onboarding_service import OnboardingService
+from beanly.modules.onboarding.infrastructure.db.repositories import (
+    SqlAlchemyOnboardingRepository,
+)
+from beanly.modules.onboarding.infrastructure.gateway import SqlAlchemyOnboardingGateway
+from beanly.modules.onboarding.infrastructure.handlers import register_onboarding_handlers
 from beanly.modules.organizations.application.services.organization_service import (
     OrganizationService,
 )
@@ -80,6 +87,18 @@ async def run_worker(shutdown: ShutdownSignal | None = None) -> None:
                 OrganizationService(SqlAlchemyOrganizationRepository(session)),
             ),
         )
+        register_onboarding_handlers(
+            handlers,
+            OnboardingService(
+                SqlAlchemyOnboardingRepository(session),
+                SqlAlchemyOnboardingGateway(
+                    session,
+                    live_transport_enabled=settings.live_kz_fiscalization,
+                    nkt_configured=settings.nkt_api_key is not None,
+                ),
+            ),
+            SecurityAuditRecorder(session) if settings.audit_enabled else None,
+        )
         repository = OutboxRepository(session)
         dispatcher = OutboxDispatcher(
             repository,
@@ -96,14 +115,9 @@ async def run_worker(shutdown: ShutdownSignal | None = None) -> None:
                 stats = await repository.queue_stats()
                 await repository.rollback()
                 logger.info(
-                    "Outbox queue status: pending=%s oldest_pending_at=%s "
-                    "dead_lettered=%s",
+                    "Outbox queue status: pending=%s oldest_pending_at=%s dead_lettered=%s",
                     stats.pending,
-                    (
-                        stats.oldest_pending_at.isoformat()
-                        if stats.oldest_pending_at
-                        else None
-                    ),
+                    (stats.oldest_pending_at.isoformat() if stats.oldest_pending_at else None),
                     stats.dead_lettered,
                 )
                 oldest_seconds = (

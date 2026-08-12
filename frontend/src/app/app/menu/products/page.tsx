@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronRight, CircleAlert, Plus, Search } from "lucide-react";
+import { ChevronRight, CircleAlert, Plus, Search, Upload } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
@@ -20,7 +20,7 @@ import { formatMenuMoney, formatMenuPriceMinor, formatMenuStatus, menuStatusClas
 export default function ProductsPage() {
   const { accessToken } = useAuth();
   const { currentOrganization, currentLocation } = useWorkspace();
-  const { canCreateProduct, canReadRecipe, loading: permissionsLoading } = useMenuPermissions();
+  const { canCreateProduct, canImport, canReadRecipe, loading: permissionsLoading } = useMenuPermissions();
   const [categories, setCategories] = useState<MenuCategory[]>([]);
   const [products, setProducts] = useState<MenuProduct[]>([]);
   const [warehouses, setWarehouses] = useState<WarehouseResponse[]>([]);
@@ -135,9 +135,10 @@ export default function ProductsPage() {
           <h1>Products</h1>
           <p className="menu-header-copy">Prices, recipes, and margins for every item you sell.</p>
         </div>
-        {!permissionsLoading && canCreateProduct && (
-          <Link className="menu-primary-button" href="/app/menu/products/new"><Plus aria-hidden="true" />Add product</Link>
-        )}
+        {!permissionsLoading && (canImport || canCreateProduct) && <div className="menu-header-actions">
+          {canImport && <Link className="menu-secondary-button" href="/app/onboarding"><Upload aria-hidden="true" />Import</Link>}
+          {canCreateProduct && <Link className="menu-primary-button" href="/app/menu/products/new"><Plus aria-hidden="true" />Add product</Link>}
+        </div>}
       </header>
 
       <div className="menu-filters">

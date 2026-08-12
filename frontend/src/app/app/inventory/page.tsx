@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, ChevronRight, Search, TriangleAlert } from "lucide-react";
+import { ChevronDown, ChevronRight, Search, TriangleAlert, Upload } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -22,6 +22,7 @@ export default function InventoryPage() {
   const {
     canAdjust,
     canCount,
+    canImport,
     canTransfer,
     canWriteOff,
     loading: permissionsLoading,
@@ -139,6 +140,7 @@ export default function InventoryPage() {
           <h1>Inventory</h1>
           <p>Current stock and movement history.</p>
         </div>
+        {!permissionsLoading && canImport && <Link className="inventory-adjust-button" href="/app/onboarding?source=inventory"><Upload aria-hidden="true" />Import inventory</Link>}
       </header>
 
       <div className="inventory-toolbar">

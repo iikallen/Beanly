@@ -167,7 +167,7 @@ async def test_stage22_migration_up_down_up_preserves_stage21_surface() -> None:
 
         await asyncio.to_thread(command.upgrade, config, "head")
         await asyncio.to_thread(command.check, config)
-        assert (await _snapshot(database_url))["revision"] == "0022_kz_live_integrations"
+        assert (await _snapshot(database_url))["revision"] == "0023_onboarding_imports"
     finally:
         async with admin_engine.connect() as connection:
             await connection.exec_driver_sql(

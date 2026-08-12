@@ -20,6 +20,7 @@ from beanly.modules.integrations.infrastructure.db import (
 from beanly.modules.inventory.infrastructure.db import models as inventory_models  # noqa: F401
 from beanly.modules.menu.infrastructure.db import models as menu_models  # noqa: F401
 from beanly.modules.offline_pos.infrastructure.db import models as offline_pos_models  # noqa: F401
+from beanly.modules.onboarding.infrastructure.db import models as onboarding_models  # noqa: F401
 from beanly.modules.organizations.infrastructure.db import (
     models as organization_models,  # noqa: F401
 )

@@ -3,6 +3,7 @@
 import {
   BarChart3,
   Building2,
+  ClipboardCheck,
   Coffee,
   Landmark,
   Package,
@@ -21,6 +22,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth-provider";
 import { Brand } from "@/components/auth-shell";
 import { useWorkspace } from "@/components/workspace-provider";
+import { useOnboardingPermissions } from "@/hooks/use-onboarding-permissions";
 
 export function AppSidebar({
   active,
@@ -29,7 +31,7 @@ export function AppSidebar({
   settingsCanReadIntegrations,
   settingsCanReadFiscal,
 }: {
-  active: "dashboard" | "analytics" | "pos" | "fiscal" | "inventory" | "menu" | "purchasing" | "finance" | "team" | "settings";
+  active: "dashboard" | "analytics" | "pos" | "fiscal" | "inventory" | "menu" | "onboarding" | "purchasing" | "finance" | "team" | "settings";
   teamView?: "employees" | "invitations";
   onTeamView?: (view: "employees" | "invitations") => void;
   settingsCanReadIntegrations?: boolean;
@@ -46,6 +48,7 @@ export function AppSidebar({
   const { logout } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
+  const onboardingPermissions = useOnboardingPermissions();
 
   if (!currentOrganization || !currentLocation) return null;
 
@@ -84,6 +87,16 @@ export function AppSidebar({
           <LayoutDashboard aria-hidden="true" />
           Dashboard
         </button>
+        {!onboardingPermissions.loading && onboardingPermissions.canRead && (
+          <button
+            className={active === "onboarding" ? "app-nav-item is-active" : "app-nav-item"}
+            type="button"
+            onClick={() => router.push("/app/onboarding")}
+          >
+            <ClipboardCheck aria-hidden="true" />
+            Setup
+          </button>
+        )}
         <button
           className={active === "analytics" ? "app-nav-item is-active" : "app-nav-item"}
           type="button"

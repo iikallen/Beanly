@@ -1614,6 +1614,146 @@ export type CashMovementInput = {
   description?: string | null;
 };
 
+export type OnboardingStatus = "NOT_STARTED" | "IN_PROGRESS" | "READY_FOR_POS" | "COMPLETED";
+export type OnboardingStepStatus = "COMPLETE" | "NEEDS_ATTENTION" | "OPTIONAL" | "MISSING";
+export type OnboardingStep = {
+  status: OnboardingStepStatus;
+  count: number;
+  details: string[];
+};
+export type OnboardingStatusResponse = {
+  status: OnboardingStatus;
+  current_step: string | null;
+  steps: Record<string, OnboardingStep>;
+  pos_ready: boolean;
+  ai_available: boolean;
+  started_at: string | null;
+  completed_at: string | null;
+  dismissed_at: string | null;
+};
+
+export type OnboardingImportSourceType =
+  | "BEANLY_TEMPLATE"
+  | "BEANLY_SPREADSHEET"
+  | "GENERIC_SPREADSHEET"
+  | "POSTER_EXPORT"
+  | "AI_EXTRACTION";
+export type OnboardingImportStatus =
+  | "UPLOADED"
+  | "PARSING"
+  | "NEEDS_REVIEW"
+  | "READY"
+  | "APPLYING"
+  | "APPLIED"
+  | "FAILED"
+  | "CANCELLED";
+export type OnboardingImportEntityType =
+  | "CATEGORY"
+  | "INVENTORY_ITEM"
+  | "PRODUCT"
+  | "VARIANT"
+  | "RECIPE"
+  | "MODIFIER_GROUP"
+  | "MODIFIER_OPTION"
+  | "LOCATION_PRICE"
+  | "OPENING_BALANCE";
+export type OnboardingImportResolution = "CREATE" | "MATCH_EXISTING" | "SKIP";
+export type OnboardingImportEntity = {
+  id: string;
+  entity_type: OnboardingImportEntityType;
+  source_key: string;
+  payload: Record<string, unknown>;
+  resolution: OnboardingImportResolution;
+  target_id: string | null;
+  error_codes: string[];
+  warning_codes: string[];
+  sort_order: number;
+};
+export type OnboardingImportRun = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  client_import_id: string;
+  source_type: OnboardingImportSourceType;
+  source_name: string;
+  source_version: number | null;
+  file_name: string | null;
+  file_hash: string | null;
+  status: OnboardingImportStatus;
+  entity_count: number;
+  error_count: number;
+  warning_count: number;
+  payload_hash: string;
+  mapping: Record<string, string>;
+  duplicate_file_run_id: string | null;
+  duplicate_warning: string | null;
+  created_by: string;
+  created_at: string;
+  applied_at: string | null;
+  failed_at: string | null;
+  entities: OnboardingImportEntity[];
+};
+export type OnboardingImportRunSummary = Omit<OnboardingImportRun, "entities">;
+export type OnboardingTemplateOptions = {
+  sizes: string[];
+  alternative_milks: string[];
+  extras: string[];
+  packaging: boolean;
+  include_draft_recipes: boolean;
+};
+export type OnboardingCapabilities = {
+  ai: { available: boolean; reason: string | null };
+  poster: { available: boolean; reason: string | null; real_fixture_verified: boolean; extensions: string[] };
+  spreadsheet: { csv: boolean; xlsx: boolean; max_bytes: number };
+};
+export type OnboardingTemplateSummary = {
+  code: string;
+  version: number;
+  name: string;
+  description: string;
+  category_count: number;
+  product_count: number;
+  has_draft_recipes: boolean;
+};
+export type OnboardingTemplateList = {
+  items: OnboardingTemplateSummary[];
+  spreadsheet_download_url: string;
+};
+export type OnboardingImportList = {
+  items: OnboardingImportRunSummary[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+export type OnboardingImportValidation = {
+  run: OnboardingImportRun;
+  valid: boolean;
+  error_count: number;
+  warning_count: number;
+};
+export type OnboardingActivationResult = {
+  items: Array<{ product_id: string; ready: boolean; reasons: string[] }>;
+  activated_count: number;
+};
+export type OnboardingUploadSourceType =
+  | "AUTO"
+  | "BEANLY_SPREADSHEET"
+  | "GENERIC_SPREADSHEET"
+  | "POSTER";
+export type OnboardingImportInspect = {
+  file_hash: string;
+  source_type: OnboardingImportSourceType;
+  sheets: Array<{ name: string; columns: string[] }>;
+  mapping_required: boolean;
+};
+export type OnboardingBootstrapResponse = {
+  location_id: string;
+  warehouse_id: string;
+  register_id: string;
+  created: { warehouse: boolean; register: boolean };
+  onboarding: OnboardingStatusResponse;
+};
+
 type ApiErrorDetail = { code?: string; message?: string; msg?: string };
 type ApiErrorBody = {
   detail?: string | ApiErrorDetail | Array<{ msg?: string }>;
@@ -1635,11 +1775,12 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const isFormData = typeof FormData !== "undefined" && init.body instanceof FormData;
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
     credentials: "include",
     headers: {
-      ...(init.body ? { "content-type": "application/json" } : {}),
+      ...(init.body && !isFormData ? { "content-type": "application/json" } : {}),
       ...init.headers,
     },
   });
@@ -1661,6 +1802,19 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     );
   }
   return (response.status === 204 ? undefined : await response.json()) as T;
+}
+
+async function requestBlob(path: string, init: RequestInit = {}) {
+  const response = await fetch(`${API_URL}${path}`, {
+    ...init,
+    credentials: "include",
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as ApiErrorBody;
+    const detail = typeof body.detail === "string" ? body.detail : body.message;
+    throw new ApiError(detail ?? "Download could not be completed.", response.status, body.code, body);
+  }
+  return response.blob();
 }
 
 export const api = {
@@ -2459,6 +2613,149 @@ export const api = {
     request<FiscalReadiness>("/api/v1/fiscal/readiness", {
       headers: tenantAuthorization(organizationId, accessToken),
     }),
+  getOnboardingStatus: (organizationId: string, accessToken: string) =>
+    request<OnboardingStatusResponse>("/api/v1/onboarding/status", {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  getOnboardingCapabilities: (organizationId: string, accessToken: string) =>
+    request<OnboardingCapabilities>("/api/v1/onboarding/capabilities", {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  bootstrapOnboarding: (
+    input: { warehouse_name?: string; register_name?: string },
+    organizationId: string,
+    accessToken: string,
+  ) => request<OnboardingBootstrapResponse>("/api/v1/onboarding/bootstrap", {
+    method: "POST",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  dismissOnboarding: (organizationId: string, accessToken: string) =>
+    request<OnboardingStatusResponse>("/api/v1/onboarding/dismiss", {
+      method: "POST",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  listOnboardingTemplates: (organizationId: string, accessToken: string) =>
+    request<OnboardingTemplateList>("/api/v1/onboarding/templates", {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  downloadOnboardingSpreadsheet: (organizationId: string, accessToken: string) =>
+    requestBlob("/api/v1/onboarding/templates/spreadsheet", {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  previewOnboardingTemplate: (
+    code: string,
+    input: {
+      client_import_id: string;
+      version: number;
+      location_id: string;
+      options: OnboardingTemplateOptions;
+    },
+    organizationId: string,
+    accessToken: string,
+  ) => request<OnboardingImportRun>(`/api/v1/onboarding/templates/${encodeURIComponent(code)}/preview`, {
+    method: "POST",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  listOnboardingImports: (organizationId: string, accessToken: string) =>
+    request<OnboardingImportList>("/api/v1/onboarding/imports?limit=50&offset=0", {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  getOnboardingImport: (id: string, organizationId: string, accessToken: string) =>
+    request<OnboardingImportRun>(`/api/v1/onboarding/imports/${id}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  uploadOnboardingImport: (
+    input: {
+      clientImportId: string;
+      locationId: string;
+      sourceType: OnboardingUploadSourceType;
+      file: File;
+      mapping?: Record<string, string>;
+    },
+    organizationId: string,
+    accessToken: string,
+  ) => {
+    const body = new FormData();
+    body.set("client_import_id", input.clientImportId);
+    body.set("location_id", input.locationId);
+    body.set("source_type", input.sourceType);
+    body.set("file", input.file);
+    if (input.mapping && Object.keys(input.mapping).length > 0) {
+      body.set("mapping_json", JSON.stringify(input.mapping));
+    }
+    return request<OnboardingImportRun>("/api/v1/onboarding/imports", {
+      method: "POST",
+      body,
+      headers: tenantAuthorization(organizationId, accessToken),
+    });
+  },
+  inspectOnboardingImport: (
+    input: { sourceType: OnboardingUploadSourceType; file: File },
+    organizationId: string,
+    accessToken: string,
+  ) => {
+    const body = new FormData();
+    body.set("source_type", input.sourceType);
+    body.set("file", input.file);
+    return request<OnboardingImportInspect>("/api/v1/onboarding/imports/inspect", {
+      method: "POST",
+      body,
+      headers: tenantAuthorization(organizationId, accessToken),
+    });
+  },
+  updateOnboardingImportEntity: (
+    importId: string,
+    entityId: string,
+    input: { resolution: OnboardingImportResolution; target_id?: string | null; payload?: Record<string, unknown> },
+    organizationId: string,
+    accessToken: string,
+  ) => request<OnboardingImportEntity>(`/api/v1/onboarding/imports/${importId}/entities/${entityId}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  validateOnboardingImport: (id: string, organizationId: string, accessToken: string) =>
+    request<OnboardingImportValidation>(`/api/v1/onboarding/imports/${id}/validate`, {
+      method: "POST",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  applyOnboardingImport: (id: string, organizationId: string, accessToken: string) =>
+    request<OnboardingImportRun>(`/api/v1/onboarding/imports/${id}/apply`, {
+      method: "POST",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  cancelOnboardingImport: (id: string, organizationId: string, accessToken: string) =>
+    request<OnboardingImportRun>(`/api/v1/onboarding/imports/${id}/cancel`, {
+      method: "POST",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  resumeOnboardingImport: (id: string, organizationId: string, accessToken: string) =>
+    request<OnboardingImportRun>(`/api/v1/onboarding/imports/${id}/resume`, {
+      method: "POST",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  updateOnboardingPrices: (
+    id: string,
+    rows: Array<{ entity_id: string; price_minor: string }>,
+    organizationId: string,
+    accessToken: string,
+  ) => request<OnboardingImportValidation>(`/api/v1/onboarding/imports/${id}/prices`, {
+    method: "PUT",
+    body: JSON.stringify({ rows }),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  activateReadyOnboardingProducts: (
+    id: string,
+    input: { product_ids: string[]; confirm_starter_recipes_reviewed: boolean },
+    organizationId: string,
+    accessToken: string,
+  ) => request<OnboardingActivationResult>(`/api/v1/onboarding/imports/${id}/activate-ready`, {
+    method: "POST",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
   searchNkt: (query: string, organizationId: string, accessToken: string, limit = 20) => {
     const params = new URLSearchParams({ query, limit: String(limit) });
     return request<NktProduct[]>(`/api/v1/fiscal/nkt/search?${params}`, {
