@@ -272,4 +272,6 @@ class ActivateReadyResponse(BaseModel):
 
 
 class PublicMenuUrlRequest(BaseModel):
+    client_import_id: UUID
+    location_id: UUID
     public_menu_url: str = Field(min_length=8, max_length=2048, pattern=r"^https?://")

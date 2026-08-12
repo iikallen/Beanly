@@ -7,6 +7,15 @@ organizations, locations, and tenant context.
 docker compose up --build
 ```
 
+Optional local photo/PDF menu extraction uses Ollama and does not require an OpenAI key:
+
+```bash
+# Set AI_EXTRACTION_PROVIDER=ollama in .env, then:
+docker compose --profile ai up --build
+```
+
+The `ai` profile pulls `qwen3-vl:4b` once. Without the profile/provider flag, AI import stays disabled.
+
 - Frontend: http://localhost:3000
 - API docs: http://localhost:8000/docs
 - Liveness: http://localhost:8000/health/live

@@ -3081,6 +3081,11 @@ button, input, select { font: inherit; }
 .setup-dropzone > svg { width: 32px; height: 32px; color: var(--primary); }
 .setup-dropzone small { color: var(--muted); }
 .setup-dropzone input { width: 1px; height: 1px; position: absolute; overflow: hidden; clip: rect(0 0 0 0); }
+.setup-url { display: grid; gap: 7px; margin-top: 20px; }
+.setup-url > span { color: var(--muted); font-size: 12px; font-weight: 700; }
+.setup-url input { width: 100%; min-width: 0; height: 45px; padding: 0 12px; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text); font: inherit; }
+.setup-url input:focus { border-color: var(--primary); outline: 3px solid var(--focus); }
+.setup-url small { color: var(--muted); }
 .setup-mapping { margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--border); }
 .setup-sheet-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 .setup-sheet-list > span { display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 16px; background: #f8faf8; color: var(--muted); font-size: 12px; }

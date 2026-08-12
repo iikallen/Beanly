@@ -50,7 +50,7 @@ import {
 } from "@/lib/onboarding";
 import { parseMenuPriceToMinor, priceMinorToInput } from "@/lib/menu";
 
-type SetupView = "overview" | "template" | "import" | "run";
+type SetupView = "overview" | "template" | "import" | "ai" | "run";
 
 const DEFAULT_TEMPLATE_OPTIONS: OnboardingTemplateOptions = {
   sizes: ["250", "350", "450"],
@@ -79,6 +79,9 @@ export default function SetupPage() {
   const [templateOptions, setTemplateOptions] = useState(DEFAULT_TEMPLATE_OPTIONS);
   const [uploadSource, setUploadSource] = useState<OnboardingUploadSourceType>("AUTO");
   const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [aiSource, setAiSource] = useState<"file" | "url">("file");
+  const [aiFile, setAiFile] = useState<File | null>(null);
+  const [aiUrl, setAiUrl] = useState("");
   const [inspection, setInspection] = useState<OnboardingImportInspect | null>(null);
   const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
   const [targetDrafts, setTargetDrafts] = useState<Record<string, string>>({});
@@ -145,6 +148,9 @@ export default function SetupPage() {
       setTemplateOptions(DEFAULT_TEMPLATE_OPTIONS);
       setUploadSource("AUTO");
       setUploadFile(null);
+      setAiSource("file");
+      setAiFile(null);
+      setAiUrl("");
       setInspection(null);
       setColumnMapping({});
       setError("");
@@ -319,6 +325,42 @@ export default function SetupPage() {
         setInspection(null);
         setColumnMapping({});
         setError(errorMessage(caught, "The file could not be inspected."));
+      }
+    } finally {
+      if (operationId === operationRequestRef.current && requestedScope === scopeRef.current) setWorking(false);
+    }
+  }
+
+  async function importAiMenu(event: FormEvent) {
+    event.preventDefault();
+    if (!accessToken || !currentOrganization || !currentLocation || !permissions.canImport || !capabilities?.ai.available) return;
+    if (aiSource === "file" && (!aiFile || aiFile.size > 10_485_760)) {
+      setError(aiFile ? "Choose a file smaller than 10 MB." : "Choose an image or PDF.");
+      return;
+    }
+    if (aiSource === "url" && !aiUrl.trim()) {
+      setError("Enter a public menu URL.");
+      return;
+    }
+    const operationId = ++operationRequestRef.current;
+    const requestedScope = scopeRef.current;
+    setWorking(true);
+    setError("");
+    setNotice("");
+    try {
+      const clientImportId = crypto.randomUUID();
+      const run = aiSource === "file"
+        ? await api.uploadAiMenuImport({ clientImportId, locationId: currentLocation.id, file: aiFile! }, currentOrganization.id, accessToken)
+        : await api.importAiMenuUrl({ client_import_id: clientImportId, location_id: currentLocation.id, public_menu_url: aiUrl.trim() }, currentOrganization.id, accessToken);
+      if (operationId !== operationRequestRef.current || requestedScope !== scopeRef.current) return;
+      setSelectedRun(run);
+      seedRunDrafts(run, setPriceDrafts, setFieldDrafts);
+      setImports((current) => [run, ...current.filter((item) => item.id !== run.id)]);
+      setView("run");
+      setNotice("Extraction finished. Review every name, price, and modifier before applying.");
+    } catch (caught) {
+      if (operationId === operationRequestRef.current && requestedScope === scopeRef.current) {
+        setError(errorMessage(caught, "The local extractor could not read this menu."));
       }
     } finally {
       if (operationId === operationRequestRef.current && requestedScope === scopeRef.current) setWorking(false);
@@ -529,7 +571,7 @@ export default function SetupPage() {
           <section className="setup-start"><div className="setup-section-heading"><div><p className="setup-eyebrow">Menu</p><h2>How do you want to create your menu?</h2><p>Nothing is written to the live menu until you review and apply an import.</p></div></div><div className="setup-choice-grid">
             <Choice icon={<Coffee />} title="Beanly template" copy="Start with a versioned coffee-shop menu and optional draft recipes." disabled={!permissions.canImport} onClick={() => setView("template")} />
             <Choice icon={<FileSpreadsheet />} title="Excel / CSV / Poster" copy="Inspect columns, map unfamiliar headers, then review every entity and match explicitly." disabled={!permissions.canImport} onClick={() => setView("import")} />
-            <Choice icon={<Sparkles />} title="AI Menu Import" copy={capabilities?.ai.available ? "Extract menu facts from a photo or PDF, then review every field." : "Unavailable — no extraction provider is configured."} disabled={!permissions.canImport || !capabilities?.ai.available} badge={capabilities?.ai.available ? "Review required" : "Unavailable"} />
+            <Choice icon={<Sparkles />} title="AI Menu Import" copy={capabilities?.ai.available ? "Extract menu facts from a photo, PDF, or public URL, then review every field." : "Unavailable — no local extraction provider is configured."} disabled={!permissions.canImport || !capabilities?.ai.available} badge={capabilities?.ai.available ? "Review required" : "Unavailable"} onClick={() => setView("ai")} />
             <Link className="setup-choice" href="/app/menu/products/new"><span className="setup-choice-icon"><Pencil aria-hidden="true" /></span><span><strong>Create manually</strong><small>Add products one at a time in Menu.</small></span><ChevronRight aria-hidden="true" /></Link>
           </div></section>
           <section className="setup-safety"><AlertTriangle aria-hidden="true" /><div><strong>Fiscal readiness is separate</strong><p>You can finish menu and inventory setup while live provider verification is incomplete. Locations in LIVE_REQUIRED mode are not marked POS ready until fiscal checks pass.</p></div><Link href="/app/settings/fiscal">Review fiscal setup</Link></section>
@@ -538,6 +580,7 @@ export default function SetupPage() {
 
       {view === "template" && <TemplateView templates={templates} selected={selectedTemplate} options={templateOptions} disabled={!permissions.canImport || working} onBack={() => setView("overview")} onSelect={setSelectedTemplate} onOptions={setTemplateOptions} onSubmit={previewTemplate} />}
       {view === "import" && <ImportView capabilities={capabilities} source={uploadSource} file={uploadFile} inspection={inspection} mapping={columnMapping} disabled={!permissions.canImport || working} onBack={() => setView("overview")} onSource={(source) => { setUploadSource(source); setInspection(null); setColumnMapping({}); }} onFile={(file) => { setUploadFile(file); setInspection(null); setColumnMapping({}); }} onMapping={(source, target) => setColumnMapping((current) => { const next = { ...current }; if (target) next[source] = target; else delete next[source]; return next; })} onSubmit={inspection ? uploadImport : inspectImport} onDownload={() => void downloadSpreadsheet()} />}
+      {view === "ai" && capabilities?.ai.available && <AiImportView source={aiSource} file={aiFile} url={aiUrl} disabled={!permissions.canImport || working} onBack={() => setView("overview")} onSource={setAiSource} onFile={setAiFile} onUrl={setAiUrl} onSubmit={importAiMenu} />}
       {view === "run" && selectedRun && <RunView run={selectedRun} currency={currentOrganization?.currency_code ?? "KZT"} working={working} canImport={permissions.canImport} canApply={canApply} targetDrafts={targetDrafts} resolutionDrafts={resolutionDrafts} fieldDrafts={fieldDrafts} priceDrafts={priceDrafts} reviewedRecipes={reviewedRecipes} onBack={() => { setView("overview"); setSelectedRun(null); }} onTargetDraft={(id, value) => setTargetDrafts((current) => ({ ...current, [id]: value }))} onFieldDraft={(id, value) => setFieldDrafts((current) => ({ ...current, [id]: value }))} onPriceDraft={(id, value) => setPriceDrafts((current) => ({ ...current, [id]: value }))} onReviewRecipe={(id, checked) => setReviewedRecipes((current) => { const next = new Set(current); if (checked) next.add(id); else next.delete(id); return next; })} onResolution={(entity, resolution) => void updateEntity(entity, resolution)} onSaveCorrection={(entity) => void saveEntityCorrection(entity)} onValidate={() => void validateRun()} onSavePrices={() => void savePrices()} onApply={() => void applyRun()} onCancel={() => void cancelRun()} onResume={() => void resumeRun()} onActivate={() => void activateProducts()} />}
     </div>
   );
@@ -563,6 +606,10 @@ function ImportView({ capabilities, source, file, inspection, mapping, disabled,
   const selectedTargets = Object.values(mapping);
   const mappingReady = !inspection?.mapping_required || genericImportMappingError(mapping) === null;
   return <form className="setup-panel" onSubmit={onSubmit}><button className="setup-back" type="button" onClick={onBack}><ArrowLeft aria-hidden="true" />Setup choices</button><div className="setup-section-heading"><div><p className="setup-eyebrow">Spreadsheet import</p><h2>Upload a menu or inventory file</h2><p>The file is inspected without creating an ImportRun. Business data stays unchanged until final apply.</p></div><button className="setup-download" type="button" onClick={onDownload}><Download aria-hidden="true" />Beanly XLSX template</button></div><fieldset className="setup-source"><legend>File format</legend><label><input type="radio" name="source" checked={source === "AUTO"} onChange={() => onSource("AUTO")} /><span><strong>Excel / CSV</strong><small>Beanly files are detected directly; unfamiliar columns open the mapping step.</small></span></label><label><input type="radio" name="source" checked={source === "POSTER"} onChange={() => onSource("POSTER")} disabled={!capabilities?.poster.available} /><span><strong>Poster export</strong><small>Uses the Poster adapter. Real fixture verification: {capabilities?.poster.real_fixture_verified ? "complete" : "pending"}.</small></span></label></fieldset><label className="setup-dropzone"><Upload aria-hidden="true" /><strong>{file ? file.name : `Choose a ${formats} file`}</strong><small>{file ? `${formatBytes(file.size)} selected` : `Maximum ${formatBytes(capabilities?.spreadsheet.max_bytes ?? 10_485_760)}. Uploading does not change business data.`}</small><input type="file" accept={accepted} onChange={(event) => onFile(event.target.files?.[0] ?? null)} /></label>{inspection && <section className="setup-mapping"><div className="setup-section-heading"><div><h3>{inspection.mapping_required ? "Map your columns" : "File structure recognized"}</h3><p>Detected as {inspection.source_type.replaceAll("_", " ").toLowerCase()}. Mapping is stored with the import for audit and replay safety.</p></div></div><div className="setup-sheet-list">{inspection.sheets.map((sheet) => <span key={sheet.name}><strong>{sheet.name}</strong>{sheet.columns.length} columns</span>)}</div>{inspection.mapping_required && <><div className="setup-mapping-head"><span>Source column</span><span>Beanly field</span></div><div className="setup-mapping-list">{columns.map((column) => <label key={column}><span>{column}</span><select aria-label={`Map ${column}`} value={mapping[column] ?? ""} onChange={(event) => onMapping(column, event.target.value)}><option value="">Do not import</option>{GENERIC_IMPORT_COLUMNS.map((target) => <option key={target.value} value={target.value} disabled={selectedTargets.includes(target.value) && mapping[column] !== target.value}>{target.label}</option>)}</select></label>)}</div><p className="setup-mapping-note">Choose one profile: Menu requires Category, Product name, and Price. Inventory requires Inventory item name and Unit. Beanly never guesses a fuzzy column match.</p></>}</section>}<div className="setup-actions"><button className="setup-secondary" type="button" onClick={onBack}>Cancel</button><button className="setup-primary" type="submit" disabled={disabled || !file || !mappingReady}>{disabled ? <LoaderCircle className="is-spinning" /> : inspection ? <Upload /> : <FileSpreadsheet />}{inspection ? "Parse and review" : "Inspect columns"}</button></div></form>;
+}
+
+function AiImportView({ source, file, url, disabled, onBack, onSource, onFile, onUrl, onSubmit }: { source: "file" | "url"; file: File | null; url: string; disabled: boolean; onBack: () => void; onSource: (source: "file" | "url") => void; onFile: (file: File | null) => void; onUrl: (url: string) => void; onSubmit: (event: FormEvent) => void }) {
+  return <form className="setup-panel" onSubmit={onSubmit}><button className="setup-back" type="button" onClick={onBack}><ArrowLeft aria-hidden="true" />Setup choices</button><div className="setup-section-heading"><div><p className="setup-eyebrow">Local AI extraction</p><h2>Extract a draft menu</h2><p>Use a clear menu image, PDF, or a public webpage. No OpenAI key is required.</p></div></div><fieldset className="setup-source"><legend>Menu source</legend><label><input type="radio" name="ai-source" checked={source === "file"} onChange={() => onSource("file")} /><span><strong>Image or PDF</strong><small>JPEG, PNG, WebP, or PDF up to 10 MB.</small></span></label><label><input type="radio" name="ai-source" checked={source === "url"} onChange={() => onSource("url")} /><span><strong>Public URL</strong><small>Only a publicly reachable HTTP or HTTPS menu page.</small></span></label></fieldset>{source === "file" ? <label className="setup-dropzone"><Upload aria-hidden="true" /><strong>{file ? file.name : "Choose a menu image or PDF"}</strong><small>{file ? `${formatBytes(file.size)} selected` : "Maximum 10 MB. The source file is not stored by Beanly."}</small><input type="file" accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf" onChange={(event) => onFile(event.target.files?.[0] ?? null)} /></label> : <label className="setup-url"><span>Public menu URL</span><input type="url" required maxLength={2048} placeholder="https://example.com/menu" value={url} onChange={(event) => onUrl(event.target.value)} /><small>Private network addresses and redirects are rejected.</small></label>}<div className="setup-warning"><AlertTriangle aria-hidden="true" /><span><strong>AI output is a draft.</strong> Review every name, price, variant, and modifier. Recipes, inventory, taxes, and fiscal codes are never inferred.</span></div><div className="setup-actions"><button className="setup-secondary" type="button" onClick={onBack}>Cancel</button><button className="setup-primary" type="submit" disabled={disabled || (source === "file" ? !file : !url.trim())}>{disabled ? <LoaderCircle className="is-spinning" /> : <Sparkles />}Extract and review</button></div></form>;
 }
 
 function RunView(props: { run: OnboardingImportRun; currency: string; working: boolean; canImport: boolean; canApply: boolean; targetDrafts: Record<string, string>; resolutionDrafts: Record<string, OnboardingImportResolution>; fieldDrafts: Record<string, string>; priceDrafts: Record<string, string>; reviewedRecipes: Set<string>; onBack: () => void; onTargetDraft: (id: string, value: string) => void; onFieldDraft: (id: string, value: string) => void; onPriceDraft: (id: string, value: string) => void; onReviewRecipe: (id: string, checked: boolean) => void; onResolution: (entity: OnboardingImportEntity, resolution: OnboardingImportResolution) => void; onSaveCorrection: (entity: OnboardingImportEntity) => void; onValidate: () => void; onSavePrices: () => void; onApply: () => void; onCancel: () => void; onResume: () => void; onActivate: () => void }) {

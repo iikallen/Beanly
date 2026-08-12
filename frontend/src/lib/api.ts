@@ -2705,6 +2705,30 @@ export const api = {
       headers: tenantAuthorization(organizationId, accessToken),
     });
   },
+  uploadAiMenuImport: (
+    input: { clientImportId: string; locationId: string; file: File },
+    organizationId: string,
+    accessToken: string,
+  ) => {
+    const body = new FormData();
+    body.set("client_import_id", input.clientImportId);
+    body.set("location_id", input.locationId);
+    body.set("file", input.file);
+    return request<OnboardingImportRun>("/api/v1/onboarding/imports/ai", {
+      method: "POST",
+      body,
+      headers: tenantAuthorization(organizationId, accessToken),
+    });
+  },
+  importAiMenuUrl: (
+    input: { client_import_id: string; location_id: string; public_menu_url: string },
+    organizationId: string,
+    accessToken: string,
+  ) => request<OnboardingImportRun>("/api/v1/onboarding/imports/ai/url", {
+    method: "POST",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
   updateOnboardingImportEntity: (
     importId: string,
     entityId: string,

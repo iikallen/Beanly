@@ -70,6 +70,14 @@ RULES = (
         "path",
         False,
     ),
+    RateLimitRule(
+        "ai-menu-import",
+        "POST",
+        re.compile(r"^/api/v1/onboarding/imports/ai(?:/url)?$"),
+        5,
+        60,
+        "authorization",
+    ),
 )
 
 

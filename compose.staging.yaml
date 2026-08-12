@@ -37,6 +37,9 @@ x-backend-image: &backend-image
     DB_ADMIN_RESERVE: ${STAGING_DB_ADMIN_RESERVE:-10}
     OTEL_ENABLED: "true"
     OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    AI_EXTRACTION_PROVIDER: ${AI_EXTRACTION_PROVIDER:-disabled}
+    AI_EXTRACTION_BASE_URL: ${AI_EXTRACTION_BASE_URL:-http://ollama:11434}
+    AI_EXTRACTION_MODEL: ${AI_EXTRACTION_MODEL:-qwen3-vl:4b}
   read_only: true
   tmpfs: [/tmp:size=64m,mode=1777]
   cap_drop: [ALL]

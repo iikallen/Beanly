@@ -47,6 +47,7 @@ def _app(limiter: object) -> Starlette:
                 _ok,
                 methods=["POST"],
             ),
+            Route("/api/v1/onboarding/imports/ai", _ok, methods=["POST"]),
         ]
     )
     app.add_middleware(RateLimitMiddleware, limiter=limiter, enabled=True)
@@ -92,9 +93,14 @@ async def test_sensitive_rate_limit_fails_closed_but_webhook_fails_open() -> Non
         base_url="http://test",
     ) as client:
         login = await client.post("/api/v1/auth/login")
+        ai_import = await client.post(
+            "/api/v1/onboarding/imports/ai",
+            headers={"authorization": "Bearer test"},
+        )
         webhook = await client.post("/api/v1/integrations/webhooks/mock/connection")
 
     assert login.status_code == 503
     assert login.json()["detail"] == "Rate limit service unavailable"
     assert login.json()["request_id"] == login.headers["x-request-id"]
+    assert ai_import.status_code == 503
     assert webhook.status_code == 200

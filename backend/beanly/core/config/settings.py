@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     integration_poll_interval_seconds: float = Field(default=1, gt=0, le=60)
     nkt_api_key: SecretStr | None = None
     live_kz_fiscalization: bool = False
+    ai_extraction_provider: Literal["disabled", "ollama"] = "disabled"
+    ai_extraction_model: str = "qwen3-vl:4b"
+    ai_extraction_base_url: str = "http://ollama:11434"
+    ai_extraction_timeout_seconds: float = Field(default=180, gt=0, le=600)
+    ai_extraction_confidence_threshold: float = Field(default=0.8, ge=0, le=1)
 
     @field_validator("nkt_api_key", mode="before")
     @classmethod
@@ -77,6 +82,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def reject_development_secret_in_production(self) -> "Settings":
         self._validate_proxy_networks()
+        self._validate_ai_extraction()
         if (
             self.integration_http_connect_timeout_seconds
             + self.integration_http_read_timeout_seconds
@@ -150,6 +156,23 @@ class Settings(BaseSettings):
             if len(decoded) != 32:
                 raise ValueError("INTEGRATION_ENCRYPTION_KEYS contains an invalid Fernet key")
         return self
+
+    def _validate_ai_extraction(self) -> None:
+        if self.ai_extraction_provider == "disabled":
+            return
+        if not self.ai_extraction_model.strip():
+            raise ValueError("AI_EXTRACTION_MODEL must be set for Ollama")
+        parsed = urlparse(self.ai_extraction_base_url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("AI_EXTRACTION_BASE_URL must be an HTTP(S) origin without credentials")
 
     def _validate_proxy_networks(self) -> None:
         values = [value.strip() for value in self.forwarded_allow_ips.split(",")]

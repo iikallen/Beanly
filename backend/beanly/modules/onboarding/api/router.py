@@ -1,10 +1,13 @@
+import hashlib
 import json
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, Response, UploadFile, status
 
+from beanly.core.observability import metrics
 from beanly.modules.onboarding.api.dependencies import (
+    AiMenuExtractorDep,
     ImportApplyDep,
     ImportServiceDep,
     MenuImportDep,
@@ -42,6 +45,7 @@ from beanly.modules.onboarding.domain.enums import (
     UploadSourceType,
 )
 from beanly.modules.onboarding.domain.exceptions import (
+    AiExtractionFailed,
     AiExtractionUnavailable,
     ImportEntityNotFound,
     ImportFileTooLarge,
@@ -66,9 +70,11 @@ router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 
 @router.get("/status", response_model=OnboardingStatusResponse)
 async def onboarding_status(
-    context: OnboardingReadDep, service: OnboardingServiceDep
+    context: OnboardingReadDep,
+    service: OnboardingServiceDep,
+    extractor: AiMenuExtractorDep,
 ) -> OnboardingStatusResponse:
-    return OnboardingStatusResponse.model_validate(await service.status(context))
+    return _status_response(await service.status(context), extractor.available)
 
 
 @router.post("/bootstrap", response_model=BootstrapResponse)
@@ -76,10 +82,18 @@ async def bootstrap(
     payload: BootstrapRequest,
     context: OnboardingWriteDep,
     service: OnboardingServiceDep,
+    extractor: AiMenuExtractorDep,
 ) -> BootstrapResponse:
     try:
-        return BootstrapResponse.model_validate(
+        response = BootstrapResponse.model_validate(
             await service.bootstrap(context, payload.warehouse_name, payload.register_name)
+        )
+        return response.model_copy(
+            update={
+                "onboarding": response.onboarding.model_copy(
+                    update={"ai_available": extractor.available}
+                )
+            }
         )
     except ValueError as exc:
         raise HTTPException(
@@ -90,15 +104,22 @@ async def bootstrap(
 
 @router.post("/dismiss", response_model=OnboardingStatusResponse)
 async def dismiss(
-    context: OnboardingWriteDep, service: OnboardingServiceDep
+    context: OnboardingWriteDep,
+    service: OnboardingServiceDep,
+    extractor: AiMenuExtractorDep,
 ) -> OnboardingStatusResponse:
-    return OnboardingStatusResponse.model_validate(await service.dismiss(context))
+    return _status_response(await service.dismiss(context), extractor.available)
 
 
 @router.get("/capabilities", response_model=OnboardingCapabilitiesResponse)
-async def capabilities(_: OnboardingReadDep) -> OnboardingCapabilitiesResponse:
+async def capabilities(
+    _: OnboardingReadDep, extractor: AiMenuExtractorDep
+) -> OnboardingCapabilitiesResponse:
     return OnboardingCapabilitiesResponse(
-        ai=CapabilityResponse(available=False, reason="AI_EXTRACTION_UNAVAILABLE"),
+        ai=CapabilityResponse(
+            available=extractor.available,
+            reason=None if extractor.available else "AI_EXTRACTION_UNAVAILABLE",
+        ),
         poster=PosterCapabilityResponse(
             available=True,
             reason="Real anonymized Poster fixture has not been verified",
@@ -214,17 +235,89 @@ async def inspect_import(
 
 
 @router.post("/imports/ai", response_model=ImportRunResponse)
-async def ai_file_unavailable(
-    _: MenuImportDep, file: Annotated[UploadFile, File()]
+async def ai_file_import(
+    context: MenuImportDep,
+    imports: ImportServiceDep,
+    extractor: AiMenuExtractorDep,
+    client_import_id: Annotated[UUID, Form()],
+    location_id: Annotated[UUID, Form()],
+    file: Annotated[UploadFile, File()],
 ) -> ImportRunResponse:
-    await file.close()
-    raise _http_error(AiExtractionUnavailable("AI extraction adapter is not configured"))
+    if not extractor.available:
+        await file.close()
+        raise _http_error(AiExtractionUnavailable("AI extraction adapter is not configured"))
+    try:
+        await imports.ensure_location_access(context, location_id)
+        content = await file.read(MAX_UPLOAD_BYTES + 1)
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise ImportFileTooLarge("AI import file exceeds 10 MB")
+        file_hash = hashlib.sha256(content).hexdigest()
+        replay = await imports.replay_source(
+            context,
+            client_import_id=client_import_id,
+            location_id=location_id,
+            source_type=ImportSourceType.AI_EXTRACTION,
+            file_hash=file_hash,
+        )
+        if replay is not None:
+            return await _run_response(replay, imports)
+        draft = await extractor.extract_file(
+            content,
+            file.content_type or "application/octet-stream",
+            file.filename or "upload",
+        )
+        run = await imports.create_from_draft(
+            context,
+            client_import_id=client_import_id,
+            location_id=location_id,
+            source_type=ImportSourceType.AI_EXTRACTION,
+            draft=draft,
+            file_name=(file.filename or "upload")[:255],
+            file_hash=file_hash,
+        )
+        _record_ai_metrics(run)
+        return await _run_response(run, imports)
+    except OnboardingError as exc:
+        metrics.ai_menu_extraction.add(1, {"outcome": "failed"})
+        raise _http_error(exc) from exc
+    finally:
+        await file.close()
 
 
 @router.post("/imports/ai/url", response_model=ImportRunResponse)
-async def ai_url_unavailable(_: MenuImportDep, payload: PublicMenuUrlRequest) -> ImportRunResponse:
-    del payload
-    raise _http_error(AiExtractionUnavailable("AI extraction adapter is not configured"))
+async def ai_url_import(
+    context: MenuImportDep,
+    payload: PublicMenuUrlRequest,
+    imports: ImportServiceDep,
+    extractor: AiMenuExtractorDep,
+) -> ImportRunResponse:
+    if not extractor.available:
+        raise _http_error(AiExtractionUnavailable("AI extraction adapter is not configured"))
+    try:
+        file_hash = hashlib.sha256(payload.public_menu_url.encode()).hexdigest()
+        replay = await imports.replay_source(
+            context,
+            client_import_id=payload.client_import_id,
+            location_id=payload.location_id,
+            source_type=ImportSourceType.AI_EXTRACTION,
+            file_hash=file_hash,
+        )
+        if replay is not None:
+            return await _run_response(replay, imports)
+        draft = await extractor.extract_url(payload.public_menu_url)
+        run = await imports.create_from_draft(
+            context,
+            client_import_id=payload.client_import_id,
+            location_id=payload.location_id,
+            source_type=ImportSourceType.AI_EXTRACTION,
+            draft=draft,
+            file_hash=file_hash,
+        )
+        _record_ai_metrics(run)
+        return await _run_response(run, imports)
+    except OnboardingError as exc:
+        metrics.ai_menu_extraction.add(1, {"outcome": "failed"})
+        raise _http_error(exc) from exc
 
 
 @router.get("/imports", response_model=ImportRunListResponse)
@@ -387,6 +480,8 @@ def _http_error(exc: OnboardingError) -> HTTPException:
         return HTTPException(status.HTTP_404_NOT_FOUND, detail)
     if isinstance(exc, AiExtractionUnavailable):
         return HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail)
+    if isinstance(exc, AiExtractionFailed):
+        return HTTPException(status.HTTP_502_BAD_GATEWAY, detail)
     if isinstance(exc, (ImportIdempotencyConflict, ImportStateConflict)):
         return HTTPException(status.HTTP_409_CONFLICT, detail)
     if isinstance(exc, ImportFileTooLarge):
@@ -408,3 +503,18 @@ def _mapping(raw: str | None) -> dict[str, str]:
     ):
         raise ImportParseFailed("mapping_json must be a source-column to field object")
     return value
+
+
+def _status_response(value: dict[str, object], ai_available: bool) -> OnboardingStatusResponse:
+    return OnboardingStatusResponse.model_validate(value).model_copy(
+        update={"ai_available": ai_available}
+    )
+
+
+def _record_ai_metrics(run) -> None:
+    metrics.ai_menu_extraction.add(1, {"outcome": "success"})
+    review_count = sum(
+        1 for entity in run.entities if "AI_LOW_CONFIDENCE" in entity.warning_codes
+    )
+    rate = review_count / len(run.entities) if run.entities else 0
+    metrics.ai_menu_extraction_review_rate.record(rate)

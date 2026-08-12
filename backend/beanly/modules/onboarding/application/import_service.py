@@ -34,6 +34,36 @@ class ImportService:
         self.repository = repository
         self.apply_port = apply_port
 
+    async def ensure_location_access(
+        self, context: TenantContext, location_id: UUID
+    ) -> None:
+        await self.apply_port.ensure_location_access(context, location_id)
+
+    async def replay_source(
+        self,
+        context: TenantContext,
+        *,
+        client_import_id: UUID,
+        location_id: UUID,
+        source_type: ImportSourceType,
+        file_hash: str,
+    ) -> ImportRun | None:
+        await self.ensure_location_access(context, location_id)
+        existing = await self.repository.get_by_client_import_id(
+            context.organization_id, client_import_id
+        )
+        if existing is None:
+            return None
+        if (
+            existing.location_id != location_id
+            or existing.source_type is not source_type
+            or existing.file_hash != file_hash
+        ):
+            raise ImportIdempotencyConflict(
+                "client_import_id was already used for a different source"
+            )
+        return existing
+
     async def create_from_draft(
         self,
         context: TenantContext,
@@ -46,7 +76,7 @@ class ImportService:
         file_hash: str | None = None,
         mapping: dict[str, str] | None = None,
     ) -> ImportRun:
-        await self.apply_port.ensure_location_access(context, location_id)
+        await self.ensure_location_access(context, location_id)
         canonical = _canonical_bytes(
             draft,
             location_id=location_id,
@@ -83,9 +113,13 @@ class ImportService:
             for value in draft.entities
         ]
         error_count, warning_count = _validate_entities(entities, source_type)
-        # Warnings remain visible in the preview, but only validation errors block apply.
+        # AI always enters human review once; other warnings stay visible without blocking.
         # Review-sensitive starter recipes are still guarded explicitly at activation.
-        status = ImportStatus.NEEDS_REVIEW if error_count else ImportStatus.READY
+        status = (
+            ImportStatus.NEEDS_REVIEW
+            if error_count or source_type is ImportSourceType.AI_EXTRACTION
+            else ImportStatus.READY
+        )
         run = ImportRun(
             id=run_id,
             organization_id=context.organization_id,
@@ -373,6 +407,23 @@ def _validate_entities(
             _validate_minor(entity, "price_minor")
         if entity.entity_type is ImportEntityType.MODIFIER_OPTION:
             _validate_minor(entity, "price_delta_minor")
+        if entity.entity_type is ImportEntityType.MODIFIER_GROUP:
+            try:
+                minimum = int(str(entity.payload.get("min_selections")))
+                maximum = int(str(entity.payload.get("max_selections")))
+            except (TypeError, ValueError):
+                entity.error_codes.append("INVALID_MODIFIER_CONSTRAINTS")
+            else:
+                if (
+                    minimum < 0
+                    or maximum < 1
+                    or minimum > maximum
+                    or (
+                        entity.payload.get("selection_type") == "SINGLE"
+                        and maximum != 1
+                    )
+                ):
+                    entity.error_codes.append("INVALID_MODIFIER_CONSTRAINTS")
         if entity.entity_type is ImportEntityType.INVENTORY_ITEM:
             if entity.payload.get("base_unit") not in {"g", "ml", "pcs"}:
                 entity.error_codes.append("INVALID_UNIT")

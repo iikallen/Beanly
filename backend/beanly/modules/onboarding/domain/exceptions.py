@@ -46,5 +46,9 @@ class AiExtractionUnavailable(OnboardingError):
     code = "AI_EXTRACTION_UNAVAILABLE"
 
 
+class AiExtractionFailed(OnboardingError):
+    code = "AI_EXTRACTION_FAILED"
+
+
 class ActivationNotReady(OnboardingError):
     code = "ACTIVATION_NOT_READY"

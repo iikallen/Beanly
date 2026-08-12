@@ -96,7 +96,9 @@ class AiMenuExtractionPort(Protocol):
     @property
     def available(self) -> bool: ...
 
-    async def extract_file(self, content: bytes, media_type: str) -> CanonicalImportDraft: ...
+    async def extract_file(
+        self, content: bytes, media_type: str, file_name: str
+    ) -> CanonicalImportDraft: ...
 
     async def extract_url(self, public_url: str) -> CanonicalImportDraft: ...
 
@@ -106,8 +108,10 @@ class UnavailableAiMenuExtractor:
     def available(self) -> bool:
         return False
 
-    async def extract_file(self, content: bytes, media_type: str) -> CanonicalImportDraft:
-        del content, media_type
+    async def extract_file(
+        self, content: bytes, media_type: str, file_name: str
+    ) -> CanonicalImportDraft:
+        del content, media_type, file_name
         raise RuntimeError("AI extraction is not configured")
 
     async def extract_url(self, public_url: str) -> CanonicalImportDraft:

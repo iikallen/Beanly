@@ -10,7 +10,15 @@ from beanly.modules.inventory.application.services import InventoryService
 from beanly.modules.inventory.infrastructure.db.repositories import SqlAlchemyInventoryRepository
 from beanly.modules.onboarding.application.import_service import ImportService
 from beanly.modules.onboarding.application.onboarding_service import OnboardingService
+from beanly.modules.onboarding.application.ports import (
+    AiMenuExtractionPort,
+    UnavailableAiMenuExtractor,
+)
 from beanly.modules.onboarding.application.template_service import TemplateService
+from beanly.modules.onboarding.infrastructure.ai.local_vision import (
+    LocalVisionExtractionAdapter,
+)
+from beanly.modules.onboarding.infrastructure.ai.ollama_client import OllamaMenuClient
 from beanly.modules.onboarding.infrastructure.apply_gateway import SqlAlchemyImportApplyGateway
 from beanly.modules.onboarding.infrastructure.db.repositories import (
     SqlAlchemyOnboardingRepository,
@@ -64,9 +72,23 @@ def template_service() -> TemplateService:
     return TemplateService()
 
 
+def ai_menu_extractor(settings: SettingsDep) -> AiMenuExtractionPort:
+    if settings.ai_extraction_provider == "disabled":
+        return UnavailableAiMenuExtractor()
+    return LocalVisionExtractionAdapter(
+        OllamaMenuClient(
+            settings.ai_extraction_base_url,
+            settings.ai_extraction_model,
+            settings.ai_extraction_timeout_seconds,
+        ),
+        confidence_threshold=settings.ai_extraction_confidence_threshold,
+    )
+
+
 OnboardingServiceDep = Annotated[OnboardingService, Depends(onboarding_service)]
 ImportServiceDep = Annotated[ImportService, Depends(import_service)]
 TemplateServiceDep = Annotated[TemplateService, Depends(template_service)]
+AiMenuExtractorDep = Annotated[AiMenuExtractionPort, Depends(ai_menu_extractor)]
 
 
 def _permissions(*required: Permission):

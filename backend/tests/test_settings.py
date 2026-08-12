@@ -108,3 +108,20 @@ def test_provider_timeout_budget_must_fit_inside_job_lease() -> None:
             integration_job_lease_safety_margin_seconds=5,
             integration_job_lease_seconds=18,
         )
+
+
+def test_ollama_extraction_requires_a_plain_http_origin() -> None:
+    settings = Settings(
+        environment="test",
+        ai_extraction_provider="ollama",
+        ai_extraction_base_url="http://ollama:11434",
+        ai_extraction_model="qwen3-vl:4b",
+    )
+    assert settings.ai_extraction_provider == "ollama"
+
+    with pytest.raises(ValidationError, match="HTTP.*origin without credentials"):
+        Settings(
+            environment="test",
+            ai_extraction_provider="ollama",
+            ai_extraction_base_url="http://user:secret@ollama:11434/api",
+        )
