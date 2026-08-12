@@ -97,6 +97,7 @@ services:
     image: ollama/ollama:0.32.5
     profiles: [ai]
     command: serve
+    gpus: all
     volumes:
       - ollama_data:/root/.ollama
     healthcheck:

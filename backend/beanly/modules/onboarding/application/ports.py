@@ -80,6 +80,10 @@ class ImportApplyPort(Protocol):
 
     async def accessible_location_ids(self, context: TenantContext) -> tuple[UUID, ...]: ...
 
+    async def resolve_preview(
+        self, context: TenantContext, entities: list[ImportEntity]
+    ) -> None: ...
+
     async def apply(self, context: TenantContext, run: ImportRun) -> None: ...
 
     async def activate_ready(

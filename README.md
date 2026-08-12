@@ -10,11 +10,13 @@ docker compose up --build
 Optional local photo/PDF menu extraction uses Ollama and does not require an OpenAI key:
 
 ```bash
-# Set AI_EXTRACTION_PROVIDER=ollama in .env, then:
+# Set AI_EXTRACTION_PROVIDER=ollama in .env, then (NVIDIA GPU required):
 docker compose --profile ai up --build
 ```
 
-The `ai` profile pulls `qwen3-vl:4b` once. Without the profile/provider flag, AI import stays disabled.
+The `ai` profile requests the Docker GPU and pulls `qwen3-vl:4b` once. Override
+`AI_EXTRACTION_MODEL=qwen3-vl:2b` on 4 GB GPUs for the faster verified local path.
+Without the profile/provider flag, AI import stays disabled.
 
 - Frontend: http://localhost:3000
 - API docs: http://localhost:8000/docs

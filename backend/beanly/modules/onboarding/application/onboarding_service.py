@@ -156,6 +156,9 @@ class OnboardingService:
         state = await self.repository.get_state(organization_id, lock=True)
         if state is not None and state.completed_at is not None:
             return False
+        pos_ready_metric_required = (
+            state is None or state.status is not OnboardingStatus.READY_FOR_POS
+        )
         if state is None:
             origin = await self.gateway.organization_origin(organization_id)
             if origin is None:
@@ -180,6 +183,10 @@ class OnboardingService:
             state.updated_at = occurred_at
             await self.repository.save_state(state)
         metrics.onboarding_completed.add(1)
+        if pos_ready_metric_required:
+            metrics.onboarding_time_to_pos_ready.record(
+                _elapsed_seconds(state.started_at, occurred_at)
+            )
         metrics.onboarding_time_to_first_sale.record(
             _elapsed_seconds(state.started_at, occurred_at)
         )

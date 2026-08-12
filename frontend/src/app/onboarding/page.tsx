@@ -34,7 +34,7 @@ export default function OnboardingPage() {
           address: String(data.get("address")),
         },
       });
-      router.replace("/app");
+      router.replace("/app/onboarding");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to create coffee shop");
     } finally {

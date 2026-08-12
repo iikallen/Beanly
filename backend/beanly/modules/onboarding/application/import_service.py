@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from uuid import UUID, uuid4
 
 from beanly.core.money import MAX_BIGINT, MAX_NUMERIC_20_6_MINOR
@@ -112,7 +113,7 @@ class ImportService:
             )
             for value in draft.entities
         ]
-        error_count, warning_count = _validate_entities(entities, source_type)
+        error_count, warning_count = await self._validate(context, entities, source_type)
         # AI always enters human review once; other warnings stay visible without blocking.
         # Review-sensitive starter recipes are still guarded explicitly at activation.
         status = (
@@ -209,7 +210,11 @@ class ImportService:
             if payload is not None:
                 _validate_payload_shape(payload)
                 entity.payload = payload
-            _validate_entities(run.entities, run.source_type)
+            if run.source_type is ImportSourceType.AI_EXTRACTION:
+                entity.warning_codes = [
+                    code for code in entity.warning_codes if code != "AI_LOW_CONFIDENCE"
+                ]
+            await self._validate(context, run.entities, run.source_type)
             await self.repository.save_entity(entity)
             run.error_count = sum(len(value.error_codes) for value in run.entities)
             run.warning_count = sum(len(value.warning_codes) for value in run.entities)
@@ -224,12 +229,19 @@ class ImportService:
     async def validate(self, context: TenantContext, run_id: UUID) -> ImportRun:
         try:
             run = await self._editable(context, run_id)
-            errors, warnings = _validate_entities(run.entities, run.source_type)
+            errors, warnings = await self._validate(context, run.entities, run.source_type)
             for entity in run.entities:
                 await self.repository.save_entity(entity)
             run.error_count = errors
             run.warning_count = warnings
-            run.status = ImportStatus.READY if errors == 0 else ImportStatus.NEEDS_REVIEW
+            needs_ai_review = run.source_type is ImportSourceType.AI_EXTRACTION and any(
+                "AI_LOW_CONFIDENCE" in entity.warning_codes for entity in run.entities
+            )
+            run.status = (
+                ImportStatus.READY
+                if errors == 0 and not needs_ai_review
+                else ImportStatus.NEEDS_REVIEW
+            )
             await self.repository.save_run(run)
             await self.repository.commit()
             return run
@@ -353,6 +365,19 @@ class ImportService:
             raise ImportStateConflict("Import run is immutable in its current status")
         return run
 
+    async def _validate(
+        self,
+        context: TenantContext,
+        entities: list[ImportEntity],
+        source_type: ImportSourceType | None,
+    ) -> tuple[int, int]:
+        _validate_entities(entities, source_type)
+        await self.apply_port.resolve_preview(context, entities)
+        return (
+            sum(len(value.error_codes) for value in entities),
+            sum(len(value.warning_codes) for value in entities),
+        )
+
 
 def _canonical_bytes(
     draft: CanonicalImportDraft,
@@ -387,22 +412,33 @@ def _canonical_bytes(
 def _validate_entities(
     entities: list[ImportEntity], source_type: ImportSourceType | None = None
 ) -> tuple[int, int]:
-    keys = {value.source_key for value in entities}
-    duplicate_keys = len(keys) != len(entities)
+    active = [value for value in entities if value.resolution is not ImportResolution.SKIP]
+    keys = {value.source_key for value in active}
+    duplicate_keys = len(keys) != len(active)
     default_variants: dict[str, list[ImportEntity]] = {}
     variant_skus: dict[str, list[ImportEntity]] = {}
+    inventory_units = {
+        value.source_key: value.payload.get("base_unit")
+        for value in active
+        if value.entity_type is ImportEntityType.INVENTORY_ITEM
+    }
     for entity in entities:
         entity.error_codes = []
         _validate_payload_shape(entity.payload)
+        if entity.resolution is ImportResolution.SKIP:
+            continue
         if duplicate_keys:
             entity.error_codes.append("DUPLICATE_SOURCE_KEY")
         if not entity.source_key or len(entity.source_key) > 255:
             entity.error_codes.append("INVALID_SOURCE_KEY")
         if entity.resolution is ImportResolution.MATCH_EXISTING and entity.target_id is None:
             entity.error_codes.append("MATCH_TARGET_REQUIRED")
-        for reference in _references(entity):
-            if reference not in keys:
+        for field, reference in _references(entity):
+            if not reference:
+                entity.error_codes.append(f"{field.upper()}_REQUIRED")
+            elif reference not in keys:
                 entity.error_codes.append("REFERENCE_NOT_FOUND")
+        _validate_entity_contract(entity)
         if entity.entity_type in {ImportEntityType.VARIANT, ImportEntityType.LOCATION_PRICE}:
             _validate_minor(entity, "price_minor")
         if entity.entity_type is ImportEntityType.MODIFIER_OPTION:
@@ -449,8 +485,13 @@ def _validate_entities(
                         continue
                     key = str(component.get("inventory_item_key", ""))
                     component_keys.append(key)
-                    if key not in keys:
+                    if not key or key not in keys:
                         entity.error_codes.append("REFERENCE_NOT_FOUND")
+                    _validate_decimal(entity, component.get("quantity"), positive=True)
+                    _validate_unit(entity, component.get("unit"))
+                    _validate_unit_compatibility(
+                        entity, component.get("unit"), inventory_units.get(key)
+                    )
                 if len(component_keys) != len(set(component_keys)):
                     entity.error_codes.append("DUPLICATE_RECIPE_COMPONENT")
         if entity.entity_type is ImportEntityType.MODIFIER_OPTION:
@@ -464,6 +505,14 @@ def _validate_entities(
                         or str(delta.get("inventory_item_key", "")) not in keys
                     ):
                         entity.error_codes.append("REFERENCE_NOT_FOUND")
+                        continue
+                    _validate_decimal(entity, delta.get("quantity"), nonzero=True)
+                    _validate_unit(entity, delta.get("unit"))
+                    _validate_unit_compatibility(
+                        entity,
+                        delta.get("unit"),
+                        inventory_units.get(str(delta.get("inventory_item_key", ""))),
+                    )
         if source_type is ImportSourceType.AI_EXTRACTION:
             if entity.entity_type in {
                 ImportEntityType.INVENTORY_ITEM,
@@ -487,7 +536,7 @@ def _validate_entities(
     )
 
 
-def _references(entity: ImportEntity) -> list[str]:
+def _references(entity: ImportEntity) -> list[tuple[str, str]]:
     fields = {
         ImportEntityType.PRODUCT: ("category_key",),
         ImportEntityType.VARIANT: ("product_key",),
@@ -497,7 +546,104 @@ def _references(entity: ImportEntity) -> list[str]:
         ImportEntityType.LOCATION_PRICE: ("variant_key",),
         ImportEntityType.OPENING_BALANCE: ("inventory_item_key",),
     }.get(entity.entity_type, ())
-    return [str(entity.payload[field]) for field in fields if field in entity.payload]
+    return [(field, str(entity.payload.get(field, "")).strip()) for field in fields]
+
+
+def _validate_entity_contract(entity: ImportEntity) -> None:
+    payload = entity.payload
+    name_limits = {
+        ImportEntityType.CATEGORY: 150,
+        ImportEntityType.INVENTORY_ITEM: 150,
+        ImportEntityType.PRODUCT: 200,
+        ImportEntityType.VARIANT: 100,
+        ImportEntityType.MODIFIER_GROUP: 150,
+        ImportEntityType.MODIFIER_OPTION: 150,
+    }
+    if limit := name_limits.get(entity.entity_type):
+        _validate_text(entity, payload.get("name"), limit, required=True)
+    if entity.entity_type is ImportEntityType.PRODUCT:
+        _validate_text(entity, payload.get("description"), 10_000, required=False)
+    if entity.entity_type in {ImportEntityType.INVENTORY_ITEM, ImportEntityType.VARIANT}:
+        _validate_text(entity, payload.get("sku"), 100, required=False)
+    if entity.entity_type is ImportEntityType.RECIPE:
+        _validate_text(entity, payload.get("name"), 200, required=False)
+    if entity.entity_type is ImportEntityType.MODIFIER_GROUP:
+        if payload.get("selection_type") not in {"SINGLE", "MULTIPLE"}:
+            entity.error_codes.append("INVALID_MODIFIER_SELECTION_TYPE")
+    for field in ("is_default", "available", "review_required"):
+        if field in payload and not isinstance(payload[field], bool):
+            entity.error_codes.append(f"INVALID_{field.upper()}")
+    if "sort_order" in payload:
+        _validate_integer(entity, payload["sort_order"], "sort_order", minimum=0)
+    if entity.entity_type is ImportEntityType.OPENING_BALANCE:
+        _validate_decimal(entity, payload.get("quantity"), positive=True)
+        _validate_unit(entity, payload.get("unit"))
+        if payload.get("unit_cost_minor") is not None:
+            _validate_minor(entity, "unit_cost_minor")
+        if payload.get("unit_cost_base_factor") is not None:
+            _validate_decimal(entity, payload.get("unit_cost_base_factor"), positive=True)
+
+
+def _validate_text(
+    entity: ImportEntity, value: object, limit: int, *, required: bool
+) -> None:
+    if value is None and not required:
+        return
+    if not isinstance(value, str):
+        entity.error_codes.append("INVALID_TEXT_FIELD")
+        return
+    normalized = value.strip()
+    if (required and not normalized) or len(normalized) > limit:
+        entity.error_codes.append("INVALID_TEXT_FIELD")
+
+
+def _validate_integer(
+    entity: ImportEntity, value: object, field: str, *, minimum: int
+) -> None:
+    try:
+        parsed = int(str(value))
+    except (TypeError, ValueError):
+        entity.error_codes.append(f"INVALID_{field.upper()}")
+        return
+    if str(parsed) != str(value) or parsed < minimum:
+        entity.error_codes.append(f"INVALID_{field.upper()}")
+
+
+def _validate_decimal(
+    entity: ImportEntity,
+    value: object,
+    *,
+    positive: bool = False,
+    nonzero: bool = False,
+) -> None:
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        entity.error_codes.append("INVALID_QUANTITY")
+        return
+    if (
+        not parsed.is_finite()
+        or (positive and parsed <= 0)
+        or (nonzero and parsed == 0)
+        or abs(parsed) > Decimal("99999999999999.999999")
+        or max(0, -parsed.as_tuple().exponent) > 6
+    ):
+        entity.error_codes.append("INVALID_QUANTITY")
+
+
+def _validate_unit(entity: ImportEntity, value: object) -> None:
+    if value not in {"g", "kg", "ml", "l", "pcs"}:
+        entity.error_codes.append("INVALID_UNIT")
+
+
+def _validate_unit_compatibility(
+    entity: ImportEntity, unit: object, base_unit: object
+) -> None:
+    compatible_base = {"g": "g", "kg": "g", "ml": "ml", "l": "ml", "pcs": "pcs"}.get(
+        unit
+    )
+    if base_unit is not None and compatible_base is not None and compatible_base != base_unit:
+        entity.error_codes.append("INCOMPATIBLE_UNIT")
 
 
 def _validate_minor(entity: ImportEntity, field: str) -> None:

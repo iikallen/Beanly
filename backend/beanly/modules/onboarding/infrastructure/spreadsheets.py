@@ -206,8 +206,9 @@ def _xlsx_rows(content: bytes) -> dict[str, list[dict[str, object]]]:
         for row in raw_rows:
             if any(cell.data_type == "f" for cell in row):
                 raise ImportParseFailed("Formula cells are not accepted")
-        headers = [cell.value for cell in raw_rows[0]]
-        records = _records(headers, [[cell.value for cell in row] for row in raw_rows[1:]])
+        values = [[cell.value for cell in row] for row in raw_rows]
+        header_index = _first_header_row(values)
+        records = _records(values[header_index], values[header_index + 1 :])
         total += len(records)
         if total > MAX_ROWS:
             raise ImportParseFailed("Spreadsheet exceeds 10000 data rows")
@@ -227,9 +228,9 @@ def _xls_rows(content: bytes) -> dict[str, list[dict[str, object]]]:
     for sheet in workbook.sheets():
         if sheet.nrows == 0:
             continue
-        records = _records(
-            sheet.row_values(0), [sheet.row_values(row) for row in range(1, sheet.nrows)]
-        )
+        values = [sheet.row_values(row) for row in range(sheet.nrows)]
+        header_index = _first_header_row(values)
+        records = _records(values[header_index], values[header_index + 1 :])
         total += len(records)
         if total > MAX_ROWS:
             raise ImportParseFailed("Spreadsheet exceeds 10000 data rows")
@@ -237,6 +238,14 @@ def _xls_rows(content: bytes) -> dict[str, list[dict[str, object]]]:
     if not result:
         raise ImportParseFailed("Workbook contains no data")
     return result
+
+
+def _first_header_row(rows: list[list[object]]) -> int:
+    """Poster templates include a deliberately blank leading row."""
+    for index, row in enumerate(rows[:20]):
+        if sum(value not in (None, "") for value in row) >= 2:
+            return index
+    raise ImportParseFailed("Spreadsheet has no recognizable header row")
 
 
 def _records(headers: list[object], rows: list[list[object]]) -> list[dict[str, object]]:
@@ -322,7 +331,7 @@ def _beanly(sheets: dict[str, list[dict[str, object]]]) -> CanonicalImportDraft:
                     {
                         "variant_key": variant_key,
                         "location_name": str(row["location"]).strip(),
-                        "available": bool(row.get("available", True)),
+                        "available": _strict_bool(row.get("available"), default=True),
                         "price_minor": _major_to_minor(row.get("price")),
                     },
                     sort_order=order,
@@ -412,7 +421,9 @@ def _beanly(sheets: dict[str, list[dict[str, object]]]) -> CanonicalImportDraft:
                         "name": group_name,
                         "selection_type": _text(row, "selection type"),
                         "min_selections": 0,
-                        "max_selections": 10,
+                        "max_selections": (
+                            1 if _text(row, "selection type") == "SINGLE" else 10
+                        ),
                     },
                     sort_order=order,
                 )
@@ -447,14 +458,17 @@ def _beanly(sheets: dict[str, list[dict[str, object]]]) -> CanonicalImportDraft:
 
 
 def _poster(sheets: dict[str, list[dict[str, object]]]) -> CanonicalImportDraft:
-    rows = next((value for value in sheets.values() if value), [])
     entities: list[CanonicalImportEntity] = []
     categories: set[str] = set()
-    products: set[str] = set()
+    products: dict[str, str] = {}
+    variants: set[str] = set()
+    inventory: dict[str, tuple[str, str]] = {}
+    openings: set[str] = set()
+    recipe_groups: dict[str, dict[str, dict[str, object]]] = {}
     order = 0
-    for row in rows:
-        name = _text(row, "name")
-        category = _text(row, "category", default="Imported")
+
+    def ensure_category(category: str) -> str:
+        nonlocal order
         category_key = f"category:poster:{_slug(category)}"
         if category_key not in categories:
             categories.add(category_key)
@@ -464,10 +478,15 @@ def _poster(sheets: dict[str, list[dict[str, object]]]) -> CanonicalImportDraft:
                 )
             )
             order += 1
-        poster_id = row.get("posterid product_id") or row.get("product_id") or name
-        product_key = f"product:poster:{_slug(str(poster_id))}"
+        return category_key
+
+    def ensure_product(name: str, category: str, poster_id: str | None) -> str:
+        nonlocal order
+        identity = poster_id or name
+        product_key = f"product:poster:{_slug(identity)}"
         if product_key not in products:
-            products.add(product_key)
+            category_key = ensure_category(category)
+            products[product_key] = name
             entities.append(
                 CanonicalImportEntity(
                     ImportEntityType.PRODUCT,
@@ -476,38 +495,218 @@ def _poster(sheets: dict[str, list[dict[str, object]]]) -> CanonicalImportDraft:
                         "category_key": category_key,
                         "name": name,
                         "status": "DRAFT",
-                        "source_external_id": str(poster_id),
+                        "source_external_id": poster_id,
                     },
                     warning_codes=("POSTER_REAL_FIXTURE_UNVERIFIED",),
                     sort_order=order,
                 )
             )
             order += 1
-        modifier_id = row.get("posterid modificator_id") or row.get("modificator_id")
-        variant_external_id = modifier_id or f"base-{poster_id}"
+        return product_key
+
+    def ensure_variant(
+        product_key: str,
+        name: str,
+        external_id: str,
+        price: object,
+    ) -> str:
+        nonlocal order
+        variant_key = f"variant:poster:{_slug(product_key)}:{_slug(external_id)}"
+        if variant_key in variants:
+            return variant_key
+        variants.add(variant_key)
         entities.append(
             CanonicalImportEntity(
                 ImportEntityType.VARIANT,
-                f"variant:poster:{_slug(str(poster_id))}:{_slug(str(variant_external_id))}",
+                variant_key,
                 {
                     "product_key": product_key,
                     "name": name,
                     "sku": None,
-                    "price_minor": _major_to_minor(row.get("price")),
+                    "price_minor": _major_to_minor(price),
                     "is_default": not any(
                         value.entity_type is ImportEntityType.VARIANT
                         and value.payload.get("product_key") == product_key
                         for value in entities
                     ),
-                    "source_external_id": str(variant_external_id),
+                    "source_external_id": external_id,
                 },
                 sort_order=order,
             )
         )
         order += 1
+        return variant_key
+
+    def ensure_inventory(name: str, source_unit: str, sku: str | None = None) -> tuple[str, str]:
+        nonlocal order
+        base_unit, _ = _base_unit(source_unit)
+        identity = (sku or name).casefold()
+        existing = inventory.get(identity)
+        if existing:
+            if existing[1] != base_unit:
+                raise ImportParseFailed("Poster ingredient uses incompatible units")
+            return existing
+        item_key = f"inventory:poster:{_slug(sku or name)}"
+        inventory[identity] = (item_key, base_unit)
+        entities.append(
+            CanonicalImportEntity(
+                ImportEntityType.INVENTORY_ITEM,
+                item_key,
+                {"name": name, "sku": sku, "base_unit": base_unit},
+                warning_codes=("POSTER_REAL_FIXTURE_UNVERIFIED",),
+                sort_order=order,
+            )
+        )
+        order += 1
+        return item_key, base_unit
+
+    for rows in sheets.values():
+        for row in rows:
+            dish_name = _poster_value(row, "блюдо", "название блюда", "product_name")
+            ingredient_name = _poster_value(
+                row, "состав", "ингредиент", "название ингредиента", "ingredient_name"
+            )
+            if dish_name and ingredient_name:
+                category = _poster_value(row, "категория", "category") or "Imported"
+                poster_id = _poster_value(
+                    row,
+                    "posterid product_id (не менять!)",
+                    "posterid product_id",
+                    "product_id",
+                )
+                product_key = ensure_product(dish_name, category, poster_id)
+                variant_key = ensure_variant(
+                    product_key,
+                    dish_name,
+                    f"base-{poster_id or dish_name}",
+                    _poster_value(row, "цена", "price") or 0,
+                )
+                explicit_unit = _poster_value(row, "ед. изм.", "единица", "unit")
+                quantity_value = _poster_value(
+                    row, "брутто, г", "брутто", "нетто, г", "нетто", "quantity"
+                )
+                if quantity_value is None:
+                    raise ImportParseFailed("Poster recipe component quantity is required")
+                source_unit = explicit_unit or "g"
+                item_key, base_unit = ensure_inventory(ingredient_name, source_unit)
+                _, factor = _base_unit(source_unit)
+                quantity = _poster_decimal(quantity_value) * factor
+                components = recipe_groups.setdefault(variant_key, {})
+                component = components.setdefault(
+                    item_key,
+                    {"inventory_item_key": item_key, "quantity": Decimal(0), "unit": base_unit},
+                )
+                component["quantity"] = Decimal(str(component["quantity"])) + quantity
+                continue
+
+            unit = _poster_value(row, "unit", "ед. изм.", "единица", "единица измерения")
+            inventory_count = _poster_value(
+                row, "inventory count", "остаток", "количество", "quantity"
+            )
+            generic_name = _poster_value(
+                row, "name", "наименование", "название ингредиента", "ингредиент"
+            )
+            if generic_name and unit and inventory_count is not None:
+                sku = _poster_value(row, "sku", "артикул", "ingredient_sku")
+                item_key, base_unit = ensure_inventory(generic_name, unit, sku)
+                if item_key not in openings:
+                    openings.add(item_key)
+                    _, factor = _base_unit(unit)
+                    entities.append(
+                        CanonicalImportEntity(
+                            ImportEntityType.OPENING_BALANCE,
+                            f"opening:{item_key}",
+                            {
+                                "inventory_item_key": item_key,
+                                "quantity": _decimal_text(
+                                    _poster_decimal(inventory_count) * factor
+                                ),
+                                "unit": base_unit,
+                                "unit_cost_minor": _major_to_minor(
+                                    _poster_value(row, "value", "cost_price", "себестоимость")
+                                )
+                                if _poster_value(
+                                    row, "value", "cost_price", "себестоимость"
+                                )
+                                is not None
+                                else None,
+                                "unit_cost_base_factor": format(factor, "f"),
+                            },
+                            warning_codes=("POSTER_REAL_FIXTURE_UNVERIFIED",),
+                            sort_order=order,
+                        )
+                    )
+                    order += 1
+                continue
+
+            name = _poster_value(row, "name", "блюдо", "название", "название блюда")
+            if not name:
+                continue
+            category = _poster_value(row, "category", "категория") or "Imported"
+            poster_id = _poster_value(
+                row,
+                "posterid product_id (не менять!)",
+                "posterid product_id",
+                "product_id",
+            )
+            product_key = ensure_product(name, category, poster_id)
+            modifier_id = _poster_value(
+                row,
+                "posterid modificator_id (не менять!)",
+                "posterid modificator_id",
+                "modificator_id",
+            )
+            external_id = modifier_id or f"base-{poster_id or name}"
+            ensure_variant(
+                product_key,
+                name,
+                external_id,
+                _poster_value(row, "price", "цена", "цена продажи") or 0,
+            )
+
+    for variant_key, by_item in recipe_groups.items():
+        components = [
+            {
+                **component,
+                "quantity": _decimal_text(component["quantity"]),
+            }
+            for component in by_item.values()
+        ]
+        entities.append(
+            CanonicalImportEntity(
+                ImportEntityType.RECIPE,
+                f"recipe:{variant_key}",
+                {"variant_key": variant_key, "components": components, "review_required": True},
+                warning_codes=(
+                    "DRAFT_RECIPE_REVIEW_REQUIRED",
+                    "POSTER_REAL_FIXTURE_UNVERIFIED",
+                ),
+                sort_order=order,
+            )
+        )
+        order += 1
     if not entities:
-        raise ImportParseFailed("Poster export has no recognized product rows")
+        raise ImportParseFailed("Poster export has no recognized rows")
     return CanonicalImportDraft("Poster export", None, tuple(entities))
+
+
+def _poster_value(row: dict[str, object], *aliases: str) -> str | None:
+    for alias in aliases:
+        value = row.get(_header(alias))
+        if value not in (None, ""):
+            return str(value).strip()
+    return None
+
+
+def _poster_decimal(value: object) -> Decimal:
+    text = str(value).strip().casefold().replace(" ", "").replace(",", ".")
+    match = re.match(r"^[+]?(\d+(?:\.\d+)?)", text)
+    if not match:
+        raise ImportParseFailed("Poster quantity must be a positive decimal")
+    amount = Decimal(match.group(1))
+    if not amount.is_finite() or amount <= 0:
+        raise ImportParseFailed("Poster quantity must be a positive decimal")
+    return amount
 
 
 def _validate_xlsx_archive(content: bytes) -> None:
@@ -555,6 +754,22 @@ def _text(row: dict[str, object], key: str, default: str | None = None) -> str:
 def _optional(value: object) -> str | None:
     normalized = str(value or "").strip()
     return normalized or None
+
+
+def _strict_bool(value: object, *, default: bool) -> bool:
+    if value in (None, ""):
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in {0, 1}:
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no"}:
+            return False
+    raise ImportParseFailed("Boolean fields must use true/false, yes/no, or 1/0")
 
 
 def _slug(value: str) -> str:

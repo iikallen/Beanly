@@ -134,6 +134,80 @@ export function readyProductIds(run: OnboardingImportRun) {
     .map((entity) => entity.target_id as string);
 }
 
+export type ImportProductReadiness = {
+  productId: string;
+  productName: string;
+  ready: boolean;
+  reasons: string[];
+};
+
+export function importProductReadiness(
+  run: OnboardingImportRun,
+  starterRecipesReviewed = false,
+): ImportProductReadiness[] {
+  const entities = run.entities.filter((entity) => entity.resolution !== "SKIP");
+  const variants = entities.filter((entity) => entity.entity_type === "VARIANT" && entity.target_id);
+  const locationPrices = entities.filter((entity) => entity.entity_type === "LOCATION_PRICE");
+  const recipes = entities.filter((entity) => entity.entity_type === "RECIPE");
+
+  return entities
+    .filter((entity) => entity.entity_type === "PRODUCT" && entity.target_id)
+    .map((product) => {
+      const productVariants = variants.filter((variant) => variant.payload.product_key === product.source_key);
+      const reasons: string[] = [];
+      if (productVariants.length === 0) reasons.push("VARIANT_REQUIRED");
+      if (productVariants.some((variant) => {
+        const locationPrice = locationPrices.find((price) => price.payload.variant_key === variant.source_key);
+        return !positiveMinor(locationPrice?.payload.price_minor ?? variant.payload.price_minor);
+      })) reasons.push("PRICE_REQUIRED");
+      const productRecipes = recipes.filter((recipe) =>
+        productVariants.some((variant) => recipe.payload.variant_key === variant.source_key),
+      );
+      if (productRecipes.some((recipe) => recipeComponents(recipe).length === 0)) {
+        reasons.push("VALID_RECIPE_REQUIRED");
+      }
+      if (!starterRecipesReviewed && productRecipes.some((recipe) =>
+        recipe.warning_codes.includes("DRAFT_RECIPE_REVIEW_REQUIRED"),
+      )) reasons.push("STARTER_RECIPE_REVIEW_REQUIRED");
+      return {
+        productId: product.target_id as string,
+        productName: entityDisplayName(product),
+        ready: reasons.length === 0,
+        reasons,
+      };
+    });
+}
+
+export function recipeComponents(entity: OnboardingImportEntity) {
+  const components = entity.payload.components;
+  if (!Array.isArray(components)) return [];
+  return components.flatMap((component) => {
+    if (!component || typeof component !== "object") return [];
+    const value = component as Record<string, unknown>;
+    const inventoryItemKey = String(value.inventory_item_key ?? "").trim();
+    const quantity = String(value.quantity ?? "").trim();
+    const unit = String(value.unit ?? "").trim();
+    return inventoryItemKey && quantity && unit ? [{ inventoryItemKey, quantity, unit }] : [];
+  });
+}
+
+export function readinessReasonLabel(reason: string) {
+  return ({
+    VARIANT_REQUIRED: "Variant required",
+    PRICE_REQUIRED: "Positive price required",
+    VALID_RECIPE_REQUIRED: "Valid recipe required",
+    STARTER_RECIPE_REVIEW_REQUIRED: "Starter recipe review required",
+  } as Record<string, string>)[reason] ?? reason.replaceAll("_", " ").toLowerCase();
+}
+
+function positiveMinor(value: unknown) {
+  try {
+    return BigInt(String(value)) > BigInt(0);
+  } catch {
+    return false;
+  }
+}
+
 export function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
   return `${Math.round(bytes / (1024 * 1024))} MB`;

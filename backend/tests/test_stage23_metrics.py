@@ -119,6 +119,7 @@ async def test_duplicate_payment_event_records_completion_metric_and_audit_once(
     repository = _Repository(_state(occurred_at))
     completed = _InstrumentSpy()
     first_sale = _InstrumentSpy()
+    pos_ready = _InstrumentSpy()
     monkeypatch.setattr(
         "beanly.modules.onboarding.application.onboarding_service.metrics.onboarding_completed",
         completed,
@@ -126,6 +127,10 @@ async def test_duplicate_payment_event_records_completion_metric_and_audit_once(
     monkeypatch.setattr(
         "beanly.modules.onboarding.application.onboarding_service.metrics.onboarding_time_to_first_sale",
         first_sale,
+    )
+    monkeypatch.setattr(
+        "beanly.modules.onboarding.application.onboarding_service.metrics.onboarding_time_to_pos_ready",
+        pos_ready,
     )
     service = OnboardingService(repository, _Gateway(pos_ready=False))
     audit = _AuditSpy(repository.trace)
@@ -149,6 +154,7 @@ async def test_duplicate_payment_event_records_completion_metric_and_audit_once(
     assert repository.state.completed_at == occurred_at
     assert completed.values == [1]
     assert len(first_sale.values) == 1
+    assert len(pos_ready.values) == 1
     assert len(audit.calls) == 1
     assert audit.calls[0]["action"] == "ONBOARDING_COMPLETED"
     assert audit.calls[0]["metadata"] == {"source_event_id": str(envelope.id)}

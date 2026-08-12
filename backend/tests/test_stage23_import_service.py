@@ -1,3 +1,4 @@
+from dataclasses import replace
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -73,6 +74,9 @@ class ApplySpy:
             raise self.error
 
     async def ensure_location_access(self, _context, _location_id) -> None:
+        return None
+
+    async def resolve_preview(self, _context, _entities) -> None:
         return None
 
 
@@ -316,6 +320,70 @@ async def test_modifier_inventory_deltas_are_canonical_references() -> None:
 
 
 @pytest.mark.anyio
+async def test_single_modifier_group_with_one_max_selection_is_valid() -> None:
+    repository = MemoryRepository()
+    service = ImportService(repository, ApplySpy())
+    entities = _base_entities()
+    entities.extend(
+        (
+            CanonicalImportEntity(
+                ImportEntityType.MODIFIER_GROUP,
+                "modifier-group:milk",
+                {
+                    "variant_key": "variant:latte:350",
+                    "name": "Milk",
+                    "selection_type": "SINGLE",
+                    "min_selections": 0,
+                    "max_selections": 1,
+                },
+                sort_order=4,
+            ),
+            CanonicalImportEntity(
+                ImportEntityType.MODIFIER_OPTION,
+                "modifier:regular",
+                {
+                    "group_key": "modifier-group:milk",
+                    "name": "Regular",
+                    "price_delta_minor": "0",
+                    "inventory_deltas": [],
+                },
+                sort_order=5,
+            ),
+        )
+    )
+
+    run = await _create(service, _context(), entities)
+
+    assert run.status is ImportStatus.READY
+    assert not run.entities[-2].error_codes
+
+
+@pytest.mark.anyio
+async def test_patched_entity_missing_required_reference_cannot_become_ready() -> None:
+    repository = MemoryRepository()
+    service = ImportService(repository, ApplySpy())
+    context = _context()
+    run = await _create(service, context, _base_entities())
+    product = next(
+        entity for entity in run.entities if entity.entity_type is ImportEntityType.PRODUCT
+    )
+
+    patched = await service.patch_entity(
+        context,
+        run.id,
+        product.id,
+        resolution=ImportResolution.CREATE,
+        target_id=None,
+        payload={"name": "Latte"},
+    )
+    assert "CATEGORY_KEY_REQUIRED" in patched.error_codes
+    validated = await service.validate(context, run.id)
+
+    assert validated.status is ImportStatus.NEEDS_REVIEW
+    assert product.error_codes
+
+
+@pytest.mark.anyio
 async def test_ai_draft_cannot_introduce_restricted_business_facts() -> None:
     repository = MemoryRepository()
     service = ImportService(repository, ApplySpy())
@@ -342,6 +410,35 @@ async def test_ai_draft_cannot_introduce_restricted_business_facts() -> None:
     )
     assert run.status is ImportStatus.NEEDS_REVIEW
     assert run.entities[-1].error_codes
+
+
+@pytest.mark.anyio
+async def test_low_confidence_ai_entity_requires_explicit_review() -> None:
+    repository = MemoryRepository()
+    service = ImportService(repository, ApplySpy())
+    context = _context()
+    entities = _base_entities()[:3]
+    entities[1] = replace(entities[1], warning_codes=("AI_LOW_CONFIDENCE",))
+    run = await _create(
+        service,
+        context,
+        entities,
+        source_type=ImportSourceType.AI_EXTRACTION,
+    )
+
+    assert (await service.validate(context, run.id)).status is ImportStatus.NEEDS_REVIEW
+    product = run.entities[1]
+    await service.patch_entity(
+        context,
+        run.id,
+        product.id,
+        resolution=ImportResolution.CREATE,
+        target_id=None,
+        payload=product.payload,
+    )
+
+    assert "AI_LOW_CONFIDENCE" not in product.warning_codes
+    assert (await service.validate(context, run.id)).status is ImportStatus.READY
 
 
 @pytest.mark.anyio

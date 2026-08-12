@@ -89,6 +89,28 @@ class SqlAlchemyImportApplyGateway:
             if value.is_active
         )
 
+    async def resolve_preview(
+        self, context: TenantContext, entities: list[ImportEntity]
+    ) -> None:
+        for entity in entities:
+            if entity.resolution is not ImportResolution.CREATE:
+                continue
+            if entity.entity_type is ImportEntityType.CATEGORY:
+                name = _preview_text(entity.payload.get("name"))
+                if not name:
+                    continue
+                target = await self.session.scalar(
+                    select(MenuCategoryModel.id).where(
+                        MenuCategoryModel.organization_id == context.organization_id,
+                        func.lower(MenuCategoryModel.name) == name.casefold(),
+                    )
+                )
+                if target is not None:
+                    entity.resolution = ImportResolution.MATCH_EXISTING
+                    entity.target_id = target
+            elif entity.entity_type is ImportEntityType.INVENTORY_ITEM:
+                await self._resolve_inventory_preview(context, entity)
+
     async def apply(self, context: TenantContext, run: ImportRun) -> None:
         await self._assert_location(context.organization_id, run.location_id)
         now = datetime.now(UTC)
@@ -121,9 +143,15 @@ class SqlAlchemyImportApplyGateway:
                 targets[entity.source_key] = entity.target_id
                 continue
             if entity.entity_type is ImportEntityType.CATEGORY:
-                target, _created = await self._category(context, entity, now)
+                target, created = await self._category(context, entity, now)
+                if not created:
+                    entity.resolution = ImportResolution.MATCH_EXISTING
+                    entity.target_id = target
             elif entity.entity_type is ImportEntityType.INVENTORY_ITEM:
-                target = await self._inventory_item(context, entity, now)
+                target, created = await self._inventory_item(context, entity, now)
+                if not created:
+                    entity.resolution = ImportResolution.MATCH_EXISTING
+                    entity.target_id = target
             elif entity.entity_type is ImportEntityType.PRODUCT:
                 category_id = _reference(targets, entity, "category_key")
                 target = uuid4()
@@ -443,7 +471,7 @@ class SqlAlchemyImportApplyGateway:
 
     async def _inventory_item(
         self, context: TenantContext, entity: ImportEntity, now: datetime
-    ) -> UUID:
+    ) -> tuple[UUID, bool]:
         name = _name(entity.payload, "name", 150)
         sku = _optional_text(entity.payload.get("sku"), 100)
         unit = str(entity.payload.get("base_unit"))
@@ -470,7 +498,7 @@ class SqlAlchemyImportApplyGateway:
             if same_name and existing is None:
                 raise ImportValidationFailed("INVENTORY_NAME_UNIT_CONFLICT")
         if existing:
-            return existing.id
+            return existing.id, False
         target = uuid4()
         await self.inventory_repository.add_item(
             InventoryItem(
@@ -484,7 +512,44 @@ class SqlAlchemyImportApplyGateway:
                 now,
             )
         )
-        return target
+        return target, True
+
+    async def _resolve_inventory_preview(
+        self, context: TenantContext, entity: ImportEntity
+    ) -> None:
+        name = _preview_text(entity.payload.get("name"))
+        unit = entity.payload.get("base_unit")
+        sku = _preview_text(entity.payload.get("sku"))
+        if not name or unit not in {"g", "ml", "pcs"}:
+            return
+        if sku:
+            by_sku = await self.session.scalar(
+                select(InventoryItemModel).where(
+                    InventoryItemModel.organization_id == context.organization_id,
+                    InventoryItemModel.sku == sku,
+                )
+            )
+            if by_sku is not None:
+                if by_sku.base_unit != unit:
+                    entity.error_codes.append("INVENTORY_SKU_UNIT_CONFLICT")
+                else:
+                    entity.resolution = ImportResolution.MATCH_EXISTING
+                    entity.target_id = by_sku.id
+                return
+        same_name = list(
+            await self.session.scalars(
+                select(InventoryItemModel).where(
+                    InventoryItemModel.organization_id == context.organization_id,
+                    func.lower(InventoryItemModel.name) == name.casefold(),
+                )
+            )
+        )
+        existing = next((value for value in same_name if value.base_unit == unit), None)
+        if existing is not None:
+            entity.resolution = ImportResolution.MATCH_EXISTING
+            entity.target_id = existing.id
+        elif same_name:
+            entity.error_codes.append("INVENTORY_NAME_UNIT_CONFLICT")
 
     async def _recipe(
         self,
@@ -675,6 +740,13 @@ def _name(payload: dict[str, object], field: str, limit: int) -> str:
     if not value or len(value) > limit:
         raise ImportValidationFailed(f"Invalid {field}")
     return value
+
+
+def _preview_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
 
 
 def _optional_text(value: object, limit: int) -> str | None:

@@ -3131,9 +3131,19 @@ button, input, select { font: inherit; }
 .setup-entity-controls select { grid-column: 1 / -1; }
 .setup-entity-controls button { min-height: 42px; padding: 0 10px; border: 1px solid #b9c9bd; border-radius: 5px; background: #fff; color: var(--primary); font-weight: 800; cursor: pointer; }
 .setup-recipe-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-top: 18px; }
-.setup-recipe-list label { display: flex; align-items: flex-start; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: 7px; }
-.setup-recipe-list label > span { display: grid; gap: 4px; }
+.setup-recipe-list article { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: 7px; }
+.setup-recipe-list ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.setup-recipe-list li { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 13px; }
+.setup-recipe-list li > span { min-width: 0; overflow-wrap: anywhere; text-transform: capitalize; }
+.setup-recipe-list li > strong { flex: 0 0 auto; color: var(--text); }
 .setup-recipe-list small { color: var(--muted); line-height: 1.4; }
+.setup-readiness-list { display: grid; gap: 8px; margin-top: 18px; }
+.setup-readiness-list article { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border: 1px solid #e4cd96; border-radius: 7px; background: #fffaf0; }
+.setup-readiness-list article.is-ready { border-color: #b9d3bf; background: #f2f8f3; }
+.setup-readiness-list article > div { display: grid; gap: 4px; }
+.setup-readiness-list small { color: var(--muted); }
+.setup-readiness-list svg { width: 18px; height: 18px; color: #8f6711; }
+.setup-readiness-list .is-ready svg { color: var(--primary); }
 .setup-state { min-height: 320px; display: grid; place-items: center; align-content: center; gap: 8px; padding: 30px; color: var(--muted); text-align: center; }
 .setup-state strong { color: var(--text); font-size: 18px; }
 .setup-state.is-error { color: var(--danger); }

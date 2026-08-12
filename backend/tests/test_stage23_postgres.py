@@ -146,6 +146,7 @@ async def _workspace(client: AsyncClient, email: str):
 def _workbook(
     *,
     inventory_unit: str | None = None,
+    inventory_sku: str | None = "MILK",
     opening_quantity=None,
     unit_cost_kzt=500,
     recipe_quantity=None,
@@ -159,7 +160,7 @@ def _workbook(
     if inventory_unit:
         inventory = workbook.create_sheet("Inventory")
         inventory.append(["Name", "SKU", "Unit", "Opening Quantity", "Unit Cost KZT"])
-        inventory.append(["Milk", "MILK", inventory_unit, opening_quantity, unit_cost_kzt])
+        inventory.append(["Milk", inventory_sku, inventory_unit, opening_quantity, unit_cost_kzt])
     if recipe_quantity is not None and recipe_unit is not None:
         recipes = workbook.create_sheet("Recipes")
         recipes.append(["Product", "Variant", "Inventory Item", "Quantity", "Unit"])
@@ -239,7 +240,7 @@ async def test_postgres_bootstrap_and_apply_are_concurrently_idempotent(
 
 
 @pytest.mark.anyio
-async def test_postgres_unit_conflict_rolls_back_the_entire_apply(
+async def test_postgres_unit_conflict_blocks_apply_without_business_writes(
     stage23_postgres_client,
 ) -> None:
     client, sessions = stage23_postgres_client
@@ -260,6 +261,7 @@ async def test_postgres_unit_conflict_rolls_back_the_entire_apply(
         location_id,
         _workbook(inventory_unit="ml"),
     )
+    assert run["status"] == "NEEDS_REVIEW"
     response = await client.post(
         f"/api/v1/onboarding/imports/{run['id']}/apply", headers=headers
     )
@@ -285,7 +287,114 @@ async def test_postgres_unit_conflict_rolls_back_the_entire_apply(
                 OnboardingImportRunModel.id == UUID(run["id"])
             )
         )
-    assert status == "FAILED"
+    assert status == "NEEDS_REVIEW"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("email", "existing_name", "existing_sku", "workbook_sku"),
+    (
+        ("stage23-preview-sku-match@example.com", "Whole Milk", "MILK", "MILK"),
+        ("stage23-preview-name-match@example.com", "Milk", None, None),
+    ),
+)
+async def test_postgres_preview_matches_existing_inventory_by_exact_sku_and_unit(
+    stage23_postgres_client,
+    email: str,
+    existing_name: str,
+    existing_sku: str | None,
+    workbook_sku: str | None,
+) -> None:
+    client, sessions = stage23_postgres_client
+    headers, organization_id, location_id = await _workspace(
+        client, email
+    )
+    existing = await client.post(
+        "/api/v1/inventory/items",
+        headers=headers,
+        json={"name": existing_name, "sku": existing_sku, "base_unit": "ml"},
+    )
+    assert existing.status_code == 201, existing.text
+
+    run = await _upload(
+        client,
+        headers,
+        location_id,
+        _workbook(inventory_unit="ml", inventory_sku=workbook_sku),
+    )
+    item = next(value for value in run["entities"] if value["entity_type"] == "INVENTORY_ITEM")
+
+    assert run["status"] == "READY"
+    assert item["resolution"] == "MATCH_EXISTING"
+    assert item["target_id"] == existing.json()["id"]
+    async with sessions() as session:
+        assert await session.scalar(
+            select(func.count()).select_from(InventoryItemModel).where(
+                InventoryItemModel.organization_id == organization_id
+            )
+        ) == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("email", "existing_name", "existing_sku", "workbook_sku", "error"),
+    (
+        (
+            "stage23-preview-sku-conflict@example.com",
+            "Whole Milk",
+            "MILK",
+            "MILK",
+            "INVENTORY_SKU_UNIT_CONFLICT",
+        ),
+        (
+            "stage23-preview-name-conflict@example.com",
+            "Milk",
+            None,
+            None,
+            "INVENTORY_NAME_UNIT_CONFLICT",
+        ),
+    ),
+)
+async def test_postgres_preview_blocks_existing_inventory_unit_conflict_before_apply(
+    stage23_postgres_client,
+    email: str,
+    existing_name: str,
+    existing_sku: str | None,
+    workbook_sku: str | None,
+    error: str,
+) -> None:
+    client, sessions = stage23_postgres_client
+    headers, organization_id, location_id = await _workspace(
+        client, email
+    )
+    existing = await client.post(
+        "/api/v1/inventory/items",
+        headers=headers,
+        json={"name": existing_name, "sku": existing_sku, "base_unit": "pcs"},
+    )
+    assert existing.status_code == 201, existing.text
+
+    run = await _upload(
+        client,
+        headers,
+        location_id,
+        _workbook(inventory_unit="ml", inventory_sku=workbook_sku),
+    )
+    item = next(value for value in run["entities"] if value["entity_type"] == "INVENTORY_ITEM")
+
+    assert run["status"] == "NEEDS_REVIEW"
+    assert error in item["error_codes"]
+    async with sessions() as session:
+        assert await session.scalar(
+            select(func.count()).select_from(ProductModel).where(
+                ProductModel.organization_id == organization_id
+            )
+        ) == 0
+        assert await session.scalar(
+            select(func.count()).select_from(InventoryItemModel).where(
+                InventoryItemModel.organization_id == organization_id
+            )
+        ) == 1
 
 
 @pytest.mark.anyio

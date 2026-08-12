@@ -121,8 +121,8 @@ async def capabilities(
             reason=None if extractor.available else "AI_EXTRACTION_UNAVAILABLE",
         ),
         poster=PosterCapabilityResponse(
-            available=True,
-            reason="Real anonymized Poster fixture has not been verified",
+            available=False,
+            reason="A real anonymized Poster export has not been verified",
             real_fixture_verified=False,
             extensions=[".xls", ".xlsx"],
         ),

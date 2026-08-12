@@ -24,6 +24,7 @@ import { useOnboardingPermissions } from "@/hooks/use-onboarding-permissions";
 import {
   ApiError,
   api,
+  type OnboardingActivationResult,
   type OnboardingCapabilities,
   type OnboardingImportInspect,
   type OnboardingImportEntity,
@@ -45,6 +46,9 @@ import {
   IMPORT_ENTITY_LABELS,
   IMPORT_STATUS_LABELS,
   initialGenericImportMapping,
+  importProductReadiness,
+  recipeComponents,
+  readinessReasonLabel,
   readyProductIds,
   runNeedsInventoryWrite,
 } from "@/lib/onboarding";
@@ -88,7 +92,7 @@ export default function SetupPage() {
   const [resolutionDrafts, setResolutionDrafts] = useState<Record<string, OnboardingImportResolution>>({});
   const [fieldDrafts, setFieldDrafts] = useState<Record<string, string>>({});
   const [priceDrafts, setPriceDrafts] = useState<Record<string, string>>({});
-  const [reviewedRecipes, setReviewedRecipes] = useState<Set<string>>(new Set());
+  const [activationResult, setActivationResult] = useState<OnboardingActivationResult | null>(null);
   const [warehouseName, setWarehouseName] = useState("Main Stock");
   const [registerName, setRegisterName] = useState("Main POS");
   const scopeKey = `${currentOrganization?.id ?? ""}:${currentLocation?.id ?? ""}`;
@@ -143,7 +147,7 @@ export default function SetupPage() {
       setResolutionDrafts({});
       setFieldDrafts({});
       setPriceDrafts({});
-      setReviewedRecipes(new Set());
+      setActivationResult(null);
       setSelectedTemplate(null);
       setTemplateOptions(DEFAULT_TEMPLATE_OPTIONS);
       setUploadSource("AUTO");
@@ -186,6 +190,7 @@ export default function SetupPage() {
       const next = await api.getOnboardingImport(run.id, currentOrganization.id, accessToken);
       if (operationId !== operationRequestRef.current || requestedScope !== scopeRef.current) return;
       setSelectedRun(next);
+      setActivationResult(null);
       seedRunDrafts(next, setPriceDrafts, setFieldDrafts);
       setView("run");
     } catch (caught) {
@@ -214,6 +219,7 @@ export default function SetupPage() {
       }, currentOrganization.id, accessToken);
       if (operationId !== operationRequestRef.current || requestedScope !== scopeRef.current) return;
       setSelectedRun(run);
+      setActivationResult(null);
       seedRunDrafts(run, setPriceDrafts, setFieldDrafts);
       setImports((current) => [run, ...current.filter((item) => item.id !== run.id)]);
       setView("run");
@@ -285,6 +291,7 @@ export default function SetupPage() {
       }, currentOrganization.id, accessToken);
       if (operationId !== operationRequestRef.current || requestedScope !== scopeRef.current) return;
       setSelectedRun(run);
+      setActivationResult(null);
       seedRunDrafts(run, setPriceDrafts, setFieldDrafts);
       setImports((current) => [run, ...current.filter((item) => item.id !== run.id)]);
       setView("run");
@@ -354,6 +361,7 @@ export default function SetupPage() {
         : await api.importAiMenuUrl({ client_import_id: clientImportId, location_id: currentLocation.id, public_menu_url: aiUrl.trim() }, currentOrganization.id, accessToken);
       if (operationId !== operationRequestRef.current || requestedScope !== scopeRef.current) return;
       setSelectedRun(run);
+      setActivationResult(null);
       seedRunDrafts(run, setPriceDrafts, setFieldDrafts);
       setImports((current) => [run, ...current.filter((item) => item.id !== run.id)]);
       setView("run");
@@ -467,10 +475,6 @@ export default function SetupPage() {
     if (!selectedRun || !accessToken || !currentOrganization || !canApply) return;
     const productIds = readyProductIds(selectedRun);
     const recipes = selectedRun.entities.filter((entity) => entity.entity_type === "RECIPE" && entity.resolution !== "SKIP");
-    if (recipes.some((recipe) => !reviewedRecipes.has(recipe.id))) {
-      setError("Review every starter recipe before activation.");
-      return;
-    }
     const operationId = ++operationRequestRef.current;
     const requestedScope = scopeRef.current;
     setWorking(true);
@@ -478,10 +482,11 @@ export default function SetupPage() {
     try {
       const result = await api.activateReadyOnboardingProducts(selectedRun.id, {
         product_ids: productIds,
-        confirm_starter_recipes_reviewed: recipes.length === 0 || recipes.every((recipe) => reviewedRecipes.has(recipe.id)),
+        confirm_starter_recipes_reviewed: recipes.length > 0,
       }, currentOrganization.id, accessToken);
       if (operationId !== operationRequestRef.current || requestedScope !== scopeRef.current) return;
       setNotice(`${result.activated_count} ready ${result.activated_count === 1 ? "product" : "products"} activated.`);
+      setActivationResult(result);
       await load();
     } catch (caught) {
       if (operationId === operationRequestRef.current && requestedScope === scopeRef.current) {
@@ -540,8 +545,8 @@ export default function SetupPage() {
     selectedRun && permissions.canWrite && permissions.canWriteMenu &&
     (!runNeedsInventoryWrite(selectedRun) || permissions.canWriteInventory),
   );
-  const activeImports = imports.filter((run) =>
-    run.location_id === currentLocation?.id && !["APPLIED", "CANCELLED"].includes(run.status),
+  const resumableImports = imports.filter((run) =>
+    run.location_id === currentLocation?.id && run.status !== "CANCELLED",
   );
   const needsBootstrap = Boolean(status && (
     status.steps.warehouse?.status !== "COMPLETE" || status.steps.register?.status !== "COMPLETE"
@@ -567,7 +572,7 @@ export default function SetupPage() {
         <>
           {status?.status === "COMPLETED" && <section className="setup-complete"><Check aria-hidden="true" /><div><h2>Beanly setup is already complete</h2><p>You can still use imports to update this organization. Imported products always start as drafts.</p></div><Link href="/app/pos">Open POS</Link></section>}
           {needsBootstrap && <form className="setup-bootstrap" onSubmit={bootstrapWorkspace}><div><p className="setup-eyebrow">Business basics</p><h2>Create the first stock and POS points</h2><p>This idempotent step reuses existing resources and never creates duplicate defaults.</p></div><label><span>Warehouse name</span><input required maxLength={150} value={warehouseName} onChange={(event) => setWarehouseName(event.target.value)} /></label><label><span>Register name</span><input required maxLength={150} value={registerName} onChange={(event) => setRegisterName(event.target.value)} /></label><button className="setup-primary" type="submit" disabled={working || !permissions.canWrite}>{working ? <LoaderCircle className="is-spinning" /> : <Check />}{permissions.canWrite ? "Prepare workspace" : "Write access required"}</button></form>}
-          {activeImports.length > 0 && <section className="setup-resume"><div className="setup-section-heading"><div><p className="setup-eyebrow">Resume</p><h2>Continue an import</h2></div><span>{activeImports.length} in progress</span></div><div className="setup-run-list">{activeImports.map((run) => <button type="button" key={run.id} onClick={() => void openRun(run)}><span><strong>{run.source_name}</strong><small>{run.entity_count} entities · {run.error_count} errors · {run.warning_count} warnings · {IMPORT_STATUS_LABELS[run.status]}</small></span><ChevronRight aria-hidden="true" /></button>)}</div></section>}
+          {resumableImports.length > 0 && <section className="setup-resume"><div className="setup-section-heading"><div><p className="setup-eyebrow">Resume</p><h2>Continue or review an import</h2></div><span>{resumableImports.length} available</span></div><div className="setup-run-list">{resumableImports.map((run) => <button type="button" key={run.id} onClick={() => void openRun(run)}><span><strong>{run.source_name}</strong><small>{run.entity_count} entities · {run.error_count} errors · {run.warning_count} warnings · {IMPORT_STATUS_LABELS[run.status]}</small></span><ChevronRight aria-hidden="true" /></button>)}</div></section>}
           <section className="setup-start"><div className="setup-section-heading"><div><p className="setup-eyebrow">Menu</p><h2>How do you want to create your menu?</h2><p>Nothing is written to the live menu until you review and apply an import.</p></div></div><div className="setup-choice-grid">
             <Choice icon={<Coffee />} title="Beanly template" copy="Start with a versioned coffee-shop menu and optional draft recipes." disabled={!permissions.canImport} onClick={() => setView("template")} />
             <Choice icon={<FileSpreadsheet />} title="Excel / CSV / Poster" copy="Inspect columns, map unfamiliar headers, then review every entity and match explicitly." disabled={!permissions.canImport} onClick={() => setView("import")} />
@@ -581,7 +586,7 @@ export default function SetupPage() {
       {view === "template" && <TemplateView templates={templates} selected={selectedTemplate} options={templateOptions} disabled={!permissions.canImport || working} onBack={() => setView("overview")} onSelect={setSelectedTemplate} onOptions={setTemplateOptions} onSubmit={previewTemplate} />}
       {view === "import" && <ImportView capabilities={capabilities} source={uploadSource} file={uploadFile} inspection={inspection} mapping={columnMapping} disabled={!permissions.canImport || working} onBack={() => setView("overview")} onSource={(source) => { setUploadSource(source); setInspection(null); setColumnMapping({}); }} onFile={(file) => { setUploadFile(file); setInspection(null); setColumnMapping({}); }} onMapping={(source, target) => setColumnMapping((current) => { const next = { ...current }; if (target) next[source] = target; else delete next[source]; return next; })} onSubmit={inspection ? uploadImport : inspectImport} onDownload={() => void downloadSpreadsheet()} />}
       {view === "ai" && capabilities?.ai.available && <AiImportView source={aiSource} file={aiFile} url={aiUrl} disabled={!permissions.canImport || working} onBack={() => setView("overview")} onSource={setAiSource} onFile={setAiFile} onUrl={setAiUrl} onSubmit={importAiMenu} />}
-      {view === "run" && selectedRun && <RunView run={selectedRun} currency={currentOrganization?.currency_code ?? "KZT"} working={working} canImport={permissions.canImport} canApply={canApply} targetDrafts={targetDrafts} resolutionDrafts={resolutionDrafts} fieldDrafts={fieldDrafts} priceDrafts={priceDrafts} reviewedRecipes={reviewedRecipes} onBack={() => { setView("overview"); setSelectedRun(null); }} onTargetDraft={(id, value) => setTargetDrafts((current) => ({ ...current, [id]: value }))} onFieldDraft={(id, value) => setFieldDrafts((current) => ({ ...current, [id]: value }))} onPriceDraft={(id, value) => setPriceDrafts((current) => ({ ...current, [id]: value }))} onReviewRecipe={(id, checked) => setReviewedRecipes((current) => { const next = new Set(current); if (checked) next.add(id); else next.delete(id); return next; })} onResolution={(entity, resolution) => void updateEntity(entity, resolution)} onSaveCorrection={(entity) => void saveEntityCorrection(entity)} onValidate={() => void validateRun()} onSavePrices={() => void savePrices()} onApply={() => void applyRun()} onCancel={() => void cancelRun()} onResume={() => void resumeRun()} onActivate={() => void activateProducts()} />}
+      {view === "run" && selectedRun && <RunView run={selectedRun} currency={currentOrganization?.currency_code ?? "KZT"} working={working} canImport={permissions.canImport} canApply={canApply} activationResult={activationResult} targetDrafts={targetDrafts} resolutionDrafts={resolutionDrafts} fieldDrafts={fieldDrafts} priceDrafts={priceDrafts} onBack={() => { setView("overview"); setSelectedRun(null); setActivationResult(null); }} onTargetDraft={(id, value) => setTargetDrafts((current) => ({ ...current, [id]: value }))} onFieldDraft={(id, value) => setFieldDrafts((current) => ({ ...current, [id]: value }))} onPriceDraft={(id, value) => setPriceDrafts((current) => ({ ...current, [id]: value }))} onResolution={(entity, resolution) => void updateEntity(entity, resolution)} onSaveCorrection={(entity) => void saveEntityCorrection(entity)} onValidate={() => void validateRun()} onSavePrices={() => void savePrices()} onApply={() => void applyRun()} onCancel={() => void cancelRun()} onResume={() => void resumeRun()} onActivate={() => void activateProducts()} />}
     </div>
   );
 }
@@ -612,12 +617,17 @@ function AiImportView({ source, file, url, disabled, onBack, onSource, onFile, o
   return <form className="setup-panel" onSubmit={onSubmit}><button className="setup-back" type="button" onClick={onBack}><ArrowLeft aria-hidden="true" />Setup choices</button><div className="setup-section-heading"><div><p className="setup-eyebrow">Local AI extraction</p><h2>Extract a draft menu</h2><p>Use a clear menu image, PDF, or a public webpage. No OpenAI key is required.</p></div></div><fieldset className="setup-source"><legend>Menu source</legend><label><input type="radio" name="ai-source" checked={source === "file"} onChange={() => onSource("file")} /><span><strong>Image or PDF</strong><small>JPEG, PNG, WebP, or PDF up to 10 MB.</small></span></label><label><input type="radio" name="ai-source" checked={source === "url"} onChange={() => onSource("url")} /><span><strong>Public URL</strong><small>Only a publicly reachable HTTP or HTTPS menu page.</small></span></label></fieldset>{source === "file" ? <label className="setup-dropzone"><Upload aria-hidden="true" /><strong>{file ? file.name : "Choose a menu image or PDF"}</strong><small>{file ? `${formatBytes(file.size)} selected` : "Maximum 10 MB. The source file is not stored by Beanly."}</small><input type="file" accept=".jpg,.jpeg,.png,.webp,.pdf,image/jpeg,image/png,image/webp,application/pdf" onChange={(event) => onFile(event.target.files?.[0] ?? null)} /></label> : <label className="setup-url"><span>Public menu URL</span><input type="url" required maxLength={2048} placeholder="https://example.com/menu" value={url} onChange={(event) => onUrl(event.target.value)} /><small>Private network addresses and redirects are rejected.</small></label>}<div className="setup-warning"><AlertTriangle aria-hidden="true" /><span><strong>AI output is a draft.</strong> Review every name, price, variant, and modifier. Recipes, inventory, taxes, and fiscal codes are never inferred.</span></div><div className="setup-actions"><button className="setup-secondary" type="button" onClick={onBack}>Cancel</button><button className="setup-primary" type="submit" disabled={disabled || (source === "file" ? !file : !url.trim())}>{disabled ? <LoaderCircle className="is-spinning" /> : <Sparkles />}Extract and review</button></div></form>;
 }
 
-function RunView(props: { run: OnboardingImportRun; currency: string; working: boolean; canImport: boolean; canApply: boolean; targetDrafts: Record<string, string>; resolutionDrafts: Record<string, OnboardingImportResolution>; fieldDrafts: Record<string, string>; priceDrafts: Record<string, string>; reviewedRecipes: Set<string>; onBack: () => void; onTargetDraft: (id: string, value: string) => void; onFieldDraft: (id: string, value: string) => void; onPriceDraft: (id: string, value: string) => void; onReviewRecipe: (id: string, checked: boolean) => void; onResolution: (entity: OnboardingImportEntity, resolution: OnboardingImportResolution) => void; onSaveCorrection: (entity: OnboardingImportEntity) => void; onValidate: () => void; onSavePrices: () => void; onApply: () => void; onCancel: () => void; onResume: () => void; onActivate: () => void }) {
+function RunView(props: { run: OnboardingImportRun; currency: string; working: boolean; canImport: boolean; canApply: boolean; activationResult: OnboardingActivationResult | null; targetDrafts: Record<string, string>; resolutionDrafts: Record<string, OnboardingImportResolution>; fieldDrafts: Record<string, string>; priceDrafts: Record<string, string>; onBack: () => void; onTargetDraft: (id: string, value: string) => void; onFieldDraft: (id: string, value: string) => void; onPriceDraft: (id: string, value: string) => void; onResolution: (entity: OnboardingImportEntity, resolution: OnboardingImportResolution) => void; onSaveCorrection: (entity: OnboardingImportEntity) => void; onValidate: () => void; onSavePrices: () => void; onApply: () => void; onCancel: () => void; onResume: () => void; onActivate: () => void }) {
   const { run } = props;
   const counts = entityCounts(run);
   const priceEntities = run.entities.filter((entity) => ["VARIANT", "LOCATION_PRICE"].includes(entity.entity_type) && entity.resolution !== "SKIP");
   const recipes = run.entities.filter((entity) => entity.entity_type === "RECIPE" && entity.resolution !== "SKIP");
   const productIds = readyProductIds(run);
+  const readiness = importProductReadiness(run);
+  const readinessItems = props.activationResult?.items.map((item) => ({
+    ...item,
+    productName: readiness.find((value) => value.productId === item.product_id)?.productName ?? item.product_id,
+  })) ?? readiness.map((item) => ({ product_id: item.productId, productName: item.productName, ready: item.ready, reasons: item.reasons }));
   const immutable = run.status === "APPLIED" || run.status === "CANCELLED";
   return <div className="setup-panel"><button className="setup-back" type="button" onClick={props.onBack}><ArrowLeft aria-hidden="true" />All setup options</button><div className="setup-run-heading"><div><p className="setup-eyebrow">Import preview</p><h2>{run.source_name}</h2><p>{run.file_name ?? `${run.source_type.replaceAll("_", " ").toLowerCase()} · version ${run.source_version ?? "current"}`}</p></div><span className={`setup-run-status is-${run.status.toLowerCase().replaceAll("_", "-")}`}>{IMPORT_STATUS_LABELS[run.status]}</span></div>{run.duplicate_warning && <div className="setup-warning"><AlertTriangle aria-hidden="true" /><span><strong>This file was imported before.</strong> Review the previous run before applying it again. Duplicate detection is a warning, not an automatic block.</span></div>}<div className="setup-summary-grid">{Object.entries(counts).map(([type, count]) => <article key={type}><span>{IMPORT_ENTITY_LABELS[type as keyof typeof IMPORT_ENTITY_LABELS]}</span><strong>{count}</strong></article>)}<article className={run.error_count ? "is-error" : ""}><span>Errors</span><strong>{run.error_count}</strong></article><article className={run.warning_count ? "is-warning" : ""}><span>Warnings</span><strong>{run.warning_count}</strong></article></div>
 
@@ -625,10 +635,12 @@ function RunView(props: { run: OnboardingImportRun; currency: string; working: b
 
     <section className="setup-review-section"><div className="setup-section-heading"><div><h3>Review and resolve</h3><p>Exact matches may be linked. Fuzzy suggestions are never merged automatically.</p></div><span>{run.entity_count} entities</span></div><div className="setup-entity-list">{run.entities.map((entity) => { const field = editableField(entity); const resolution = props.resolutionDrafts[entity.id] ?? entity.resolution; return <article className={entity.error_codes.length ? "has-error" : entity.warning_codes.length ? "has-warning" : ""} key={entity.id}><div className="setup-entity-main"><span>{IMPORT_ENTITY_LABELS[entity.entity_type]}</span><strong>{entityDisplayName(entity)}</strong>{entityPayloadSummary(entity) && <small>{entityPayloadSummary(entity)}</small>}{entity.error_codes.length > 0 && <p className="is-error">{entity.error_codes.join(" · ")}</p>}{entity.warning_codes.length > 0 && <p className="is-warning">{entity.warning_codes.join(" · ")}</p>}</div>{!immutable && props.canImport && <div className="setup-entity-controls"><label><span>Resolution</span><select value={resolution} onChange={(event) => props.onResolution(entity, event.target.value as OnboardingImportResolution)}><option value="CREATE">Create</option><option value="MATCH_EXISTING">Match existing</option><option value="SKIP">Skip</option></select></label>{resolution === "MATCH_EXISTING" && <label><span>Confirmed target ID</span><input value={props.targetDrafts[entity.id] ?? entity.target_id ?? ""} onChange={(event) => props.onTargetDraft(entity.id, event.target.value)} /><button type="button" onClick={() => props.onResolution(entity, "MATCH_EXISTING")}>Save match</button></label>}{field && <label><span>Correct {field.label.toLowerCase()}</span><input value={props.fieldDrafts[entity.id] ?? ""} onChange={(event) => props.onFieldDraft(entity.id, event.target.value)} /><button type="button" onClick={() => props.onSaveCorrection(entity)}>Save correction</button></label>}</div>}</article>; })}</div></section>
 
-    {recipes.length > 0 && <section className="setup-review-section"><div className="setup-section-heading"><div><h3>Review starter recipes</h3><p>These are draft starting values. Confirm each recipe only after checking quantities and inventory mappings.</p></div></div><div className="setup-recipe-list">{recipes.map((recipe) => <label key={recipe.id}><input type="checkbox" disabled={run.status !== "APPLIED" || !props.canApply} checked={props.reviewedRecipes.has(recipe.id)} onChange={(event) => props.onReviewRecipe(recipe.id, event.target.checked)} /><span><strong>{entityDisplayName(recipe)}</strong><small>{entityPayloadSummary(recipe) || "Review recipe components and quantities."}</small></span></label>)}</div></section>}
+    {recipes.length > 0 && <section className="setup-review-section"><div className="setup-section-heading"><div><h3>Review starter recipes</h3><p>These are draft starting values. The activation action confirms this visible review atomically on the server.</p></div></div><div className="setup-recipe-list">{recipes.map((recipe) => <article key={recipe.id}><strong>{entityDisplayName(recipe)}</strong><ul>{recipeComponents(recipe).map((component) => <li key={`${component.inventoryItemKey}:${component.quantity}:${component.unit}`}><span>{component.inventoryItemKey.replace(/^inventory:/, "").replaceAll("-", " ")}</span><strong>{component.quantity} {component.unit}</strong></li>)}</ul>{recipeComponents(recipe).length === 0 && <small className="is-error">No valid recipe components found.</small>}</article>)}</div></section>}
+
+    {run.status === "APPLIED" && readinessItems.length > 0 && <section className="setup-review-section"><div className="setup-section-heading"><div><h3>Product activation readiness</h3><p>{props.activationResult ? "Server result from the latest activation attempt." : "Pre-check from this applied import. The server makes the final activation decision."}</p></div></div><div className="setup-readiness-list">{readinessItems.map((item) => <article className={item.ready ? "is-ready" : "has-warning"} key={item.product_id}><div><strong>{item.productName}</strong><small>{item.ready ? "Ready" : item.reasons.map(readinessReasonLabel).join(" · ")}</small></div><span>{item.ready ? <Check aria-hidden="true" /> : <AlertTriangle aria-hidden="true" />}</span></article>)}</div></section>}
 
     {!props.canApply && !immutable && <div className="setup-warning"><AlertTriangle aria-hidden="true" /><span><strong>Preview-only access.</strong> Applying this run requires onboarding.write and menu.write, plus inventory.write when inventory, recipes, or opening balances are included.</span></div>}
-    <div className="setup-actions setup-run-actions"><button className="setup-secondary" type="button" onClick={props.onBack}>Close</button>{run.status === "FAILED" && <button className="setup-secondary" type="button" disabled={props.working || !props.canImport} onClick={props.onResume}>Resume</button>}{!["APPLIED", "CANCELLED"].includes(run.status) && <button className="setup-danger" type="button" disabled={props.working || !props.canImport} onClick={props.onCancel}>Cancel import</button>}{!["APPLIED", "CANCELLED"].includes(run.status) && <button className="setup-secondary" type="button" disabled={props.working || !props.canImport} onClick={props.onValidate}>Validate</button>}{run.status === "READY" && <button className="setup-primary" type="button" disabled={props.working || !props.canApply || run.error_count > 0} onClick={props.onApply}>{props.working ? <LoaderCircle className="is-spinning" /> : <Check />}Apply atomically</button>}{run.status === "APPLIED" && productIds.length > 0 && <button className="setup-primary" type="button" disabled={props.working || !props.canApply || recipes.some((recipe) => !props.reviewedRecipes.has(recipe.id))} onClick={props.onActivate}>{props.working ? <LoaderCircle className="is-spinning" /> : <Check />}Activate {productIds.length} ready products</button>}</div>
+    <div className="setup-actions setup-run-actions"><button className="setup-secondary" type="button" onClick={props.onBack}>Close</button>{run.status === "FAILED" && <button className="setup-secondary" type="button" disabled={props.working || !props.canImport} onClick={props.onResume}>Resume</button>}{!["APPLIED", "CANCELLED"].includes(run.status) && <button className="setup-danger" type="button" disabled={props.working || !props.canImport} onClick={props.onCancel}>Cancel import</button>}{!["APPLIED", "CANCELLED"].includes(run.status) && <button className="setup-secondary" type="button" disabled={props.working || !props.canImport} onClick={props.onValidate}>Validate</button>}{run.status === "READY" && <button className="setup-primary" type="button" disabled={props.working || !props.canApply || run.error_count > 0} onClick={props.onApply}>{props.working ? <LoaderCircle className="is-spinning" /> : <Check />}Apply atomically</button>}{run.status === "APPLIED" && productIds.length > 0 && !props.activationResult && <button className="setup-primary" type="button" disabled={props.working || !props.canApply} onClick={props.onActivate}>{props.working ? <LoaderCircle className="is-spinning" /> : <Check />}{recipes.length > 0 ? "Confirm recipe review and activate eligible products" : "Activate eligible products"}</button>}{(props.activationResult?.activated_count ?? 0) > 0 && <Link className="setup-primary" href="/app/pos">Open POS</Link>}</div>
   </div>;
 }
 

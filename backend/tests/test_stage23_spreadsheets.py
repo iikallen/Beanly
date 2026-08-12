@@ -116,6 +116,77 @@ def test_documented_poster_columns_create_unique_product_modifications() -> None
     assert all("POSTER_REAL_FIXTURE_UNVERIFIED" in value.warning_codes for value in products)
 
 
+def test_official_poster_russian_headers_and_recipe_composition_are_canonicalized() -> None:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Tech cards"
+    sheet.append([None, None, None, None, None])
+    sheet.append(
+        [
+            "PosterID product_id (не менять!)",
+            "Название блюда",
+            "Состав",
+            "Брутто, г",
+            "Цена",
+        ]
+    )
+    sheet.append([112, "Цезарь", "Курица", "150,5", 2400])
+    buffer = BytesIO()
+    workbook.save(buffer)
+
+    draft, source_type, _ = parse_spreadsheet(
+        buffer.getvalue(),
+        "poster-recipes.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        UploadSourceType.POSTER,
+    )
+
+    assert source_type is ImportSourceType.POSTER_EXPORT
+    inventory = next(
+        entity
+        for entity in draft.entities
+        if entity.entity_type is ImportEntityType.INVENTORY_ITEM
+    )
+    recipe = next(
+        entity for entity in draft.entities if entity.entity_type is ImportEntityType.RECIPE
+    )
+    assert inventory.payload == {"name": "Курица", "sku": None, "base_unit": "g"}
+    assert recipe.payload["components"] == [
+        {
+            "inventory_item_key": inventory.source_key,
+            "quantity": "150.5",
+            "unit": "g",
+        }
+    ]
+
+
+def test_official_poster_ingredient_headers_create_opening_balance_in_base_units() -> None:
+    content = _workbook(
+        ["Name", "Category", "Unit", "Inventory count", "Value"],
+        [["Squid", "Seafood", "kg", "1.300 kg", 18]],
+        title="Ingredients",
+    )
+    draft, _, _ = parse_spreadsheet(
+        content,
+        "poster-ingredients.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        UploadSourceType.POSTER,
+    )
+    inventory = next(
+        entity
+        for entity in draft.entities
+        if entity.entity_type is ImportEntityType.INVENTORY_ITEM
+    )
+    opening = next(
+        entity
+        for entity in draft.entities
+        if entity.entity_type is ImportEntityType.OPENING_BALANCE
+    )
+    assert inventory.payload["base_unit"] == "g"
+    assert opening.payload["quantity"] == "1300"
+    assert opening.payload["unit_cost_minor"] == "1800"
+
+
 @pytest.mark.parametrize("value", ("=2+2", "+cmd", "-1+2", "@SUM(A1:A2)"))
 def test_formula_like_spreadsheet_text_is_rejected(value: str) -> None:
     content = _workbook(
@@ -215,6 +286,42 @@ def test_opening_balance_converts_kg_to_base_grams_without_direct_stock_fact() -
     assert opening.payload["quantity"] == "8400"
     assert opening.payload["unit"] == "g"
     assert opening.payload["unit_cost_minor"] == "800000"
+
+
+def test_available_false_text_is_not_coerced_to_true() -> None:
+    content = _workbook(
+        ["Category", "Product", "Variant", "Price", "Location", "Available"],
+        [["Coffee", "Latte", "350", 1700, "Main", "false"]],
+    )
+
+    draft, _, _ = parse_spreadsheet(
+        content,
+        "beanly.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        UploadSourceType.BEANLY_SPREADSHEET,
+    )
+    location_price = next(
+        entity
+        for entity in draft.entities
+        if entity.entity_type is ImportEntityType.LOCATION_PRICE
+    )
+
+    assert location_price.payload["available"] is False
+
+
+def test_available_rejects_ambiguous_boolean_text() -> None:
+    content = _workbook(
+        ["Category", "Product", "Variant", "Price", "Location", "Available"],
+        [["Coffee", "Latte", "350", 1700, "Main", "perhaps"]],
+    )
+
+    with pytest.raises(ImportParseFailed, match="Boolean fields"):
+        parse_spreadsheet(
+            content,
+            "beanly.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            UploadSourceType.BEANLY_SPREADSHEET,
+        )
 
 
 @pytest.mark.parametrize(
