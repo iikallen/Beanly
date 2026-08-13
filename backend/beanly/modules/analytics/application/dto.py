@@ -29,6 +29,8 @@ class SalesDailyDelta:
     refund_amount: Decimal = Decimal(0)
     refund_count: int = 0
     refunded_items: int = 0
+    gross_revenue_amount: Decimal = Decimal(0)
+    discount_amount: Decimal = Decimal(0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +50,22 @@ class ProductSalesDailyDelta:
     refund_amount: Decimal = Decimal(0)
     refunded_quantity: int = 0
     refund_orders: int = 0
+    gross_revenue_amount: Decimal = Decimal(0)
+    discount_amount: Decimal = Decimal(0)
+
+
+@dataclass(frozen=True, slots=True)
+class PromotionDailyDelta:
+    organization_id: UUID
+    location_id: UUID
+    local_date: date
+    promotion_id: UUID
+    promotion_name: str
+    orders_count: int = 0
+    discount_amount: Decimal = Decimal(0)
+    gross_revenue_amount: Decimal = Decimal(0)
+    net_revenue_amount: Decimal = Decimal(0)
+    refunded_discount_amount: Decimal = Decimal(0)
 
 
 @dataclass(frozen=True, slots=True)

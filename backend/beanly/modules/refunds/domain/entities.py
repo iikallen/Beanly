@@ -16,6 +16,9 @@ class RefundLine:
     unit_refund_minor: int
     total_refund_minor: int
     created_at: datetime
+    gross_refund_minor: int = 0
+    discount_refund_minor: int = 0
+    net_refund_minor: int = 0
 
 
 @dataclass(frozen=True, slots=True)

@@ -95,4 +95,5 @@ class ExternalPaymentAttempt:
     approved_at: datetime | None
     failed_at: datetime | None
     failure_code: str | None
+    order_pricing_revision: int | None = None
 

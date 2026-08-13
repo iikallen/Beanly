@@ -18,6 +18,8 @@ from beanly.modules.onboarding.api.router import router as onboarding_router
 from beanly.modules.organizations.api.router import router as organizations_router
 from beanly.modules.organizations.api.team_router import router as team_router
 from beanly.modules.payments.api.router import router as payments_router
+from beanly.modules.promotions.api.order_router import router as order_discounts_router
+from beanly.modules.promotions.api.router import router as promotions_router
 from beanly.modules.purchasing.api.router import router as purchasing_router
 from beanly.modules.refunds.api.router import (
     payments_refunds_router,
@@ -40,6 +42,8 @@ api_v1_router.include_router(organizations_router)
 api_v1_router.include_router(employees_router)
 api_v1_router.include_router(team_router)
 api_v1_router.include_router(purchasing_router)
+api_v1_router.include_router(promotions_router)
+api_v1_router.include_router(order_discounts_router)
 api_v1_router.include_router(sales_router)
 api_v1_router.include_router(payments_router)
 api_v1_router.include_router(payments_refunds_router)

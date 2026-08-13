@@ -18,6 +18,7 @@ from beanly.modules.organizations.domain.permissions import Permission
 from beanly.modules.organizations.infrastructure.db.repositories import (
     SqlAlchemyOrganizationRepository,
 )
+from beanly.modules.promotions.infrastructure.sales_gateway import PromotionSalesPricingGateway
 from beanly.modules.sales.application.order_service import OrderService
 from beanly.modules.sales.application.register_service import RegisterService
 from beanly.modules.sales.application.shift_service import ShiftService
@@ -56,7 +57,12 @@ def shift_service(session: SessionDep) -> ShiftService:
 
 def order_service(session: SessionDep) -> OrderService:
     sales, organizations, _, menu = _dependencies(session)
-    return OrderService(sales, organizations, menu)
+    return OrderService(
+        sales,
+        organizations,
+        menu,
+        pricing=PromotionSalesPricingGateway(session),
+    )
 
 
 RegisterServiceDep = Annotated[RegisterService, Depends(register_service)]
@@ -85,9 +91,7 @@ SalesRegisterReadDep = Annotated[
         )
     ),
 ]
-SalesShiftManageDep = Annotated[
-    TenantContext, Depends(_permission(Permission.SALES_SHIFT_MANAGE))
-]
+SalesShiftManageDep = Annotated[TenantContext, Depends(_permission(Permission.SALES_SHIFT_MANAGE))]
 SalesCreateDep = Annotated[TenantContext, Depends(_permission(Permission.SALES_CREATE))]
 SalesReadDep = Annotated[
     TenantContext,

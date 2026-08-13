@@ -16,7 +16,9 @@ from beanly.modules.sales.application.commands import AddOrderItemInput, CreateO
 from beanly.modules.sales.application.ports import (
     MenuSalesPort,
     NullSalesEventPublisher,
+    NullSalesPricingPort,
     SalesEventPublisher,
+    SalesPricingPort,
     SellableItemSnapshot,
 )
 from beanly.modules.sales.domain.entities import (
@@ -54,15 +56,15 @@ class OrderService:
         organizations: OrganizationService,
         menu: MenuSalesPort,
         publisher: SalesEventPublisher | None = None,
+        pricing: SalesPricingPort | None = None,
     ) -> None:
         self.repository = repository
         self.organizations = organizations
         self.menu = menu
+        self.pricing = pricing or NullSalesPricingPort()
         self.publisher = publisher or NullSalesEventPublisher()
 
-    async def create(
-        self, context: TenantContext, value: CreateOrderInput
-    ) -> SalesOrder:
+    async def create(self, context: TenantContext, value: CreateOrderInput) -> SalesOrder:
         existing = await self.repository.get_order_by_client_id(
             context.organization_id, value.client_order_id
         )
@@ -181,12 +183,8 @@ class OrderService:
             updated = replace(
                 order,
                 order_type=order_type or order.order_type,
-                guest_count=(
-                    _guest_count(guest_count) if guest_count_set else order.guest_count
-                ),
-                table_label=(
-                    _optional(table_label, 100) if table_label_set else order.table_label
-                ),
+                guest_count=(_guest_count(guest_count) if guest_count_set else order.guest_count),
+                table_label=(_optional(table_label, 100) if table_label_set else order.table_label),
                 note=_optional(note, 4000) if note_set else order.note,
                 version=order.version + 1,
                 updated_at=datetime.now(UTC),
@@ -199,9 +197,7 @@ class OrderService:
             await self.repository.rollback()
             raise
 
-    async def cancel(
-        self, context: TenantContext, order_id: UUID, reason: str
-    ) -> SalesOrder:
+    async def cancel(self, context: TenantContext, order_id: UUID, reason: str) -> SalesOrder:
         try:
             order = await self._mutable_order(context, order_id)
             now = datetime.now(UTC)
@@ -251,6 +247,8 @@ class OrderService:
             saved = await self.repository.recalculate_order_totals(
                 context.organization_id, order.id
             )
+            await self.pricing.reprice(context.organization_id, order.id)
+            saved = await self._order(context.organization_id, order.id)
             await self.repository.commit()
             await self._publish((OrderItemAdded(order.id, item.id),))
             return saved
@@ -272,10 +270,13 @@ class OrderService:
             order = await self._mutable_order(context, order_id)
             item = _item(order, item_id)
             next_quantity = _quantity(quantity) if quantity is not None else item.quantity
+            line_total = _line_total(item.unit_price_minor, next_quantity)
             updated = replace(
                 item,
                 quantity=next_quantity,
-                line_total_minor=_line_total(item.unit_price_minor, next_quantity),
+                line_total_minor=line_total,
+                discount_amount_minor=0,
+                net_line_total_minor=line_total,
                 note=_optional(note, 1000) if note_set else item.note,
                 updated_at=datetime.now(UTC),
             )
@@ -283,6 +284,8 @@ class OrderService:
             saved = await self.repository.recalculate_order_totals(
                 context.organization_id, order.id
             )
+            await self.pricing.reprice(context.organization_id, order.id)
+            saved = await self._order(context.organization_id, order.id)
             await self.repository.commit()
             await self._publish((OrderItemUpdated(order.id, item.id),))
             return saved
@@ -321,6 +324,8 @@ class OrderService:
             saved = await self.repository.recalculate_order_totals(
                 context.organization_id, order.id
             )
+            await self.pricing.reprice(context.organization_id, order.id)
+            saved = await self._order(context.organization_id, order.id)
             await self.repository.commit()
             await self._publish((OrderItemUpdated(order.id, item.id),))
             return saved
@@ -338,6 +343,8 @@ class OrderService:
             saved = await self.repository.recalculate_order_totals(
                 context.organization_id, order.id
             )
+            await self.pricing.reprice(context.organization_id, order.id)
+            saved = await self._order(context.organization_id, order.id)
             await self.repository.commit()
             await self._publish((OrderItemRemoved(order.id, item_id),))
             return saved
@@ -345,12 +352,8 @@ class OrderService:
             await self.repository.rollback()
             raise
 
-    async def _mutable_order(
-        self, context: TenantContext, order_id: UUID
-    ) -> SalesOrder:
-        order = await self.repository.get_order(
-            context.organization_id, order_id, lock=True
-        )
+    async def _mutable_order(self, context: TenantContext, order_id: UUID) -> SalesOrder:
+        order = await self.repository.get_order(context.organization_id, order_id, lock=True)
         if order is None:
             raise SalesNotFound("Order not found")
         await self._assert_access(context, order)
@@ -361,9 +364,7 @@ class OrderService:
             raise InvalidSalesOperation("Order shift is not OPEN")
         return order
 
-    async def _assert_access(
-        self, context: TenantContext, order: SalesOrder
-    ) -> None:
+    async def _assert_access(self, context: TenantContext, order: SalesOrder) -> None:
         await self.organizations.ensure_location_access(context, order.location_id)
         if (
             Permission.SALES_READ not in context.permissions

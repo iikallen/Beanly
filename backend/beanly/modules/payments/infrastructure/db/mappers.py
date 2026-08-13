@@ -76,6 +76,7 @@ def to_external_attempt(model: ExternalPaymentAttemptModel) -> ExternalPaymentAt
         _utc(model.approved_at) if model.approved_at else None,
         _utc(model.failed_at) if model.failed_at else None,
         model.failure_code,
+        model.order_pricing_revision,
     )
 
 

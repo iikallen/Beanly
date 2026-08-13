@@ -82,6 +82,36 @@ class OrderItem:
     updated_at: datetime
     modifiers: tuple[OrderItemModifier, ...] = ()
     components: tuple[OrderItemComponent, ...] = ()
+    discount_amount_minor: int = 0
+    net_line_total_minor: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class OrderDiscountAllocation:
+    order_item_id: UUID
+    eligible_amount_minor: int
+    discount_amount_minor: int
+    sort_order: int
+
+
+@dataclass(frozen=True, slots=True)
+class OrderDiscount:
+    id: UUID
+    client_discount_id: UUID | None
+    promotion_id: UUID | None
+    source: str
+    promotion_name: str
+    discount_kind: str
+    scope: str
+    percent_rate: Decimal | None
+    configured_amount_minor: int | None
+    promo_code_snapshot: str | None
+    reason: str | None
+    applied_by_user_id: UUID | None
+    applied_at: datetime
+    discount_total_minor: int
+    sort_order: int
+    allocations: tuple[OrderDiscountAllocation, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,3 +148,7 @@ class SalesOrder:
     offline_session_id: UUID | None = None
     client_created_at: datetime | None = None
     offline_display_number: int | None = None
+    discount_total_minor: int = 0
+    pricing_revision: int = 1
+    priced_at: datetime | None = None
+    discounts: tuple[OrderDiscount, ...] = ()

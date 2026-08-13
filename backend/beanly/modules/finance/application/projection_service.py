@@ -110,20 +110,41 @@ class FinanceProjectionService:
                 organization_id,
                 payment.location_id,
                 FinanceEntryType.REVENUE,
-                _amount(Decimal(payment.amount_minor) / 100),
+                _amount(Decimal(sale.gross_amount_minor) / 100),
                 payment.currency_code,
                 payment.completed_at,
-                "Completed payment",
+                "Gross sales revenue",
                 None,
                 "PAYMENT",
                 payment.payment_id,
                 event_id,
-                "REVENUE",
+                "REVENUE_GROSS",
                 None,
                 None,
                 now,
             )
         )
+        if sale.discount_amount_minor:
+            await self.repository.add_finance_entry(
+                FinanceEntry(
+                    uuid4(),
+                    organization_id,
+                    payment.location_id,
+                    FinanceEntryType.REVENUE,
+                    _amount(-Decimal(sale.discount_amount_minor) / 100),
+                    payment.currency_code,
+                    payment.completed_at,
+                    "Sales discount",
+                    None,
+                    "PAYMENT",
+                    payment.payment_id,
+                    event_id,
+                    "SALES_DISCOUNT",
+                    None,
+                    None,
+                    now,
+                )
+            )
         await self.repository.add_finance_entry(
             FinanceEntry(
                 uuid4(),

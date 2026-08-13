@@ -25,6 +25,7 @@ from beanly.modules.organizations.infrastructure.db import (
     models as organization_models,  # noqa: F401
 )
 from beanly.modules.payments.infrastructure.db import models as payment_models  # noqa: F401
+from beanly.modules.promotions.infrastructure.db import models as promotion_models  # noqa: F401
 from beanly.modules.purchasing.infrastructure.db import (
     models as purchasing_models,  # noqa: F401
 )

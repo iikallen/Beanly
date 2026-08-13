@@ -412,7 +412,8 @@ class SqlAlchemyFiscalOperations:
                 if tax and tax.vat_registered
                 else None
             )
-            vat = vat_minor(item.line_total_minor, rate)
+            net_total = item.net_line_total_minor
+            vat = vat_minor(net_total, rate)
             fiscal_name = (
                 str(catalog_fiscal["fiscal_name"])
                 if use_catalog
@@ -459,7 +460,9 @@ class SqlAlchemyFiscalOperations:
                     ),
                     quantity=item.quantity,
                     unit_price_minor=item.unit_price_minor,
-                    total_minor=item.line_total_minor,
+                    gross_total_minor=item.line_total_minor,
+                    discount_minor=item.discount_amount_minor,
+                    total_minor=net_total,
                     vat_rate=rate,
                     vat_amount_minor=vat,
                     marking_codes=[],
@@ -476,6 +479,7 @@ class SqlAlchemyFiscalOperations:
             occurred_at=payment.completed_at,
             currency_code=payment.currency_code,
             total_minor=payment.amount_minor,
+            discount_total_minor=order.discount_total_minor,
             vat_total_minor=sum(line.vat_amount_minor for line in lines),
             compliance_status=(
                 FiscalComplianceStatus.COMPLETE.value

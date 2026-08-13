@@ -34,12 +34,20 @@ class SalesSettlementGateway:
     async def lock_order_for_payment(
         self, context: TenantContext, order_id: UUID
     ) -> PayableOrderSnapshot:
-        order = await self.repository.get_order(
-            context.organization_id, order_id, lock=True
-        )
+        order = await self.repository.get_order(context.organization_id, order_id, lock=True)
         if order is None:
             raise PaymentNotFound("Order not found")
         await self.organizations.ensure_location_access(context, order.location_id)
+        from beanly.modules.promotions.infrastructure.pricing_service import reprice_order
+
+        if order.offline_session_id is None:
+            await reprice_order(
+                self.repository.session,
+                context.organization_id,
+                order_id,
+            )
+        order = await self.repository.get_order(context.organization_id, order_id, lock=True)
+        assert order is not None
         shift = await self.repository.get_shift(context.organization_id, order.shift_id)
         components: dict[UUID, tuple[UnitCode, Decimal]] = {}
         for item in order.items:
@@ -77,6 +85,7 @@ class SalesSettlementGateway:
                     components.items(), key=lambda pair: str(pair[0])
                 )
             ),
+            order.pricing_revision,
         )
 
     async def mark_order_paid(
@@ -100,22 +109,16 @@ class SalesSettlementGateway:
         except OrderImmutable as exc:
             raise OrderAlreadyPaid("Order is already paid") from exc
 
-    async def ensure_location_access(
-        self, context: TenantContext, location_id: UUID
-    ) -> None:
+    async def ensure_location_access(self, context: TenantContext, location_id: UUID) -> None:
         await self.organizations.ensure_location_access(context, location_id)
 
-    async def accessible_location_ids(
-        self, context: TenantContext
-    ) -> tuple[UUID, ...]:
+    async def accessible_location_ids(self, context: TenantContext) -> tuple[UUID, ...]:
         values = await self.organizations.list_locations(
             ListLocationsQuery(context.user_id, context.organization_id)
         )
         return tuple(value.id for value in values)
 
-    async def ensure_shift_access(
-        self, context: TenantContext, shift_id: UUID
-    ) -> None:
+    async def ensure_shift_access(self, context: TenantContext, shift_id: UUID) -> None:
         shift = await self.repository.get_shift(context.organization_id, shift_id)
         if shift is None:
             raise PaymentNotFound("Shift not found")

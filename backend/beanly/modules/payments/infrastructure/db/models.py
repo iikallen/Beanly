@@ -42,14 +42,10 @@ class PaymentModel(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
-    organization_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("organizations.id"), index=True
-    )
+    organization_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("organizations.id"), index=True)
     location_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("locations.id"), index=True)
     order_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("sales_orders.id"))
-    shift_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("register_shifts.id"), index=True
-    )
+    shift_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("register_shifts.id"), index=True)
     offline_session_id: Mapped[UUID | None] = mapped_column(
         Uuid, ForeignKey("pos_offline_sessions.id"), nullable=True, index=True
     )
@@ -70,12 +66,8 @@ class PaymentModel(Base):
 class PaymentLineModel(Base):
     __tablename__ = "payment_lines"
     __table_args__ = (
-        UniqueConstraint(
-            "external_payment_attempt_id", name="uq_payment_lines_external_attempt"
-        ),
-        CheckConstraint(
-            "method IN ('CASH', 'CARD', 'OTHER')", name="ck_payment_line_method"
-        ),
+        UniqueConstraint("external_payment_attempt_id", name="uq_payment_lines_external_attempt"),
+        CheckConstraint("method IN ('CASH', 'CARD', 'OTHER')", name="ck_payment_line_method"),
         CheckConstraint("amount_minor >= 0", name="ck_payment_line_amount_nonnegative"),
         CheckConstraint("change_minor >= 0", name="ck_payment_line_change_nonnegative"),
         CheckConstraint("sort_order >= 0", name="ck_payment_line_sort_nonnegative"),
@@ -125,9 +117,7 @@ class TerminalBindingModel(Base):
     connection_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("integration_connections.id", ondelete="CASCADE")
     )
-    location_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("locations.id", ondelete="CASCADE")
-    )
+    location_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("locations.id", ondelete="CASCADE"))
     register_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("pos_registers.id", ondelete="CASCADE")
     )
@@ -174,9 +164,7 @@ class ExternalPaymentAttemptModel(Base):
     organization_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("organizations.id", ondelete="CASCADE")
     )
-    location_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("locations.id", ondelete="CASCADE")
-    )
+    location_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("locations.id", ondelete="CASCADE"))
     order_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("sales_orders.id"))
     register_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("pos_registers.id"))
     pos_device_id: Mapped[UUID | None] = mapped_column(
@@ -189,6 +177,7 @@ class ExternalPaymentAttemptModel(Base):
     provider_code: Mapped[str] = mapped_column(String(80))
     method: Mapped[str] = mapped_column(String(20))
     amount_minor: Mapped[int] = mapped_column(BigInteger)
+    order_pricing_revision: Mapped[int | None] = mapped_column(nullable=True)
     currency_code: Mapped[str] = mapped_column(String(3))
     status: Mapped[str] = mapped_column(String(24), index=True)
     provider_operation_id: Mapped[str | None] = mapped_column(String(255), nullable=True)

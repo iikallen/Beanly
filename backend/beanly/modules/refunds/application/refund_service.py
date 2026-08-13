@@ -42,9 +42,7 @@ class RefundService:
 
     async def preview(self, context: TenantContext, value: RefundInput) -> RefundPreview:
         _bounded(value)
-        location_id = await self.source.payment_location(
-            context.organization_id, value.payment_id
-        )
+        location_id = await self.source.payment_location(context.organization_id, value.payment_id)
         if location_id is None:
             raise RefundNotFound("Payment not found")
         await self.access.ensure_location(context, location_id)
@@ -121,6 +119,9 @@ class RefundService:
                             line.unit_refund_minor,
                             line.total_refund_minor,
                             now,
+                            line.unit_refund_minor * line.quantity,
+                            line.unit_refund_minor * line.quantity - line.total_refund_minor,
+                            line.total_refund_minor,
                         )
                         for line in plan.preview.lines
                     ),

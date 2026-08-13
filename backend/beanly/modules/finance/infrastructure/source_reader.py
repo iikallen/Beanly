@@ -99,6 +99,8 @@ class SqlAlchemyFinanceSourceReader:
             model.cogs_amount or Decimal(0),
             model.cogs_status or "INCOMPLETE",
             model.paid_at,
+            model.subtotal_minor,
+            model.discount_total_minor,
         )
 
     async def writeoff(self, organization_id: UUID, writeoff_id: UUID) -> FinanceWriteOffSnapshot:

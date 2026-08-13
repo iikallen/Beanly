@@ -11,6 +11,7 @@ import {
   LogOut,
   Monitor,
   ReceiptText,
+  Tags,
   Settings as SettingsIcon,
   ShoppingCart,
   Users,
@@ -31,7 +32,7 @@ export function AppSidebar({
   settingsCanReadIntegrations,
   settingsCanReadFiscal,
 }: {
-  active: "dashboard" | "analytics" | "pos" | "fiscal" | "inventory" | "menu" | "onboarding" | "purchasing" | "finance" | "team" | "settings";
+  active: "dashboard" | "analytics" | "pos" | "promotions" | "fiscal" | "inventory" | "menu" | "onboarding" | "purchasing" | "finance" | "team" | "settings";
   teamView?: "employees" | "invitations";
   onTeamView?: (view: "employees" | "invitations") => void;
   settingsCanReadIntegrations?: boolean;
@@ -122,6 +123,14 @@ export function AppSidebar({
         >
           <Monitor aria-hidden="true" />
           POS
+        </button>
+        <button
+          className={active === "promotions" ? "app-nav-item is-active" : "app-nav-item"}
+          type="button"
+          onClick={() => router.push("/app/promotions")}
+        >
+          <Tags aria-hidden="true" />
+          Promotions
         </button>
         {active === "fiscal" && <button className="app-nav-item is-active" type="button" onClick={() => router.push("/app/fiscal")}><ReceiptText aria-hidden="true" />Fiscal</button>}
         <button

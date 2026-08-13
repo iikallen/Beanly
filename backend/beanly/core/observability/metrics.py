@@ -28,9 +28,7 @@ class BeanlyMetrics:
         self.fiscal_receipt_success = meter.create_counter("fiscal.receipt.success.total")
         self.fiscal_receipt_failed = meter.create_counter("fiscal.receipt.failed.total")
         self.fiscal_receipt_unknown = meter.create_counter("fiscal.receipt.unknown.total")
-        self.fiscal_receipt_duration = meter.create_histogram(
-            "fiscal.receipt.duration", unit="s"
-        )
+        self.fiscal_receipt_duration = meter.create_histogram("fiscal.receipt.duration", unit="s")
         self.nkt_requests = meter.create_counter("nkt.requests.total")
         self.nkt_cache_hits = meter.create_counter("nkt.cache.hits.total")
         self.nkt_rate_limit = meter.create_counter("nkt.rate_limit.total")
@@ -51,6 +49,15 @@ class BeanlyMetrics:
         self.ai_menu_extraction_review_rate = meter.create_histogram(
             "ai_menu_extraction.review_rate"
         )
+        self.promotions_active = meter.create_up_down_counter("promotions_active")
+        self.promotion_evaluations_total = meter.create_counter("promotion_evaluations_total")
+        self.promotion_matches_total = meter.create_counter("promotion_matches_total")
+        self.discount_applications_total = meter.create_counter("discount_applications_total")
+        self.discount_amount_total = meter.create_counter("discount_amount_total")
+        self.promo_code_attempts_total = meter.create_counter("promo_code_attempts_total")
+        self.promo_code_rejected_total = meter.create_counter("promo_code_rejected_total")
+        self.custom_discount_total = meter.create_counter("custom_discount_total")
+        self.pricing_duration_seconds = meter.create_histogram("pricing_duration_seconds", unit="s")
         self.negative_stock = meter.create_counter("inventory.negative_stock.total")
         self.pos_offline_sessions_started = meter.create_counter(
             "pos.offline.sessions.started.total"

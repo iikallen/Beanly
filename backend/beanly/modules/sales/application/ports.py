@@ -69,6 +69,15 @@ class SalesEventPublisher(Protocol):
     async def publish(self, event: object) -> None: ...
 
 
+class SalesPricingPort(Protocol):
+    async def reprice(self, organization_id: UUID, order_id: UUID) -> None: ...
+
+
+class NullSalesPricingPort:
+    async def reprice(self, organization_id: UUID, order_id: UUID) -> None:
+        pass
+
+
 class NullSalesEventPublisher:
     async def publish(self, event: object) -> None:
         pass

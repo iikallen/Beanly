@@ -1,5 +1,7 @@
 from beanly.modules.inventory.domain.value_objects import UnitCode
 from beanly.modules.sales.domain.entities import (
+    OrderDiscount,
+    OrderDiscountAllocation,
     OrderItem,
     OrderItemComponent,
     OrderItemModifier,
@@ -108,6 +110,8 @@ def to_item(model: SalesOrderItemModel) -> OrderItem:
                 key=lambda item: (item.inventory_item_name, item.id),
             )
         ),
+        model.discount_amount_minor,
+        model.net_line_total_minor,
     )
 
 
@@ -150,4 +154,41 @@ def to_order(model: SalesOrderModel) -> SalesOrder:
         model.offline_session_id,
         model.client_created_at,
         model.offline_display_number,
+        model.discount_total_minor,
+        model.pricing_revision,
+        model.priced_at,
+        tuple(
+            OrderDiscount(
+                value.id,
+                value.client_discount_id,
+                value.promotion_id,
+                value.source,
+                value.promotion_name,
+                value.discount_kind,
+                value.scope,
+                value.percent_rate,
+                value.configured_amount_minor,
+                value.promo_code_snapshot,
+                value.reason,
+                value.applied_by_user_id,
+                value.applied_at,
+                value.discount_total_minor,
+                value.sort_order,
+                tuple(
+                    OrderDiscountAllocation(
+                        allocation.order_item_id,
+                        allocation.eligible_amount_minor,
+                        allocation.discount_amount_minor,
+                        allocation.sort_order,
+                    )
+                    for allocation in sorted(
+                        value.allocations, key=lambda item: (item.sort_order, item.id)
+                    )
+                ),
+            )
+            for value in sorted(
+                model.__dict__.get("discounts", ()),
+                key=lambda item: (item.sort_order, item.id),
+            )
+        ),
     )

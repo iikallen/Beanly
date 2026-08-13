@@ -97,9 +97,7 @@ class FiscalVariantProfileModel(Base):
     requires_marking: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false")
     )
-    nkt_verified_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    nkt_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     nkt_external_product_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
@@ -109,9 +107,7 @@ class FiscalVariantProfileModel(Base):
 class FiscalNktCacheModel(Base):
     __tablename__ = "fiscal_nkt_cache"
     __table_args__ = (
-        CheckConstraint(
-            f"length(ntin) = 13 AND {_NKT_DIGITS}", name="ck_fiscal_nkt_ntin"
-        ),
+        CheckConstraint(f"length(ntin) = 13 AND {_NKT_DIGITS}", name="ck_fiscal_nkt_ntin"),
         Index("ix_fiscal_nkt_cache_name_ru", "name_ru"),
         Index("ix_fiscal_nkt_cache_name_kk", "name_kk"),
         Index("ix_fiscal_nkt_cache_expires_at", "expires_at"),
@@ -159,9 +155,7 @@ class FiscalReceiptModel(Base):
     organization_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("organizations.id", ondelete="CASCADE")
     )
-    location_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("locations.id", ondelete="CASCADE")
-    )
+    location_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("locations.id", ondelete="CASCADE"))
     connection_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("integration_connections.id", ondelete="RESTRICT")
     )
@@ -174,9 +168,7 @@ class FiscalReceiptModel(Base):
     receipt_url: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     provider_request_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     provider_correlation_id: Mapped[str] = mapped_column(String(255))
-    fiscalized_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    fiscalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     last_error_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
@@ -230,6 +222,7 @@ class FiscalSaleSnapshotModel(Base):
         CheckConstraint("length(currency_code) = 3", name="ck_fiscal_snapshot_currency"),
         CheckConstraint("total_minor >= 0", name="ck_fiscal_snapshot_total"),
         CheckConstraint("vat_total_minor >= 0", name="ck_fiscal_snapshot_vat"),
+        CheckConstraint("discount_total_minor >= 0", name="ck_fiscal_snapshot_discount"),
         CheckConstraint(
             "compliance_status IN ('COMPLETE','INCOMPLETE')",
             name="ck_fiscal_snapshot_compliance",
@@ -251,6 +244,7 @@ class FiscalSaleSnapshotModel(Base):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     currency_code: Mapped[str] = mapped_column(String(3))
     total_minor: Mapped[int] = mapped_column(BigInteger)
+    discount_total_minor: Mapped[int] = mapped_column(BigInteger, default=0)
     vat_total_minor: Mapped[int] = mapped_column(BigInteger)
     compliance_status: Mapped[str] = mapped_column(String(16))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
@@ -267,6 +261,11 @@ class FiscalSaleSnapshotLineModel(Base):
         CheckConstraint("unit_price_minor >= 0", name="ck_fiscal_snapshot_line_unit_price"),
         CheckConstraint("total_minor >= 0", name="ck_fiscal_snapshot_line_total"),
         CheckConstraint("vat_amount_minor >= 0", name="ck_fiscal_snapshot_line_vat"),
+        CheckConstraint(
+            "gross_total_minor >= 0 AND discount_minor >= 0 AND "
+            "total_minor = gross_total_minor - discount_minor",
+            name="ck_fiscal_snapshot_line_discount",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
@@ -282,6 +281,8 @@ class FiscalSaleSnapshotLineModel(Base):
     quantity: Mapped[int] = mapped_column()
     unit_price_minor: Mapped[int] = mapped_column(BigInteger)
     total_minor: Mapped[int] = mapped_column(BigInteger)
+    gross_total_minor: Mapped[int] = mapped_column(BigInteger)
+    discount_minor: Mapped[int] = mapped_column(BigInteger, default=0)
     vat_rate: Mapped[Decimal | None] = mapped_column(Numeric(7, 4), nullable=True)
     vat_amount_minor: Mapped[int] = mapped_column(BigInteger)
     marking_codes: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list)

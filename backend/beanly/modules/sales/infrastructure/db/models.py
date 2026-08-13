@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import (
@@ -20,6 +21,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from beanly.core.database.base import Base
 
+if TYPE_CHECKING:
+    from beanly.modules.promotions.infrastructure.db.models import SalesOrderDiscountModel
+
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
@@ -30,9 +34,7 @@ class PosRegisterModel(Base):
     __table_args__ = (UniqueConstraint("organization_id", "location_id", "name"),)
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
-    organization_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("organizations.id"), index=True
-    )
+    organization_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("organizations.id"), index=True)
     location_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("locations.id"), index=True)
     name: Mapped[str] = mapped_column(String(150))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -57,13 +59,9 @@ class RegisterShiftModel(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
-    organization_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("organizations.id"), index=True
-    )
+    organization_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("organizations.id"), index=True)
     location_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("locations.id"), index=True)
-    register_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("pos_registers.id"), index=True
-    )
+    register_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("pos_registers.id"), index=True)
     warehouse_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("warehouses.id"))
     status: Mapped[str] = mapped_column(String(16), index=True)
     opened_by_user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id"))
@@ -86,9 +84,7 @@ class SalesOrderModel(Base):
             "order_type IN ('DINE_IN', 'TAKEAWAY', 'DELIVERY')",
             name="ck_sales_order_type",
         ),
-        CheckConstraint(
-            "status IN ('OPEN', 'PAID', 'CANCELLED')", name="ck_sales_order_status"
-        ),
+        CheckConstraint("status IN ('OPEN', 'PAID', 'CANCELLED')", name="ck_sales_order_status"),
         CheckConstraint("guest_count IS NULL OR guest_count > 0", name="ck_order_guest_count"),
         CheckConstraint("subtotal_minor >= 0", name="ck_order_subtotal_nonnegative"),
         CheckConstraint("total_minor >= 0", name="ck_order_total_nonnegative"),
@@ -101,6 +97,11 @@ class SalesOrderModel(Base):
             name="ck_sales_order_cogs_status",
         ),
         CheckConstraint("version > 0", name="ck_sales_order_version_positive"),
+        CheckConstraint("discount_total_minor >= 0", name="ck_sales_order_discount_nonnegative"),
+        CheckConstraint(
+            "discount_total_minor <= subtotal_minor", name="ck_sales_order_discount_bounded"
+        ),
+        CheckConstraint("pricing_revision > 0", name="ck_sales_order_pricing_revision"),
         UniqueConstraint("inventory_transaction_id"),
         Index("ix_sales_orders_organization_created", "organization_id", "created_at"),
         Index(
@@ -114,13 +115,9 @@ class SalesOrderModel(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
-    organization_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("organizations.id"), index=True
-    )
+    organization_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("organizations.id"), index=True)
     location_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("locations.id"), index=True)
-    shift_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("register_shifts.id"), index=True
-    )
+    shift_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("register_shifts.id"), index=True)
     warehouse_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("warehouses.id"))
     number: Mapped[int] = mapped_column(BigInteger)
     client_order_id: Mapped[UUID] = mapped_column(Uuid)
@@ -143,6 +140,9 @@ class SalesOrderModel(Base):
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     subtotal_minor: Mapped[int] = mapped_column(BigInteger, default=0)
     total_minor: Mapped[int] = mapped_column(BigInteger, default=0)
+    discount_total_minor: Mapped[int] = mapped_column(BigInteger, default=0)
+    pricing_revision: Mapped[int] = mapped_column(default=1)
+    priced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by_user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id"))
     cancelled_by_user_id: Mapped[UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id"), nullable=True
@@ -167,6 +167,7 @@ class SalesOrderModel(Base):
     items: Mapped[list["SalesOrderItemModel"]] = relationship(
         back_populates="order", cascade="all, delete-orphan"
     )
+    discounts: Mapped[list["SalesOrderDiscountModel"]] = relationship(cascade="all, delete-orphan")
 
 
 class SalesOrderItemModel(Base):
@@ -178,6 +179,15 @@ class SalesOrderItemModel(Base):
         CheckConstraint("modifier_price_minor >= 0", name="ck_order_item_modifier_price"),
         CheckConstraint("unit_price_minor >= 0", name="ck_order_item_unit_price"),
         CheckConstraint("line_total_minor >= 0", name="ck_order_item_line_total"),
+        CheckConstraint("discount_amount_minor >= 0", name="ck_order_item_discount_nonnegative"),
+        CheckConstraint(
+            "discount_amount_minor <= line_total_minor", name="ck_order_item_discount_bounded"
+        ),
+        CheckConstraint("net_line_total_minor >= 0", name="ck_order_item_net_nonnegative"),
+        CheckConstraint(
+            "net_line_total_minor = line_total_minor - discount_amount_minor",
+            name="ck_order_item_net_reconciles",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
@@ -196,6 +206,8 @@ class SalesOrderItemModel(Base):
     modifier_price_minor: Mapped[int] = mapped_column(BigInteger)
     unit_price_minor: Mapped[int] = mapped_column(BigInteger)
     line_total_minor: Mapped[int] = mapped_column(BigInteger)
+    discount_amount_minor: Mapped[int] = mapped_column(BigInteger, default=0)
+    net_line_total_minor: Mapped[int] = mapped_column(BigInteger)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(

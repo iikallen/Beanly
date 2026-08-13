@@ -47,6 +47,7 @@ class PayableOrderSnapshot:
     shift_is_open: bool
     order_number: int
     sale_components: tuple[SaleComponentSnapshot, ...]
+    pricing_revision: int = 1
 
 
 class SalesSettlementPort(Protocol):

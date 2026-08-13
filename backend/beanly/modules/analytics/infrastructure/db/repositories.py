@@ -12,6 +12,7 @@ from beanly.modules.analytics.application.dto import (
     InventoryConsumptionDailyDelta,
     LocationMetricsDailyDelta,
     ProductSalesDailyDelta,
+    PromotionDailyDelta,
     SalesDailyDelta,
 )
 from beanly.modules.analytics.application.ports import (
@@ -28,6 +29,7 @@ from beanly.modules.analytics.infrastructure.db.models import (
     AnalyticsLocationMetricsDailyModel,
     AnalyticsProductSalesDailyModel,
     AnalyticsProjectionReceiptModel,
+    AnalyticsPromotionsDailyModel,
     AnalyticsSalesDailyModel,
 )
 from beanly.modules.organizations.infrastructure.db.models import (
@@ -82,6 +84,10 @@ class SqlAlchemyAnalyticsRepository:
                 set_={
                     "revenue_amount": AnalyticsSalesDailyModel.revenue_amount
                     + excluded.revenue_amount,
+                    "gross_revenue_amount": AnalyticsSalesDailyModel.gross_revenue_amount
+                    + excluded.gross_revenue_amount,
+                    "discount_amount": AnalyticsSalesDailyModel.discount_amount
+                    + excluded.discount_amount,
                     "paid_orders": AnalyticsSalesDailyModel.paid_orders + excluded.paid_orders,
                     "items_sold": AnalyticsSalesDailyModel.items_sold + excluded.items_sold,
                     "cogs_amount": AnalyticsSalesDailyModel.cogs_amount + excluded.cogs_amount,
@@ -121,6 +127,10 @@ class SqlAlchemyAnalyticsRepository:
                     + excluded.orders_count,
                     "revenue_amount": AnalyticsProductSalesDailyModel.revenue_amount
                     + excluded.revenue_amount,
+                    "gross_revenue_amount": AnalyticsProductSalesDailyModel.gross_revenue_amount
+                    + excluded.gross_revenue_amount,
+                    "discount_amount": AnalyticsProductSalesDailyModel.discount_amount
+                    + excluded.discount_amount,
                     "cogs_amount": AnalyticsProductSalesDailyModel.cogs_amount
                     + excluded.cogs_amount,
                     "incomplete_cogs_orders": (
@@ -133,6 +143,36 @@ class SqlAlchemyAnalyticsRepository:
                     + excluded.refunded_quantity,
                     "refund_orders": AnalyticsProductSalesDailyModel.refund_orders
                     + excluded.refund_orders,
+                    "updated_at": excluded.updated_at,
+                },
+            )
+        )
+
+    async def upsert_promotion(self, delta: PromotionDailyDelta) -> None:
+        insert = self._insert(AnalyticsPromotionsDailyModel).values(**_values(delta))
+        excluded = insert.excluded
+        columns = (
+            "orders_count",
+            "discount_amount",
+            "gross_revenue_amount",
+            "net_revenue_amount",
+            "refunded_discount_amount",
+        )
+        await self.session.execute(
+            insert.on_conflict_do_update(
+                index_elements=(
+                    "organization_id",
+                    "location_id",
+                    "local_date",
+                    "promotion_id",
+                ),
+                set_={
+                    **{
+                        column: getattr(AnalyticsPromotionsDailyModel, column)
+                        + getattr(excluded, column)
+                        for column in columns
+                    },
+                    "promotion_name": excluded.promotion_name,
                     "updated_at": excluded.updated_at,
                 },
             )

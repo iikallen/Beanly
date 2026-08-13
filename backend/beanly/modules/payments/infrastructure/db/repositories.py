@@ -221,6 +221,7 @@ class SqlAlchemyPaymentRepository:
             approved_at=value.approved_at,
             failed_at=value.failed_at,
             failure_code=value.failure_code,
+            order_pricing_revision=value.order_pricing_revision,
         )
         try:
             async with self.session.begin_nested():

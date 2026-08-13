@@ -78,6 +78,7 @@ function syncPayload(order: OfflineOrder) {
       quantity: item.quantity,
       note: item.note,
     })),
+    manual_promotion_ids: order.manual_promotion_ids ?? [],
     payment: order.payment,
   };
 }

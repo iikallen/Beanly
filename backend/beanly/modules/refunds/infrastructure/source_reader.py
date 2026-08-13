@@ -34,9 +34,7 @@ class SqlAlchemyRefundSourceReader:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def payment_location(
-        self, organization_id: UUID, payment_id: UUID
-    ) -> UUID | None:
+    async def payment_location(self, organization_id: UUID, payment_id: UUID) -> UUID | None:
         return await self.session.scalar(
             select(PaymentModel.location_id).where(
                 PaymentModel.organization_id == organization_id,
@@ -137,7 +135,13 @@ class SqlAlchemyRefundSourceReader:
                     requested.quantity,
                     requested.restock_quantity,
                     item.unit_price_minor,
-                    item.unit_price_minor * requested.quantity,
+                    _partial_net(
+                        item.line_total_minor,
+                        item.net_line_total_minor,
+                        item.quantity,
+                        previous,
+                        requested.quantity,
+                    ),
                 )
             )
 
@@ -231,3 +235,10 @@ class SqlAlchemyRefundSourceReader:
                 )
             ),
         )
+
+
+def _partial_net(gross: int, net: int, quantity: int, already_refunded: int, take: int) -> int:
+    """Exact cumulative allocation makes sequential partial refunds sum to net."""
+    before = net * already_refunded // quantity
+    after = net * (already_refunded + take) // quantity
+    return min(gross * take // quantity, after - before)

@@ -88,6 +88,13 @@ class RefundLineModel(Base):
         ),
         CheckConstraint("unit_refund_minor >= 0", name="ck_refund_line_unit_amount"),
         CheckConstraint("total_refund_minor >= 0", name="ck_refund_line_total"),
+        CheckConstraint(
+            "gross_refund_minor >= 0 AND discount_refund_minor >= 0 AND "
+            "net_refund_minor >= 0 AND "
+            "net_refund_minor = gross_refund_minor - discount_refund_minor AND "
+            "total_refund_minor = net_refund_minor",
+            name="ck_refund_line_discount_values",
+        ),
     )
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
     refund_id: Mapped[UUID] = mapped_column(
@@ -100,8 +107,28 @@ class RefundLineModel(Base):
     restock_quantity: Mapped[int] = mapped_column()
     unit_refund_minor: Mapped[int] = mapped_column(BigInteger)
     total_refund_minor: Mapped[int] = mapped_column(BigInteger)
+    gross_refund_minor: Mapped[int] = mapped_column(BigInteger)
+    discount_refund_minor: Mapped[int] = mapped_column(BigInteger)
+    net_refund_minor: Mapped[int] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     refund: Mapped[RefundModel] = relationship(back_populates="lines")
+
+
+class RefundDiscountAllocationModel(Base):
+    __tablename__ = "refund_discount_allocations"
+    __table_args__ = (
+        UniqueConstraint(
+            "refund_line_id", "order_discount_id", name="uq_refund_discount_allocation"
+        ),
+        CheckConstraint("discount_amount_minor >= 0", name="ck_refund_discount_allocation_amount"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    refund_line_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("refund_lines.id", ondelete="CASCADE")
+    )
+    order_discount_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("sales_order_discounts.id"))
+    discount_amount_minor: Mapped[int] = mapped_column(BigInteger)
 
 
 class RefundPaymentLineModel(Base):

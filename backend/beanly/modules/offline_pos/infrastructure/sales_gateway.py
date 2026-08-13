@@ -1,6 +1,7 @@
 from dataclasses import replace
-from datetime import UTC, datetime
-from uuid import uuid4
+from datetime import UTC, datetime, time
+from decimal import Decimal
+from uuid import UUID, uuid4
 
 from beanly.modules.offline_pos.api.schemas import OfflineOrderRequest
 from beanly.modules.offline_pos.domain.exceptions import OrderChangedOnServer
@@ -15,6 +16,17 @@ from beanly.modules.organizations.application.services.organization_service impo
     OrganizationService,
 )
 from beanly.modules.organizations.domain.entities import TenantContext
+from beanly.modules.promotions.domain.entities import Promotion, PromotionSchedule, PromotionTarget
+from beanly.modules.promotions.domain.enums import (
+    ApplicationMode,
+    DiscountKind,
+    PromotionScope,
+    PromotionStatus,
+    StackingPolicy,
+    TargetRole,
+    TargetType,
+)
+from beanly.modules.promotions.infrastructure.pricing_service import reprice_order
 from beanly.modules.sales.application.order_service import _snapshot_item
 from beanly.modules.sales.domain.entities import SalesOrder
 from beanly.modules.sales.domain.enums import OrderStatus
@@ -125,6 +137,26 @@ class OfflineSalesGateway:
             if item.client_item_id not in desired_ids:
                 await self.repository.delete_item(order.id, item.id)
         order = await self.repository.recalculate_order_totals(context.organization_id, order.id)
+        promotions = _compiled_promotions(snapshot.public_payload, context.organization_id)
+        requested = set(request.manual_promotion_ids)
+        allowed_manual = {
+            value.id
+            for value in promotions
+            if value.application_mode == ApplicationMode.MANUAL
+            and not value.requires_override_permission
+        }
+        if not requested <= allowed_manual:
+            raise OrderImmutable("Offline manual promotion is not allowed by the snapshot")
+        await reprice_order(
+            self.repository.session,
+            context.organization_id,
+            order.id,
+            occurred_at=request.payment.completed_at if request.payment else request.updated_at,
+            promotion_snapshot=promotions,
+            manual_promotion_ids=tuple(sorted(requested, key=str)),
+        )
+        order = await self.repository.get_order(context.organization_id, order.id)
+        assert order is not None
         if request.status == "CANCELLED":
             order = await self.repository.update_order(
                 replace(
@@ -140,3 +172,72 @@ class OfflineSalesGateway:
         if request.status == "PAID" and not order.items:
             raise OrderImmutable("Paid offline order must contain items")
         return order
+
+
+def _compiled_promotions(
+    payload: dict[str, object], organization_id: UUID
+) -> tuple[Promotion, ...]:
+    rows = payload.get("promotions", [])
+    if not isinstance(rows, list):
+        return ()
+    values = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        promotion_id = UUID(str(row["promotion_id"]))
+        created_at = datetime.fromisoformat(str(row["created_at"])).astimezone(UTC)
+        values.append(
+            Promotion(
+                promotion_id,
+                organization_id,
+                str(row["name"]),
+                str(row["name"]),
+                PromotionStatus.ACTIVE,
+                ApplicationMode(str(row["application_mode"])),
+                DiscountKind(str(row["kind"])),
+                PromotionScope(str(row["scope"])),
+                Decimal(str(row["percent_rate"])) if row.get("percent_rate") else None,
+                int(str(row["amount_minor"])) if row.get("amount_minor") else None,
+                int(str(row["fixed_price_minor"])) if row.get("fixed_price_minor") else None,
+                int(row["priority"]),
+                StackingPolicy(str(row["stacking"])),
+                bool(row["include_modifier_price"]),
+                int(str(row["minimum_subtotal_minor"]))
+                if row.get("minimum_subtotal_minor")
+                else None,
+                int(str(row["maximum_discount_minor"]))
+                if row.get("maximum_discount_minor")
+                else None,
+                datetime.fromisoformat(str(row["valid_from"])) if row.get("valid_from") else None,
+                datetime.fromisoformat(str(row["valid_to"])) if row.get("valid_to") else None,
+                True,
+                bool(row.get("requires_override_permission", False)),
+                UUID(int=0),
+                created_at,
+                created_at,
+                (),
+                tuple(
+                    PromotionSchedule(
+                        UUID(int=index + 1),
+                        promotion_id,
+                        int(item["weekday"]),
+                        time.fromisoformat(str(item["start_local_time"])),
+                        time.fromisoformat(str(item["end_local_time"])),
+                    )
+                    for index, item in enumerate(row.get("schedules", []))
+                ),
+                tuple(
+                    PromotionTarget(
+                        UUID(int=index + 1000),
+                        promotion_id,
+                        TargetRole(str(item["role"])),
+                        TargetType(str(item["target_type"])),
+                        UUID(str(item["target_id"])) if item.get("target_id") else None,
+                        int(item["quantity"]),
+                        int(item["sort_order"]),
+                    )
+                    for index, item in enumerate(row.get("targets", []))
+                ),
+            )
+        )
+    return tuple(values)

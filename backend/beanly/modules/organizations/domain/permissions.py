@@ -60,6 +60,10 @@ class Permission(StrEnum):
     ONBOARDING_READ = "onboarding.read"
     ONBOARDING_WRITE = "onboarding.write"
     MENU_IMPORT = "menu.import"
+    PROMOTIONS_READ = "promotions.read"
+    PROMOTIONS_WRITE = "promotions.write"
+    DISCOUNTS_APPLY = "discounts.apply"
+    DISCOUNTS_OVERRIDE = "discounts.override"
 
 
 _ALL = frozenset(Permission)
@@ -120,6 +124,10 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.ONBOARDING_READ,
             Permission.ONBOARDING_WRITE,
             Permission.MENU_IMPORT,
+            Permission.PROMOTIONS_READ,
+            Permission.PROMOTIONS_WRITE,
+            Permission.DISCOUNTS_APPLY,
+            Permission.DISCOUNTS_OVERRIDE,
         }
     ),
     MembershipRole.MANAGER: frozenset(
@@ -163,6 +171,9 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.FISCAL_READ,
             Permission.ONBOARDING_READ,
             Permission.MENU_IMPORT,
+            Permission.PROMOTIONS_READ,
+            Permission.DISCOUNTS_APPLY,
+            Permission.DISCOUNTS_OVERRIDE,
         }
     ),
     MembershipRole.ACCOUNTANT: frozenset(
@@ -180,6 +191,7 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.INTEGRATIONS_READ,
             Permission.FISCAL_READ,
             Permission.FISCAL_WRITE,
+            Permission.PROMOTIONS_READ,
         }
     ),
     MembershipRole.CASHIER: frozenset(
@@ -190,6 +202,7 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.SALES_READ_OWN,
             Permission.SALES_SHIFT_MANAGE,
             Permission.PAYMENTS_CREATE,
+            Permission.DISCOUNTS_APPLY,
         }
     ),
     MembershipRole.BARISTA: frozenset(

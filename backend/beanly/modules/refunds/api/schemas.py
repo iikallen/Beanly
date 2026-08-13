@@ -75,6 +75,9 @@ class RefundLineResponse(BaseModel):
     restock_quantity: int
     unit_refund_minor: str
     total_refund_minor: str
+    gross_refund_minor: str
+    discount_refund_minor: str
+    net_refund_minor: str
 
 
 class RefundPaymentLineResponse(BaseModel):

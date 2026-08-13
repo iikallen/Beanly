@@ -1,5 +1,5 @@
 from datetime import datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
@@ -7,10 +7,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from beanly.modules.integrations.infrastructure.db.models import IntegrationJobModel
+from beanly.modules.promotions.application.pricing_engine import largest_remainder_allocate
+from beanly.modules.promotions.infrastructure.db.models import (
+    SalesOrderDiscountAllocationModel,
+)
 from beanly.modules.refunds.domain.entities import Refund
 from beanly.modules.refunds.domain.exceptions import RefundConflict
 from beanly.modules.refunds.infrastructure.db.mappers import to_refund
 from beanly.modules.refunds.infrastructure.db.models import (
+    RefundDiscountAllocationModel,
     RefundLineModel,
     RefundModel,
     RefundPaymentLineModel,
@@ -69,6 +74,9 @@ class SqlAlchemyRefundRepository:
                             "restock_quantity": line.restock_quantity,
                             "unit_refund_minor": line.unit_refund_minor,
                             "total_refund_minor": line.total_refund_minor,
+                            "gross_refund_minor": line.gross_refund_minor,
+                            "discount_refund_minor": line.discount_refund_minor,
+                            "net_refund_minor": line.net_refund_minor,
                             "created_at": line.created_at,
                         }
                     )
@@ -91,6 +99,8 @@ class SqlAlchemyRefundRepository:
                 ],
             )
             self.session.add(model)
+            await self.session.flush()
+            await self._add_discount_allocations(value)
         else:
             model.status = value.status.value
             model.inventory_transaction_id = value.inventory_transaction_id
@@ -105,6 +115,58 @@ class SqlAlchemyRefundRepository:
         except IntegrityError as exc:
             raise RefundConflict("Refund persistence conflict") from exc
         return value
+
+    async def _add_discount_allocations(self, value: Refund) -> None:
+        for line in value.lines:
+            if line.discount_refund_minor == 0:
+                continue
+            rows = list(
+                await self.session.execute(
+                    select(
+                        SalesOrderDiscountAllocationModel.order_discount_id,
+                        SalesOrderDiscountAllocationModel.discount_amount_minor,
+                    )
+                    .where(SalesOrderDiscountAllocationModel.order_item_id == line.order_item_id)
+                    .order_by(
+                        SalesOrderDiscountAllocationModel.sort_order,
+                        SalesOrderDiscountAllocationModel.order_discount_id,
+                    )
+                )
+            )
+            if not rows:
+                raise RefundConflict("Refund discount has no order allocation")
+            existing_rows = list(
+                await self.session.execute(
+                    select(
+                        RefundDiscountAllocationModel.order_discount_id,
+                        func.sum(RefundDiscountAllocationModel.discount_amount_minor),
+                    )
+                    .join(
+                        RefundLineModel,
+                        RefundLineModel.id == RefundDiscountAllocationModel.refund_line_id,
+                    )
+                    .join(RefundModel, RefundModel.id == RefundLineModel.refund_id)
+                    .where(
+                        RefundLineModel.order_item_id == line.order_item_id,
+                        RefundModel.status == "COMPLETED",
+                    )
+                    .group_by(RefundDiscountAllocationModel.order_discount_id)
+                )
+            )
+            existing = {discount_id: int(amount) for discount_id, amount in existing_rows}
+            cumulative = sum(existing.values()) + line.discount_refund_minor
+            desired = largest_remainder_allocate(cumulative, tuple(rows))
+            for discount_id, amount in desired.items():
+                delta = amount - existing.get(discount_id, 0)
+                if delta > 0:
+                    self.session.add(
+                        RefundDiscountAllocationModel(
+                            id=uuid4(),
+                            refund_line_id=line.id,
+                            order_discount_id=discount_id,
+                            discount_amount_minor=delta,
+                        )
+                    )
 
     async def list(self, organization_id: UUID, **filters) -> list[Refund]:
         statement = _query(organization_id)

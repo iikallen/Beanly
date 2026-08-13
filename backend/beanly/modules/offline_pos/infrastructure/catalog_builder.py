@@ -28,6 +28,12 @@ from beanly.modules.menu.infrastructure.db.models import (
     VariantPriceModel,
 )
 from beanly.modules.offline_pos.infrastructure.db.models import PosCatalogSnapshotModel
+from beanly.modules.promotions.infrastructure.db.models import (
+    PromotionLocationModel,
+    PromotionModel,
+    PromotionScheduleModel,
+    PromotionTargetModel,
+)
 
 
 class CatalogSnapshotBuilder:
@@ -93,6 +99,47 @@ class CatalogSnapshotBuilder:
                 .order_by(FiscalTaxProfileModel.effective_from)
             )
         )
+        promotion_rows = list(
+            (
+                await self.session.execute(
+                    select(PromotionModel)
+                    .where(
+                        PromotionModel.organization_id == organization_id,
+                        PromotionModel.status == "ACTIVE",
+                        PromotionModel.application_mode.in_(["AUTOMATIC", "MANUAL"]),
+                    )
+                    .order_by(
+                        PromotionModel.priority.desc(),
+                        PromotionModel.created_at,
+                        PromotionModel.id,
+                    )
+                )
+            ).scalars()
+        )
+        promotion_ids = [value.id for value in promotion_rows]
+        promotion_locations = set(
+            await self.session.scalars(
+                select(PromotionLocationModel.promotion_id).where(
+                    PromotionLocationModel.promotion_id.in_(promotion_ids),
+                    PromotionLocationModel.location_id == location_id,
+                )
+            )
+        )
+        schedules = defaultdict(list)
+        targets = defaultdict(list)
+        if promotion_ids:
+            for value in await self.session.scalars(
+                select(PromotionScheduleModel).where(
+                    PromotionScheduleModel.promotion_id.in_(promotion_ids)
+                )
+            ):
+                schedules[value.promotion_id].append(value)
+            for value in await self.session.scalars(
+                select(PromotionTargetModel).where(
+                    PromotionTargetModel.promotion_id.in_(promotion_ids)
+                )
+            ):
+                targets[value.promotion_id].append(value)
 
         product_settings = (
             {
@@ -369,6 +416,63 @@ class CatalogSnapshotBuilder:
 
         public = {
             "location_id": str(location_id),
+            "promotions": [
+                {
+                    "promotion_id": str(value.id),
+                    "created_at": value.created_at.isoformat(),
+                    "name": value.pos_name,
+                    "application_mode": value.application_mode,
+                    "kind": value.discount_kind,
+                    "scope": value.scope,
+                    "percent_rate": (
+                        str(value.percent_rate) if value.percent_rate is not None else None
+                    ),
+                    "amount_minor": (
+                        str(value.amount_minor) if value.amount_minor is not None else None
+                    ),
+                    "fixed_price_minor": (
+                        str(value.fixed_price_minor)
+                        if value.fixed_price_minor is not None
+                        else None
+                    ),
+                    "priority": value.priority,
+                    "stacking": value.stacking_policy,
+                    "include_modifier_price": value.include_modifier_price,
+                    "requires_override_permission": value.requires_override_permission,
+                    "minimum_subtotal_minor": (
+                        str(value.minimum_subtotal_minor)
+                        if value.minimum_subtotal_minor is not None
+                        else None
+                    ),
+                    "maximum_discount_minor": (
+                        str(value.maximum_discount_minor)
+                        if value.maximum_discount_minor is not None
+                        else None
+                    ),
+                    "valid_from": value.valid_from.isoformat() if value.valid_from else None,
+                    "valid_to": value.valid_to.isoformat() if value.valid_to else None,
+                    "schedules": [
+                        {
+                            "weekday": item.weekday,
+                            "start_local_time": item.start_local_time.isoformat(),
+                            "end_local_time": item.end_local_time.isoformat(),
+                        }
+                        for item in schedules[value.id]
+                    ],
+                    "targets": [
+                        {
+                            "role": item.role,
+                            "target_type": item.target_type,
+                            "target_id": str(item.target_id) if item.target_id else None,
+                            "quantity": item.quantity,
+                            "sort_order": item.sort_order,
+                        }
+                        for item in targets[value.id]
+                    ],
+                }
+                for value in promotion_rows
+                if value.all_locations or value.id in promotion_locations
+            ],
             "categories": [
                 {
                     "id": str(category.id),

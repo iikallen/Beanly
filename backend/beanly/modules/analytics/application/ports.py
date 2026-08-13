@@ -9,6 +9,7 @@ from beanly.modules.analytics.application.dto import (
     InventoryConsumptionDailyDelta,
     LocationMetricsDailyDelta,
     ProductSalesDailyDelta,
+    PromotionDailyDelta,
     SalesDailyDelta,
 )
 from beanly.modules.analytics.domain.enums import ProductGroupBy, ProductSort
@@ -90,6 +91,8 @@ class AnalyticsRepository(Protocol):
     async def upsert_sales(self, delta: SalesDailyDelta) -> None: ...
 
     async def upsert_product(self, delta: ProductSalesDailyDelta) -> None: ...
+
+    async def upsert_promotion(self, delta: PromotionDailyDelta) -> None: ...
 
     async def upsert_hour(self, delta: HourlySalesDelta) -> None: ...
 

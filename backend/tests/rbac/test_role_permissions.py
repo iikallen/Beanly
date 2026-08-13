@@ -2,7 +2,7 @@ from beanly.modules.organizations.domain.enums import MembershipRole
 from beanly.modules.organizations.domain.permissions import Permission, permissions_for
 
 
-def test_role_permission_matrix_matches_stage_three_contract() -> None:
+def test_role_permission_matrix_matches_current_contract() -> None:
     expected = {
         MembershipRole.OWNER: frozenset(Permission),
         MembershipRole.ADMIN: frozenset(
@@ -59,6 +59,10 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.ONBOARDING_READ,
                 Permission.ONBOARDING_WRITE,
                 Permission.MENU_IMPORT,
+                Permission.PROMOTIONS_READ,
+                Permission.PROMOTIONS_WRITE,
+                Permission.DISCOUNTS_APPLY,
+                Permission.DISCOUNTS_OVERRIDE,
             }
         ),
         MembershipRole.MANAGER: frozenset(
@@ -102,6 +106,9 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.FISCAL_READ,
                 Permission.ONBOARDING_READ,
                 Permission.MENU_IMPORT,
+                Permission.PROMOTIONS_READ,
+                Permission.DISCOUNTS_APPLY,
+                Permission.DISCOUNTS_OVERRIDE,
             }
         ),
         MembershipRole.ACCOUNTANT: frozenset(
@@ -119,6 +126,7 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.INTEGRATIONS_READ,
                 Permission.FISCAL_READ,
                 Permission.FISCAL_WRITE,
+                Permission.PROMOTIONS_READ,
             }
         ),
         MembershipRole.CASHIER: frozenset(
@@ -129,6 +137,7 @@ def test_role_permission_matrix_matches_stage_three_contract() -> None:
                 Permission.SALES_READ_OWN,
                 Permission.SALES_SHIFT_MANAGE,
                 Permission.PAYMENTS_CREATE,
+                Permission.DISCOUNTS_APPLY,
             }
         ),
         MembershipRole.BARISTA: frozenset(

@@ -64,6 +64,12 @@ class AnalyticsSalesDailyModel(Base):
     revenue_amount: Mapped[Decimal] = mapped_column(
         Numeric(20, 6), default=Decimal(0), server_default=text("0")
     )
+    gross_revenue_amount: Mapped[Decimal] = mapped_column(
+        Numeric(20, 6), default=Decimal(0), server_default=text("0")
+    )
+    discount_amount: Mapped[Decimal] = mapped_column(
+        Numeric(20, 6), default=Decimal(0), server_default=text("0")
+    )
     refund_amount: Mapped[Decimal] = mapped_column(
         Numeric(20, 6), default=Decimal(0), server_default=text("0")
     )
@@ -112,6 +118,12 @@ class AnalyticsProductSalesDailyModel(Base):
     revenue_amount: Mapped[Decimal] = mapped_column(
         Numeric(20, 6), default=Decimal(0), server_default=text("0")
     )
+    gross_revenue_amount: Mapped[Decimal] = mapped_column(
+        Numeric(20, 6), default=Decimal(0), server_default=text("0")
+    )
+    discount_amount: Mapped[Decimal] = mapped_column(
+        Numeric(20, 6), default=Decimal(0), server_default=text("0")
+    )
     refund_amount: Mapped[Decimal] = mapped_column(
         Numeric(20, 6), default=Decimal(0), server_default=text("0")
     )
@@ -123,6 +135,30 @@ class AnalyticsProductSalesDailyModel(Base):
     incomplete_cogs_orders: Mapped[int] = mapped_column(
         BigInteger, default=0, server_default=text("0")
     )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class AnalyticsPromotionsDailyModel(Base):
+    __tablename__ = "analytics_promotions_daily"
+    __table_args__ = (
+        CheckConstraint("orders_count >= 0", name="ck_analytics_promotion_orders"),
+        Index("ix_analytics_promotions_org_date", "organization_id", "local_date"),
+    )
+
+    organization_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    location_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("locations.id", ondelete="CASCADE"), primary_key=True
+    )
+    local_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    promotion_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    promotion_name: Mapped[str] = mapped_column(String(200))
+    orders_count: Mapped[int] = mapped_column(BigInteger, default=0)
+    discount_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), default=Decimal(0))
+    gross_revenue_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), default=Decimal(0))
+    net_revenue_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), default=Decimal(0))
+    refunded_discount_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), default=Decimal(0))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 

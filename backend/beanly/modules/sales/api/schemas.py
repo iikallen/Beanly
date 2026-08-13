@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 from beanly.modules.inventory.domain.value_objects import UnitCode, decimal_string
 from beanly.modules.sales.domain.entities import (
+    OrderDiscount,
     OrderItem,
     OrderItemComponent,
     OrderItemModifier,
@@ -159,6 +160,8 @@ class OrderItemResponse(BaseModel):
     modifier_price_minor: str
     unit_price_minor: str
     line_total_minor: str
+    discount_amount_minor: str
+    net_line_total_minor: str
     note: str | None
     created_at: datetime
     updated_at: datetime
@@ -180,11 +183,65 @@ class OrderItemResponse(BaseModel):
             modifier_price_minor=str(value.modifier_price_minor),
             unit_price_minor=str(value.unit_price_minor),
             line_total_minor=str(value.line_total_minor),
+            discount_amount_minor=str(value.discount_amount_minor),
+            net_line_total_minor=str(value.net_line_total_minor),
             note=value.note,
             created_at=value.created_at,
             updated_at=value.updated_at,
             modifiers=[OrderItemModifierResponse.from_entity(item) for item in value.modifiers],
             components=[OrderItemComponentResponse.from_entity(item) for item in value.components],
+        )
+
+
+class OrderDiscountResponse(BaseModel):
+    id: UUID
+    client_discount_id: UUID | None
+    promotion_id: UUID | None
+    source: str
+    promotion_name: str
+    discount_kind: str
+    scope: str
+    percent_rate: Decimal | None
+    configured_amount_minor: str | None
+    promo_code_snapshot: str | None
+    reason: str | None
+    applied_by_user_id: UUID | None
+    applied_at: datetime
+    discount_total_minor: str
+    sort_order: int
+    allocations: list[dict[str, object]]
+
+    @classmethod
+    def from_entity(cls, value: OrderDiscount) -> "OrderDiscountResponse":
+        return cls(
+            id=value.id,
+            client_discount_id=value.client_discount_id,
+            promotion_id=value.promotion_id,
+            source=value.source,
+            promotion_name=value.promotion_name,
+            discount_kind=value.discount_kind,
+            scope=value.scope,
+            percent_rate=value.percent_rate,
+            configured_amount_minor=(
+                str(value.configured_amount_minor)
+                if value.configured_amount_minor is not None
+                else None
+            ),
+            promo_code_snapshot=value.promo_code_snapshot,
+            reason=value.reason,
+            applied_by_user_id=value.applied_by_user_id,
+            applied_at=value.applied_at,
+            discount_total_minor=str(value.discount_total_minor),
+            sort_order=value.sort_order,
+            allocations=[
+                {
+                    "order_item_id": item.order_item_id,
+                    "eligible_amount_minor": str(item.eligible_amount_minor),
+                    "discount_amount_minor": str(item.discount_amount_minor),
+                    "sort_order": item.sort_order,
+                }
+                for item in value.allocations
+            ],
         )
 
 
@@ -204,7 +261,10 @@ class OrderResponse(BaseModel):
     table_label: str | None
     note: str | None
     subtotal_minor: str
+    discount_total_minor: str
     total_minor: str
+    pricing_revision: int
+    priced_at: datetime | None
     created_by_user_id: UUID
     cancelled_by_user_id: UUID | None
     cancelled_at: datetime | None
@@ -218,6 +278,7 @@ class OrderResponse(BaseModel):
     client_created_at: datetime | None
     offline_display_number: int | None
     items: list[OrderItemResponse]
+    discounts: list[OrderDiscountResponse]
 
     @classmethod
     def from_entity(cls, value: SalesOrder) -> "OrderResponse":
@@ -237,7 +298,10 @@ class OrderResponse(BaseModel):
             table_label=value.table_label,
             note=value.note,
             subtotal_minor=str(value.subtotal_minor),
+            discount_total_minor=str(value.discount_total_minor),
             total_minor=str(value.total_minor),
+            pricing_revision=value.pricing_revision,
+            priced_at=value.priced_at,
             created_by_user_id=value.created_by_user_id,
             cancelled_by_user_id=value.cancelled_by_user_id,
             cancelled_at=value.cancelled_at,
@@ -251,4 +315,5 @@ class OrderResponse(BaseModel):
             client_created_at=value.client_created_at,
             offline_display_number=value.offline_display_number,
             items=[OrderItemResponse.from_entity(item) for item in value.items],
+            discounts=[OrderDiscountResponse.from_entity(item) for item in value.discounts],
         )

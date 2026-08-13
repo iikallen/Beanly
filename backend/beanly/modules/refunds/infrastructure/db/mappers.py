@@ -35,6 +35,9 @@ def to_refund(value: RefundModel) -> Refund:
                 line.unit_refund_minor,
                 line.total_refund_minor,
                 line.created_at,
+                line.gross_refund_minor,
+                line.discount_refund_minor,
+                line.net_refund_minor,
             )
             for line in value.lines
         ),

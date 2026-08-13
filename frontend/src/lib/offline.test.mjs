@@ -13,6 +13,8 @@ test("an open order keeps snapshot A pricing after catalog B arrives", () => {
 
   assert.equal(itemA.unit_price_minor, "200000");
   assert.equal(itemA.line_total_minor, "400000");
+  assert.equal(itemA.discount_amount_minor, "0");
+  assert.equal(itemA.net_line_total_minor, "400000");
   assert.equal(itemB.unit_price_minor, "230000");
   assert.deepEqual(itemA.selected_option_ids, ["oat"]);
 });

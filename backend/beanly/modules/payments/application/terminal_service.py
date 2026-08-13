@@ -185,6 +185,7 @@ class TerminalPaymentService:
             None,
             None,
             None,
+            order.pricing_revision,
         )
         try:
             saved = await self.repository.add_external_attempt(attempt)

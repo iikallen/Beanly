@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from beanly.modules.promotions.infrastructure.db.models import SalesOrderDiscountModel
 from beanly.modules.sales.domain.entities import (
     OrderItem,
     PosRegister,
@@ -49,9 +50,7 @@ class SqlAlchemySalesRepository:
         await self.session.flush()
         return to_register(model)
 
-    async def get_register(
-        self, organization_id: UUID, register_id: UUID
-    ) -> PosRegister | None:
+    async def get_register(self, organization_id: UUID, register_id: UUID) -> PosRegister | None:
         model = await self.session.scalar(
             select(PosRegisterModel).where(
                 PosRegisterModel.organization_id == organization_id,
@@ -95,9 +94,7 @@ class SqlAlchemySalesRepository:
                 )
             )
             if open_shift is not None:
-                raise InvalidSalesOperation(
-                    "Register with an OPEN shift cannot be deactivated"
-                )
+                raise InvalidSalesOperation("Register with an OPEN shift cannot be deactivated")
         await self.session.execute(
             update(PosRegisterModel)
             .where(PosRegisterModel.id == value.id)
@@ -221,9 +218,7 @@ class SqlAlchemySalesRepository:
         if self.session.get_bind().dialect.name == "postgresql":
             value = await self.session.scalar(select(func.nextval("sales_order_number_seq")))
         else:
-            count = await self.session.scalar(
-                select(func.count()).select_from(SalesOrderModel)
-            )
+            count = await self.session.scalar(select(func.count()).select_from(SalesOrderModel))
             value = count + 1
         if value is None:
             raise RuntimeError("Order sequence did not return a value")
@@ -271,9 +266,7 @@ class SqlAlchemySalesRepository:
         if status is not None:
             statement = statement.where(SalesOrderModel.status == status.value)
         if created_by_user_id is not None:
-            statement = statement.where(
-                SalesOrderModel.created_by_user_id == created_by_user_id
-            )
+            statement = statement.where(SalesOrderModel.created_by_user_id == created_by_user_id)
         models = await self.session.scalars(
             statement.order_by(SalesOrderModel.created_at.desc(), SalesOrderModel.id)
         )
@@ -334,9 +327,7 @@ class SqlAlchemySalesRepository:
             raise OrderImmutable("Only OPEN orders can be paid")
         await self.session.flush()
 
-    async def get_item_by_client_id(
-        self, order_id: UUID, client_item_id: UUID
-    ) -> OrderItem | None:
+    async def get_item_by_client_id(self, order_id: UUID, client_item_id: UUID) -> OrderItem | None:
         model = await self.session.scalar(
             _item_query().where(
                 SalesOrderItemModel.order_id == order_id,
@@ -423,9 +414,7 @@ class SqlAlchemySalesRepository:
         )
         await self.session.flush()
 
-    async def recalculate_order_totals(
-        self, organization_id: UUID, order_id: UUID
-    ) -> SalesOrder:
+    async def recalculate_order_totals(self, organization_id: UUID, order_id: UUID) -> SalesOrder:
         total = int(
             await self.session.scalar(
                 select(func.coalesce(func.sum(SalesOrderItemModel.line_total_minor), 0)).where(
@@ -461,9 +450,7 @@ class SqlAlchemySalesRepository:
         statement = _order_query(organization_id).where(SalesOrderModel.id == order_id)
         if lock:
             statement = statement.with_for_update()
-        model = await self.session.scalar(
-            statement.execution_options(populate_existing=True)
-        )
+        model = await self.session.scalar(statement.execution_options(populate_existing=True))
         return to_order(model) if model else None
 
     async def commit(self) -> None:
@@ -525,6 +512,9 @@ def _order_values(value: SalesOrder) -> dict[str, object]:
         "note": value.note,
         "subtotal_minor": value.subtotal_minor,
         "total_minor": value.total_minor,
+        "discount_total_minor": value.discount_total_minor,
+        "pricing_revision": value.pricing_revision,
+        "priced_at": value.priced_at,
         "created_by_user_id": value.created_by_user_id,
         "cancelled_by_user_id": value.cancelled_by_user_id,
         "cancelled_at": value.cancelled_at,
@@ -553,6 +543,8 @@ def _item_values(value: OrderItem) -> dict[str, object]:
         "modifier_price_minor": value.modifier_price_minor,
         "unit_price_minor": value.unit_price_minor,
         "line_total_minor": value.line_total_minor,
+        "discount_amount_minor": value.discount_amount_minor,
+        "net_line_total_minor": value.net_line_total_minor or value.line_total_minor,
         "note": value.note,
         "created_at": value.created_at,
         "updated_at": value.updated_at,
@@ -599,5 +591,8 @@ def _order_query(organization_id: UUID):
         .options(
             items.selectinload(SalesOrderItemModel.modifiers),
             items.selectinload(SalesOrderItemModel.components),
+            selectinload(SalesOrderModel.discounts).selectinload(
+                SalesOrderDiscountModel.allocations
+            ),
         )
     )

@@ -90,6 +90,7 @@ class OfflinePaymentLineRequest(BaseModel):
             raise ValueError("Money must be a non-negative minor-unit string")
         return value
 
+
 class OfflinePaymentRequest(BaseModel):
     client_payment_id: UUID
     completed_at: datetime
@@ -114,6 +115,7 @@ class OfflineOrderRequest(BaseModel):
     order_type: OrderType
     status: Literal["OPEN", "CANCELLED", "PAID"]
     items: Annotated[list[OfflineOrderItemRequest], Field(max_length=500)]
+    manual_promotion_ids: Annotated[list[UUID], Field(max_length=100)] = []
     payment: OfflinePaymentRequest | None = None
 
     @field_validator("created_at", "updated_at")

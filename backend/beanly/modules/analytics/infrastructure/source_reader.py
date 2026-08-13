@@ -2,7 +2,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -11,6 +11,7 @@ from beanly.modules.analytics.application.source_ports import (
     AnalyticsExpenseSnapshot,
     AnalyticsInventoryLineSnapshot,
     AnalyticsInventorySnapshot,
+    AnalyticsPromotionSnapshot,
     AnalyticsRefundItemSnapshot,
     AnalyticsRefundSnapshot,
     AnalyticsSaleComponentSnapshot,
@@ -26,7 +27,15 @@ from beanly.modules.inventory.infrastructure.db.models import (
 )
 from beanly.modules.organizations.infrastructure.db.models import LocationModel
 from beanly.modules.payments.infrastructure.db.models import PaymentModel
-from beanly.modules.refunds.infrastructure.db.models import RefundModel
+from beanly.modules.promotions.infrastructure.db.models import (
+    SalesOrderDiscountAllocationModel,
+    SalesOrderDiscountModel,
+)
+from beanly.modules.refunds.infrastructure.db.models import (
+    RefundDiscountAllocationModel,
+    RefundLineModel,
+    RefundModel,
+)
 from beanly.modules.sales.infrastructure.db.models import (
     SalesOrderItemModel,
     SalesOrderModel,
@@ -62,6 +71,30 @@ class SqlAlchemyAnalyticsSourceReader:
         if len(items) != len(item_ids):
             raise AnalyticsProjectionError("Refund item snapshot not found")
         timezone = await self._timezone(organization_id, refund.location_id)
+        promotion_rows = await self.session.execute(
+            select(
+                SalesOrderDiscountModel.promotion_id,
+                SalesOrderDiscountModel.promotion_name,
+                func.sum(RefundDiscountAllocationModel.discount_amount_minor),
+            )
+            .join(
+                RefundDiscountAllocationModel,
+                RefundDiscountAllocationModel.order_discount_id
+                == SalesOrderDiscountModel.id,
+            )
+            .join(
+                RefundLineModel,
+                RefundLineModel.id == RefundDiscountAllocationModel.refund_line_id,
+            )
+            .where(
+                RefundLineModel.refund_id == refund.id,
+                SalesOrderDiscountModel.promotion_id.is_not(None),
+            )
+            .group_by(
+                SalesOrderDiscountModel.promotion_id,
+                SalesOrderDiscountModel.promotion_name,
+            )
+        )
         return AnalyticsRefundSnapshot(
             refund.id,
             organization_id,
@@ -80,6 +113,15 @@ class SqlAlchemyAnalyticsSourceReader:
                     Decimal(line.total_refund_minor) / 100,
                 )
                 for line in refund.lines
+            ),
+            tuple(
+                AnalyticsPromotionSnapshot(
+                    promotion_id,
+                    name,
+                    Decimal(0),
+                    Decimal(amount) / 100,
+                )
+                for promotion_id, name, amount in promotion_rows
             ),
         )
 
@@ -106,6 +148,27 @@ class SqlAlchemyAnalyticsSourceReader:
         if order is None or order.paid_at is None:
             raise AnalyticsProjectionError("Paid sale not found")
         timezone = await self._timezone(organization_id, payment.location_id)
+        promotion_rows = await self.session.execute(
+            select(
+                SalesOrderDiscountModel.promotion_id,
+                SalesOrderDiscountModel.promotion_name,
+                func.sum(SalesOrderDiscountAllocationModel.eligible_amount_minor),
+                func.sum(SalesOrderDiscountAllocationModel.discount_amount_minor),
+            )
+            .join(
+                SalesOrderDiscountAllocationModel,
+                SalesOrderDiscountAllocationModel.order_discount_id
+                == SalesOrderDiscountModel.id,
+            )
+            .where(
+                SalesOrderDiscountModel.order_id == order.id,
+                SalesOrderDiscountModel.promotion_id.is_not(None),
+            )
+            .group_by(
+                SalesOrderDiscountModel.promotion_id,
+                SalesOrderDiscountModel.promotion_name,
+            )
+        )
         actual_costs: dict[UUID, Decimal | None] = {}
         actual_inventory_cogs: Decimal | None = None
         if order.inventory_transaction_id is not None:
@@ -155,6 +218,8 @@ class SqlAlchemyAnalyticsSourceReader:
                     )
                     for component in item.components
                 ),
+                Decimal(item.line_total_minor) / 100,
+                Decimal(item.discount_amount_minor) / 100,
             )
             for item in sorted(order.items, key=lambda value: str(value.id))
         )
@@ -178,6 +243,17 @@ class SqlAlchemyAnalyticsSourceReader:
             order.cogs_status or "INCOMPLETE",
             items,
             actual_inventory_cogs,
+            Decimal(order.subtotal_minor) / 100,
+            Decimal(order.discount_total_minor) / 100,
+            tuple(
+                AnalyticsPromotionSnapshot(
+                    promotion_id,
+                    name,
+                    Decimal(gross) / 100,
+                    Decimal(discount) / 100,
+                )
+                for promotion_id, name, gross, discount in promotion_rows
+            ),
         )
 
     async def inventory_transaction(
@@ -285,9 +361,7 @@ class SqlAlchemyAnalyticsSourceReader:
             after,
         )
         rows = await self.session.execute(statement)
-        return tuple(
-            AnalyticsBackfillSource(row[0], row[1], _as_utc(row[2])) for row in rows
-        )
+        return tuple(AnalyticsBackfillSource(row[0], row[1], _as_utc(row[2])) for row in rows)
 
     async def posted_inventory_transactions(
         self,
@@ -312,9 +386,7 @@ class SqlAlchemyAnalyticsSourceReader:
         )
         statement = _page(statement, model.posted_at, model.id, limit, after)
         rows = await self.session.execute(statement)
-        return tuple(
-            AnalyticsBackfillSource(row[0], row[1], _as_utc(row[2])) for row in rows
-        )
+        return tuple(AnalyticsBackfillSource(row[0], row[1], _as_utc(row[2])) for row in rows)
 
     async def posted_expenses(
         self,
@@ -341,9 +413,7 @@ class SqlAlchemyAnalyticsSourceReader:
             )
         statement = _page(statement, model.occurred_at, model.id, limit, after)
         rows = await self.session.execute(statement)
-        return tuple(
-            AnalyticsBackfillSource(row[0], row[1], _as_utc(row[2])) for row in rows
-        )
+        return tuple(AnalyticsBackfillSource(row[0], row[1], _as_utc(row[2])) for row in rows)
 
     async def _timezone(self, organization_id: UUID, location_id: UUID) -> str:
         value = await self.session.scalar(

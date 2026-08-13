@@ -321,6 +321,7 @@ export type MenuCostSummary = {
 
 export type MenuReadModel = {
   location_id: string;
+  promotions?: OfflinePromotion[];
   categories: Array<{
     id: string;
     name: string;
@@ -400,6 +401,8 @@ export type SalesOrderItem = {
   modifier_price_minor: string;
   unit_price_minor: string;
   line_total_minor: string;
+  discount_amount_minor: string;
+  net_line_total_minor: string;
   note: string | null;
   created_at: string;
   updated_at: string;
@@ -415,6 +418,7 @@ export type SalesOrder = {
   warehouse_id: string;
   number: string;
   client_order_id: string;
+  version: number;
   order_type: SalesOrderType;
   status: SalesOrderStatus;
   currency_code: string;
@@ -422,7 +426,10 @@ export type SalesOrder = {
   table_label: string | null;
   note: string | null;
   subtotal_minor: string;
+  discount_total_minor: string;
   total_minor: string;
+  pricing_revision: number;
+  priced_at: string | null;
   created_by_user_id: string;
   cancelled_by_user_id: string | null;
   cancelled_at: string | null;
@@ -430,6 +437,120 @@ export type SalesOrder = {
   created_at: string;
   updated_at: string;
   items: SalesOrderItem[];
+  discounts: SalesOrderDiscount[];
+};
+
+export type OfflinePromotion = {
+  promotion_id: string;
+  name: string;
+  application_mode: "AUTOMATIC" | "MANUAL";
+  kind: PromotionDiscountKind;
+  scope: PromotionScope;
+  percent_rate: string | null;
+  amount_minor: string | null;
+  fixed_price_minor: string | null;
+  priority: number;
+  stacking: PromotionStackingPolicy;
+  include_modifier_price: boolean;
+  minimum_subtotal_minor: string | null;
+  maximum_discount_minor: string | null;
+  requires_override_permission?: boolean;
+  valid_from: string | null;
+  valid_to: string | null;
+  schedules: PromotionSchedule[];
+  targets: PromotionTarget[];
+};
+
+export type PromotionStatus = "DRAFT" | "ACTIVE" | "ARCHIVED";
+export type PromotionApplicationMode = "AUTOMATIC" | "MANUAL" | "CODE";
+export type PromotionDiscountKind = "PERCENT" | "FIXED_AMOUNT" | "FIXED_PRICE" | "BOGO";
+export type PromotionScope = "ORDER" | "ITEM" | "COMBO";
+export type PromotionStackingPolicy = "EXCLUSIVE" | "STACKABLE";
+export type PromotionTargetType = "CATEGORY" | "PRODUCT" | "VARIANT" | "ALL";
+export type PromotionTargetRole = "ELIGIBLE" | "BUY" | "GET" | "COMBO_COMPONENT";
+export type DiscountSource = "AUTOMATIC" | "MANUAL" | "PROMO_CODE" | "CUSTOM";
+
+export type PromotionTarget = {
+  id?: string;
+  role: PromotionTargetRole;
+  target_type: PromotionTargetType;
+  target_id: string | null;
+  quantity: number;
+  sort_order: number;
+};
+
+export type PromotionSchedule = {
+  id?: string;
+  weekday: number;
+  start_local_time: string;
+  end_local_time: string;
+};
+
+export type PromotionCode = {
+  id: string;
+  code: string;
+  is_active: boolean;
+  valid_from: string | null;
+  valid_to: string | null;
+  max_redemptions: number | null;
+};
+
+export type Promotion = {
+  id: string;
+  organization_id: string;
+  name: string;
+  pos_name: string;
+  status: PromotionStatus;
+  application_mode: PromotionApplicationMode;
+  discount_kind: PromotionDiscountKind;
+  scope: PromotionScope;
+  percent_rate: string | null;
+  amount_minor: string | null;
+  fixed_price_minor: string | null;
+  priority: number;
+  stacking_policy: PromotionStackingPolicy;
+  include_modifier_price: boolean;
+  minimum_subtotal_minor: string | null;
+  maximum_discount_minor: string | null;
+  valid_from: string | null;
+  valid_to: string | null;
+  all_locations: boolean;
+  requires_override_permission: boolean;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  location_ids: string[];
+  schedules: PromotionSchedule[];
+  targets: PromotionTarget[];
+  codes: PromotionCode[];
+};
+
+export type PromotionInput = Omit<Promotion, "id" | "organization_id" | "status" | "created_by" | "created_at" | "updated_at" | "codes">;
+
+export type SalesOrderDiscount = {
+  id: string;
+  promotion_id: string | null;
+  client_discount_id: string | null;
+  source: DiscountSource;
+  promotion_name: string;
+  discount_kind: PromotionDiscountKind;
+  scope: PromotionScope;
+  percent_rate: string | null;
+  configured_amount_minor: string | null;
+  promo_code_snapshot: string | null;
+  reason: string | null;
+  applied_by_user_id: string | null;
+  applied_at: string;
+  discount_total_minor: string;
+  sort_order: number;
+  allocations: Array<{ order_item_id: string; eligible_amount_minor: string; discount_amount_minor: string; sort_order: number }>;
+};
+
+export type PromotionPreview = {
+  subtotal_minor: string;
+  discount_total_minor: string;
+  total_minor: string;
+  item_discount_minor: Record<string, string>;
 };
 
 export type PaymentMethod = "CASH" | "CARD" | "OTHER";
@@ -2372,6 +2493,61 @@ export const api = {
     request<MenuReadModel>(`/api/v1/menu?${new URLSearchParams({ location_id: locationId })}`, {
       headers: tenantAuthorization(organizationId, accessToken),
     }),
+  listPromotions: (organizationId: string, accessToken: string) =>
+    request<Promotion[]>("/api/v1/promotions", {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  getPromotion: (promotionId: string, organizationId: string, accessToken: string) =>
+    request<Promotion>(`/api/v1/promotions/${promotionId}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  createPromotion: (input: PromotionInput, organizationId: string, accessToken: string) =>
+    request<Promotion>("/api/v1/promotions", {
+      method: "POST",
+      body: JSON.stringify(input),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  updatePromotion: (promotionId: string, input: Partial<PromotionInput>, organizationId: string, accessToken: string) =>
+    request<Promotion>(`/api/v1/promotions/${promotionId}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  activatePromotion: (promotionId: string, organizationId: string, accessToken: string) =>
+    request<Promotion>(`/api/v1/promotions/${promotionId}/activate`, {
+      method: "POST",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  archivePromotion: (promotionId: string, organizationId: string, accessToken: string) =>
+    request<Promotion>(`/api/v1/promotions/${promotionId}/archive`, {
+      method: "POST",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  previewPromotion: (
+    promotionId: string,
+    input: { location_id: string; location_timezone: string; occurred_at: string; items: Array<{ id: string; category_id: string | null; product_id: string; variant_id: string; quantity: number; base_price_minor: string; modifier_price_minor: string }> },
+    organizationId: string,
+    accessToken: string,
+  ) => request<PromotionPreview>(`/api/v1/promotions/${promotionId}/preview`, {
+    method: "POST",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  createPromotionCode: (
+    promotionId: string,
+    input: { code: string; valid_from?: string | null; valid_to?: string | null; max_redemptions?: number | null },
+    organizationId: string,
+    accessToken: string,
+  ) => request<Promotion>(`/api/v1/promotions/${promotionId}/codes`, {
+    method: "POST",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  deletePromotionCode: (promotionId: string, codeId: string, organizationId: string, accessToken: string) =>
+    request<Promotion>(`/api/v1/promotions/${promotionId}/codes/${codeId}`, {
+      method: "DELETE",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
   listPosRegisters: (locationId: string, organizationId: string, accessToken: string) =>
     request<PosRegister[]>(
       `/api/v1/sales/registers?${new URLSearchParams({ location_id: locationId })}`,
@@ -2531,6 +2707,33 @@ export const api = {
     method: "DELETE",
     headers: tenantAuthorization(organizationId, accessToken),
   }),
+  applyManualDiscount: (orderId: string, promotionId: string, clientDiscountId: string, organizationId: string, accessToken: string) =>
+    request<SalesOrder>(`/api/v1/sales/orders/${orderId}/discounts/manual`, {
+      method: "POST",
+      body: JSON.stringify({ client_discount_id: clientDiscountId, promotion_id: promotionId }),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  applyPromoCode: (orderId: string, code: string, clientDiscountId: string, organizationId: string, accessToken: string) =>
+    request<SalesOrder>(`/api/v1/sales/orders/${orderId}/discounts/code`, {
+      method: "POST",
+      body: JSON.stringify({ client_discount_id: clientDiscountId, code }),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  applyCustomDiscount: (
+    orderId: string,
+    input: { client_discount_id: string; type: "PERCENT" | "FIXED_AMOUNT"; percent?: string; amount_minor?: string; reason: string },
+    organizationId: string,
+    accessToken: string,
+  ) => request<SalesOrder>(`/api/v1/sales/orders/${orderId}/discounts/custom`, {
+    method: "POST",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  removeSalesOrderDiscount: (orderId: string, discountId: string, organizationId: string, accessToken: string) =>
+    request<SalesOrder>(`/api/v1/sales/orders/${orderId}/discounts/${discountId}`, {
+      method: "DELETE",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
   completePayment: (
     orderId: string,
     input: { client_payment_id: string; lines: PaymentLineInput[] },

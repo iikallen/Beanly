@@ -47,6 +47,7 @@ from beanly.modules.payments.domain.exceptions import (
     PaymentNotFound,
     TerminalBindingNotFound,
 )
+from beanly.modules.promotions.domain.exceptions import PromotionConflict
 
 router = APIRouter(prefix="/payments", tags=["payments"])
 
@@ -289,6 +290,7 @@ def _http_error(exc: Exception) -> HTTPException:
             OrderAlreadyPaid,
             OrderNotPayable,
             OrderShiftClosed,
+            PromotionConflict,
             IntegrityError,
         ),
     ):

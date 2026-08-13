@@ -10,6 +10,7 @@ import {
   Search,
   ShieldAlert,
   ShoppingBag,
+  Tags,
   Trash2,
   X,
 } from "lucide-react";
@@ -32,6 +33,7 @@ import {
   type PaymentMethodChoice,
   type PosRegister,
   type PosWarehouseChoice,
+  type Promotion,
   type ProductVariant,
   type RegisterShift,
   type SalesOrderType,
@@ -54,6 +56,7 @@ import {
   cancelLocalOrder,
   createLocalOrder,
   markExternalPaymentApproved,
+  applyServerPricing,
   payLocalOrder,
   updateLocalOrder,
 } from "@/lib/offline/orders";
@@ -92,6 +95,12 @@ export default function PosPage() {
   const [categoryId, setCategoryId] = useState("");
   const [search, setSearch] = useState("");
   const [showOrders, setShowOrders] = useState(false);
+  const [showDiscounts, setShowDiscounts] = useState(false);
+  const [promotions, setPromotions] = useState<Promotion[]>([]);
+  const [promoCode, setPromoCode] = useState("");
+  const [customType, setCustomType] = useState<"PERCENT" | "FIXED_AMOUNT">("PERCENT");
+  const [customValue, setCustomValue] = useState("");
+  const [customReason, setCustomReason] = useState("");
   const [registerName, setRegisterName] = useState("");
   const [configuration, setConfiguration] = useState<ConfigurationTarget | null>(null);
   const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
@@ -133,6 +142,8 @@ export default function PosPage() {
   const canCancel = permissions.includes("sales.cancel");
   const canPay = permissions.includes("payments.create");
   const canReadRefunds = permissions.includes("sales.read") && permissions.includes("payments.read");
+  const canApplyDiscount = permissions.includes("discounts.apply");
+  const canOverrideDiscount = permissions.includes("discounts.override");
   const orders = offline.orders.filter((order) => !order.status.startsWith("SYNCED_CANCELLED") && !order.status.startsWith("SYNCED_PAID"));
   const selectedOrder = orders.find((order) => order.id === currentOrderId)
     ?? orders.find((order) => order.status === "OPEN" || order.status === "SYNCED_OPEN")
@@ -256,6 +267,19 @@ export default function PosPage() {
 
   useEffect(() => {
     let cancelled = false;
+    async function loadPromotions() {
+      if (!accessToken || !organizationId || !canApplyDiscount || offline.networkStatus !== "ONLINE") return setPromotions([]);
+      try {
+        const values = await api.listPromotions(organizationId, accessToken);
+        if (!cancelled) setPromotions(values.filter((value) => value.status === "ACTIVE"));
+      } catch { if (!cancelled) setPromotions([]); }
+    }
+    void loadPromotions();
+    return () => { cancelled = true; };
+  }, [accessToken, canApplyDiscount, offline.networkStatus, organizationId]);
+
+  useEffect(() => {
+    let cancelled = false;
     async function loadShift() {
       await Promise.resolve();
       if (!accessToken || !organizationId || !selectedRegisterId) return;
@@ -274,6 +298,7 @@ export default function PosPage() {
           const shell: SessionShell = {
             organization_name: currentOrganization?.name ?? "Beanly",
             location_name: currentLocation?.name ?? "POS",
+            location_timezone: currentLocation?.timezone ?? "UTC",
             register_name: register?.name ?? "Register",
             operator_name: user ? `${user.first_name} ${user.last_name}` : "Cashier",
             currency_code: currency,
@@ -307,7 +332,7 @@ export default function PosPage() {
     }
     void loadShift();
     return () => { cancelled = true; };
-  }, [accessToken, currency, currentLocation?.name, currentOrganization?.name, organizationId, paymentMethods, permissions, registers, selectedRegisterId, user]);
+  }, [accessToken, currency, currentLocation?.name, currentLocation?.timezone, currentOrganization?.name, organizationId, paymentMethods, permissions, registers, selectedRegisterId, user]);
 
   useEffect(() => {
     let cancelled = false;
@@ -365,6 +390,9 @@ export default function PosPage() {
     () => new Map(paymentMethods.map((method) => [method.code, method.name])),
     [paymentMethods],
   );
+  const manualPromotionChoices = useMemo(() => offline.networkStatus === "ONLINE"
+    ? promotions.filter((promotion) => promotion.application_mode === "MANUAL").map((promotion) => ({ id: promotion.id, name: promotion.pos_name, kind: promotion.discount_kind, percent: promotion.percent_rate, requiresOverride: promotion.requires_override_permission }))
+    : (menu?.promotions ?? []).filter((promotion) => promotion.application_mode === "MANUAL").map((promotion) => ({ id: promotion.promotion_id, name: promotion.name, kind: promotion.kind, percent: promotion.percent_rate, requiresOverride: promotion.requires_override_permission ?? true })), [menu?.promotions, offline.networkStatus, promotions]);
   const needsSettlementConfirmation = paymentDraft.lines.some((line) => line.method === "CARD" || line.method === "OTHER");
   const terminalOrderReady = paymentOrder?.status === "SYNCED_OPEN"
     && Boolean(paymentOrder.server_order_id)
@@ -600,17 +628,29 @@ export default function PosPage() {
     setCancelReason("");
   }
 
-  function openPayment() {
+  async function openPayment() {
     if (!currentOrder || !canPay || currentOrder.items.length === 0) return;
-    setPaymentOrder(currentOrder);
+    let priced = currentOrder;
+    let ready = false;
+    await run(async () => {
+      if (offline.networkStatus === "ONLINE" && currentOrder.server_order_id && accessToken) {
+        priced = await applyServerPricing(currentOrder.id, await api.updateSalesOrder(currentOrder.server_order_id, {}, currentOrder.organization_id, accessToken));
+      } else if (offlineSession) {
+        priced = await updateLocalOrder(currentOrder.id, () => undefined, offlineSession.clock_offset_ms);
+      }
+      await afterLocalWrite(priced);
+      ready = true;
+    });
+    if (!ready) return;
+    setPaymentOrder(priced);
     setPaymentMode(null);
-    setPaymentCashReceived(priceMinorToInput(currentOrder.total_minor));
+    setPaymentCashReceived(priceMinorToInput(priced.total_minor));
     setSplitCash("");
-    setSplitCard(priceMinorToInput(currentOrder.total_minor));
+    setSplitCard(priceMinorToInput(priced.total_minor));
     setSplitOther("");
     setPaymentReference("");
     setCompletedPayment(null);
-    const sameTerminalAttempt = terminalAttempt?.order_id === currentOrder.server_order_id;
+    const sameTerminalAttempt = terminalAttempt?.order_id === priced.server_order_id;
     setTerminalSelected(Boolean(sameTerminalAttempt));
     if (!sameTerminalAttempt) {
       setTerminalAttempt(null);
@@ -637,6 +677,35 @@ export default function PosPage() {
     if (mode === "CASH" && paymentOrder) {
       setPaymentCashReceived(priceMinorToInput(paymentOrder.total_minor));
     }
+  }
+
+  async function applyDiscount(action: () => Promise<import("@/lib/api").SalesOrder>) {
+    if (!currentOrder?.server_order_id || offline.networkStatus !== "ONLINE") return;
+    await run(async () => {
+      const priced = await action();
+      await afterLocalWrite(await applyServerPricing(currentOrder.id, priced));
+      setPromoCode(""); setCustomValue(""); setCustomReason("");
+    });
+  }
+
+  async function applyManualPromotion(promotion: { id: string }) {
+    if (!currentOrder) return;
+    if (offline.networkStatus === "ONLINE" && currentOrder.server_order_id) {
+      return applyDiscount(() => api.applyManualDiscount(currentOrder.server_order_id!, promotion.id, crypto.randomUUID(), currentOrder.organization_id, accessToken!));
+    }
+    if (!offlineSession) return;
+    await run(async () => afterLocalWrite(await updateLocalOrder(currentOrder.id, (order) => {
+      order.manual_promotion_ids = [...new Set([...(order.manual_promotion_ids ?? []), promotion.id])];
+    }, offlineSession.clock_offset_ms)));
+  }
+
+  async function removeDiscount(discount: NonNullable<OfflineOrder["discounts"]>[number]) {
+    if (!currentOrder) return;
+    if (offline.networkStatus === "ONLINE" && currentOrder.server_order_id) return applyDiscount(() => api.removeSalesOrderDiscount(currentOrder.server_order_id!, discount.id, currentOrder.organization_id, accessToken!));
+    if (!offlineSession || discount.source !== "MANUAL" || !discount.promotion_id) return;
+    await run(async () => afterLocalWrite(await updateLocalOrder(currentOrder.id, (order) => {
+      order.manual_promotion_ids = (order.manual_promotion_ids ?? []).filter((id) => id !== discount.promotion_id);
+    }, offlineSession.clock_offset_ms)));
   }
 
   function chooseTerminalPayment() {
@@ -905,7 +974,7 @@ export default function PosPage() {
                   <article key={item.id}>
                     <div className="pos-line-main">
                       <div><strong>{item.product_name}</strong><span>{item.variant_name}</span></div>
-                      <b>{formatMenuPriceMinor(item.line_total_minor, currentOrder.currency_code)}</b>
+                      <b className={BigInt(item.discount_amount_minor ?? "0") > BigInt(0) ? "pos-line-discounted" : ""}>{BigInt(item.discount_amount_minor ?? "0") > BigInt(0) && <del>{formatMenuPriceMinor(item.line_total_minor, currentOrder.currency_code)}</del>}{formatMenuPriceMinor(item.net_line_total_minor ?? item.line_total_minor, currentOrder.currency_code)}</b>
                     </div>
                     {item.modifiers.length > 0 && <p>{item.modifiers.map((modifier) => modifier.modifier_option_name).join(" · ")}</p>}
                     {item.note && <p>{item.note}</p>}
@@ -918,6 +987,9 @@ export default function PosPage() {
                 ))}
                 {currentOrder.items.length === 0 && <div className="pos-receipt-empty"><ShoppingBag aria-hidden="true" /><p>Add a product to start this order.</p></div>}
               </div>
+              {(currentOrder.discounts ?? []).length > 0 && <div className="pos-discount-lines">{currentOrder.discounts.map((discount) => <div key={discount.id}><span>{discount.source === "AUTOMATIC" && "⚡ "}{discount.promotion_name}</span><strong>−{formatMenuPriceMinor(discount.discount_total_minor, currentOrder.currency_code)}</strong>{discount.source !== "AUTOMATIC" && canApplyDiscount && <button aria-label={`Remove ${discount.promotion_name}`} disabled={busy || (offline.networkStatus !== "ONLINE" && discount.source !== "MANUAL")} type="button" onClick={() => void removeDiscount(discount)}><X /></button>}</div>)}</div>}
+              <button className="pos-discounts-button" disabled={!canApplyDiscount || !canWriteLocal} type="button" onClick={() => setShowDiscounts(true)}><Tags />Discounts{BigInt(currentOrder.discount_total_minor ?? "0") > BigInt(0) && <span>Save {formatMenuPriceMinor(currentOrder.discount_total_minor, currentOrder.currency_code)}</span>}</button>
+              {BigInt(currentOrder.discount_total_minor ?? "0") > BigInt(0) && <div className="pos-receipt-subtotal"><span>Subtotal</span><strong>{formatMenuPriceMinor(currentOrder.subtotal_minor, currentOrder.currency_code)}</strong></div>}
               <div className="pos-receipt-total"><span>Total</span><strong>{formatMenuPriceMinor(currentOrder.total_minor, currentOrder.currency_code)}</strong></div>
               <button className="primary-button pos-pay-button" disabled={busy || !canPay || !canWriteLocal || currentOrder.items.length === 0} type="button" onClick={openPayment}>Pay · {formatMenuPriceMinor(currentOrder.total_minor, currentOrder.currency_code)}</button>
               {canCancel && <button className="pos-cancel-order" disabled={busy || !canWriteLocal} type="button" onClick={openCancelDialog}>Cancel order</button>}
@@ -927,6 +999,22 @@ export default function PosPage() {
           )}
         </aside>
       </div>
+
+      {showDiscounts && currentOrder && (
+        <div className="modal-backdrop" role="presentation">
+          <div className="modal-card pos-discount-modal" role="dialog" aria-modal="true" aria-labelledby="pos-discount-title">
+            <button className="modal-close" type="button" aria-label="Close discounts" onClick={() => setShowDiscounts(false)}><X /></button>
+            <span className="pos-eyebrow">Current order</span><h2 id="pos-discount-title">Discounts</h2>
+            <>
+              <section className="pos-discount-group"><h3>Automatic</h3>{(currentOrder.discounts ?? []).filter((discount) => discount.source === "AUTOMATIC").map((discount) => <p key={discount.id}>✓ {discount.promotion_name} <strong>−{formatMenuPriceMinor(discount.discount_total_minor, currentOrder.currency_code)}</strong></p>)}{!(currentOrder.discounts ?? []).some((discount) => discount.source === "AUTOMATIC") && <small>No automatic promotion matched.</small>}</section>
+              <section className="pos-discount-group"><h3>Manual</h3>{manualPromotionChoices.filter((promotion) => !promotion.requiresOverride || (offline.networkStatus === "ONLINE" && canOverrideDiscount)).map((promotion) => <button disabled={busy} key={promotion.id} type="button" onClick={() => void applyManualPromotion(promotion)}><span>{promotion.name}</span><small>{promotion.kind === "PERCENT" ? `${promotion.percent}%` : promotion.kind.replaceAll("_", " ")}</small></button>)}{manualPromotionChoices.length === 0 && <small>No manual presets available.</small>}</section>
+              <section className="pos-discount-group"><h3>Promo code</h3>{offline.networkStatus !== "ONLINE" || !currentOrder.server_order_id ? <small>Promo codes require an online, synced order.</small> : <div className="pos-discount-code"><input maxLength={80} placeholder="Enter code" value={promoCode} onChange={(event) => setPromoCode(event.target.value.toUpperCase())} /><button className="secondary-button" disabled={busy || !promoCode.trim()} type="button" onClick={() => void applyDiscount(() => api.applyPromoCode(currentOrder.server_order_id!, promoCode, crypto.randomUUID(), currentOrder.organization_id, accessToken!))}>Apply</button></div>}</section>
+              {canOverrideDiscount && <section className="pos-discount-group"><h3>Manager · Custom discount</h3>{offline.networkStatus !== "ONLINE" || !currentOrder.server_order_id ? <small>Custom discounts require an online, synced order.</small> : <div className="pos-custom-discount"><select value={customType} onChange={(event) => setCustomType(event.target.value as typeof customType)}><option value="PERCENT">Percent</option><option value="FIXED_AMOUNT">Fixed amount</option></select><input min="0" step={customType === "PERCENT" ? "0.0001" : "0.01"} type="number" placeholder={customType === "PERCENT" ? "15" : "500"} value={customValue} onChange={(event) => setCustomValue(event.target.value)} /><input maxLength={1000} placeholder="Reason (required)" value={customReason} onChange={(event) => setCustomReason(event.target.value)} /><button className="secondary-button" disabled={busy || !customValue || !customReason.trim()} type="button" onClick={() => void applyDiscount(() => api.applyCustomDiscount(currentOrder.server_order_id!, { client_discount_id: crypto.randomUUID(), type: customType, ...(customType === "PERCENT" ? { percent: customValue } : { amount_minor: parseMenuPriceToMinor(customValue)! }), reason: customReason.trim() }, currentOrder.organization_id, accessToken!))}>Apply custom</button></div>}</section>}
+            </>
+            {error && <p className="form-message error" role="alert">{error}</p>}
+          </div>
+        </div>
+      )}
 
       {configuration && (
         <div className="modal-backdrop" role="presentation">

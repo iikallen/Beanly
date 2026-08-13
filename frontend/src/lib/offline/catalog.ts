@@ -68,6 +68,7 @@ export function buildLocalItem(
     id: clientItemId,
     client_item_id: clientItemId,
     product_id: product.id,
+    category_id: product.category_id,
     product_variant_id: variant.id,
     product_name: product.name,
     variant_name: variant.name,
@@ -77,6 +78,8 @@ export function buildLocalItem(
     modifier_price_minor: String(modifierPrice),
     unit_price_minor: String(unitPrice),
     line_total_minor: String(unitPrice * BigInt(quantity)),
+    discount_amount_minor: "0",
+    net_line_total_minor: String(unitPrice * BigInt(quantity)),
     note,
     modifiers,
   };

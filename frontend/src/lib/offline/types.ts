@@ -1,7 +1,9 @@
 import type {
+  OfflinePromotion,
   MenuReadModel,
   PaymentLineInput,
   PaymentMethodChoice,
+  SalesOrderDiscount,
   SalesOrderType,
 } from "@/lib/api";
 
@@ -18,6 +20,7 @@ export type OfflineOrderItem = {
   id: string;
   client_item_id: string;
   product_id: string;
+  category_id: string;
   product_variant_id: string;
   product_name: string;
   variant_name: string;
@@ -27,6 +30,8 @@ export type OfflineOrderItem = {
   modifier_price_minor: string;
   unit_price_minor: string;
   line_total_minor: string;
+  discount_amount_minor: string;
+  net_line_total_minor: string;
   note: string | null;
   modifiers: Array<{
     modifier_group_id: string;
@@ -56,6 +61,7 @@ export type OfflineOrder = {
   session_id: string;
   organization_id: string;
   location_id: string;
+  location_timezone: string;
   shift_id: string;
   warehouse_id: string;
   offline_display_number: number;
@@ -65,7 +71,11 @@ export type OfflineOrder = {
   currency_code: string;
   items: OfflineOrderItem[];
   subtotal_minor: string;
+  discount_total_minor: string;
   total_minor: string;
+  discounts: SalesOrderDiscount[];
+  manual_promotion_ids: string[];
+  pricing_promotions: OfflinePromotion[];
   payment: OfflinePayment | null;
   cancel_reason: string | null;
   created_at: string;
@@ -101,6 +111,7 @@ export type OfflineSession = {
   shell: {
     organization_name: string;
     location_name: string;
+    location_timezone?: string;
     register_name: string;
     operator_name: string;
     currency_code: string;

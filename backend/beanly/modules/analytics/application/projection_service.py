@@ -10,6 +10,7 @@ from beanly.modules.analytics.application.dto import (
     InventoryConsumptionDailyDelta,
     LocationMetricsDailyDelta,
     ProductSalesDailyDelta,
+    PromotionDailyDelta,
     SalesDailyDelta,
 )
 from beanly.modules.analytics.application.ports import AnalyticsRepository
@@ -93,6 +94,17 @@ class AnalyticsProjectionService:
                 refund_amount=_amount(refund.amount),
             )
         )
+        for promotion in refund.promotions:
+            await self.repository.upsert_promotion(
+                PromotionDailyDelta(
+                    organization_id,
+                    refund.location_id,
+                    local_date,
+                    promotion.promotion_id,
+                    promotion.promotion_name,
+                    refunded_discount_amount=_amount(promotion.discount_amount),
+                )
+            )
         return True
 
     async def apply_payment_completed(
@@ -147,6 +159,8 @@ class AnalyticsProjectionService:
                 int(order_type == "DINE_IN"),
                 int(order_type == "TAKEAWAY"),
                 int(order_type == "DELIVERY"),
+                gross_revenue_amount=_amount(sale.order_gross),
+                discount_amount=_amount(sale.order_discount),
             )
         )
         for delta in product_deltas:
@@ -175,6 +189,22 @@ class AnalyticsProjectionService:
                 incomplete_cogs_orders=incomplete,
             )
         )
+        for promotion in sale.promotions:
+            await self.repository.upsert_promotion(
+                PromotionDailyDelta(
+                    organization_id,
+                    sale.location_id,
+                    local.date(),
+                    promotion.promotion_id,
+                    promotion.promotion_name,
+                    orders_count=1,
+                    discount_amount=_amount(promotion.discount_amount),
+                    gross_revenue_amount=_amount(promotion.gross_eligible_amount),
+                    net_revenue_amount=_amount(
+                        promotion.gross_eligible_amount - promotion.discount_amount
+                    ),
+                )
+            )
         return True
 
     async def apply_inventory_transaction_posted(
@@ -344,6 +374,8 @@ def _product_deltas(sale, local_date) -> tuple[ProductSalesDailyDelta, ...]:
                 "variant_name": item.variant_name,
                 "quantity": 0,
                 "revenue": Decimal(0),
+                "gross": Decimal(0),
+                "discount": Decimal(0),
                 "cogs": Decimal(0),
             },
         )
@@ -351,6 +383,8 @@ def _product_deltas(sale, local_date) -> tuple[ProductSalesDailyDelta, ...]:
             raise AnalyticsProjectionError("Variant belongs to multiple products")
         current["quantity"] = int(current["quantity"]) + item.quantity
         current["revenue"] = Decimal(current["revenue"]) + item.revenue_amount
+        current["gross"] = Decimal(current["gross"]) + item.gross_revenue_amount
+        current["discount"] = Decimal(current["discount"]) + item.discount_amount
         current["cogs"] = Decimal(current["cogs"]) + cogs
     raw_total = sum((Decimal(values["cogs"]) for values in grouped.values()), Decimal(0))
     inventory_items = {
@@ -379,6 +413,8 @@ def _product_deltas(sale, local_date) -> tuple[ProductSalesDailyDelta, ...]:
             _amount(Decimal(values["revenue"])),
             _amount(Decimal(values["cogs"])),
             incomplete,
+            gross_revenue_amount=_amount(Decimal(values["gross"])),
+            discount_amount=_amount(Decimal(values["discount"])),
         )
         for variant_id, values in sorted(grouped.items(), key=lambda pair: str(pair[0]))
     )

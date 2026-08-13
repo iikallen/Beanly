@@ -22,6 +22,16 @@ class AnalyticsSaleItemSnapshot:
     quantity: int
     revenue_amount: Decimal
     components: tuple[AnalyticsSaleComponentSnapshot, ...]
+    gross_revenue_amount: Decimal = Decimal(0)
+    discount_amount: Decimal = Decimal(0)
+
+
+@dataclass(frozen=True, slots=True)
+class AnalyticsPromotionSnapshot:
+    promotion_id: UUID
+    promotion_name: str
+    gross_eligible_amount: Decimal
+    discount_amount: Decimal
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +49,9 @@ class AnalyticsSaleSnapshot:
     cogs_status: str
     items: tuple[AnalyticsSaleItemSnapshot, ...]
     actual_inventory_cogs: Decimal | None = None
+    order_gross: Decimal = Decimal(0)
+    order_discount: Decimal = Decimal(0)
+    promotions: tuple[AnalyticsPromotionSnapshot, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +74,7 @@ class AnalyticsRefundSnapshot:
     currency_code: str
     amount: Decimal
     items: tuple[AnalyticsRefundItemSnapshot, ...]
+    promotions: tuple[AnalyticsPromotionSnapshot, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

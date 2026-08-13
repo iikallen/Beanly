@@ -130,6 +130,8 @@ class OfflineSyncService:
             required.add(Permission.PAYMENTS_CREATE)
         if request.status == "CANCELLED":
             required.add(Permission.SALES_CANCEL)
+        if request.manual_promotion_ids:
+            required.add(Permission.DISCOUNTS_APPLY)
         if not required <= context.permissions:
             return await self._conflict(
                 session,

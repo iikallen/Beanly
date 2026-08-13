@@ -53,6 +53,8 @@ class FinanceSaleSnapshot:
     cogs_amount: Decimal
     cogs_status: str
     paid_at: datetime
+    gross_amount_minor: int = 0
+    discount_amount_minor: int = 0
 
 
 @dataclass(frozen=True, slots=True)
