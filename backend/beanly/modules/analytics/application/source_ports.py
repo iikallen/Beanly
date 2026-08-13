@@ -32,6 +32,9 @@ class AnalyticsPromotionSnapshot:
     promotion_name: str
     gross_eligible_amount: Decimal
     discount_amount: Decimal
+    applications_count: int = 0
+    items_count: int = 0
+    refund_amount: Decimal = Decimal(0)
 
 
 @dataclass(frozen=True, slots=True)

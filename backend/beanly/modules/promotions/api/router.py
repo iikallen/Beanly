@@ -1,3 +1,4 @@
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
@@ -9,14 +10,13 @@ from beanly.modules.promotions.api.dependencies import (
 )
 from beanly.modules.promotions.api.schemas import (
     CodeCreate,
+    PromotionPerformanceResponse,
     PromotionPreviewRequest,
     PromotionPreviewResponse,
     PromotionResponse,
     PromotionWrite,
 )
-from beanly.modules.promotions.application.pricing_engine import SelectedPromotion, price_order
-from beanly.modules.promotions.domain.entities import PricingItem
-from beanly.modules.promotions.domain.enums import DiscountSource, PromotionStatus
+from beanly.modules.promotions.domain.enums import PromotionStatus
 from beanly.modules.promotions.domain.exceptions import PromotionConflict, PromotionNotFound
 
 router = APIRouter(prefix="/promotions", tags=["promotions"])
@@ -27,11 +27,43 @@ async def list_promotions(context: PromotionsReadDep, service: PromotionServiceD
     return [PromotionResponse.from_entity(value) for value in await service.list(context)]
 
 
+@router.get("/performance", response_model=list[PromotionPerformanceResponse])
+async def promotion_performance(
+    date_from: date,
+    date_to: date,
+    context: PromotionsReadDep,
+    service: PromotionServiceDep,
+    location_id: UUID | None = None,
+):
+    if date_to < date_from:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "date_to precedes date_from")
+    try:
+        rows = await service.performance(context, date_from, date_to, location_id)
+    except PromotionNotFound as exc:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, {"code": exc.code, "message": str(exc)}
+        ) from exc
+    return [
+        PromotionPerformanceResponse(
+            promotion_id=row[0],
+            promotion_name=row[1],
+            orders_count=int(row[2] or 0),
+            applications_count=int(row[3] or 0),
+            items_count=int(row[4] or 0),
+            gross_eligible_amount=str(row[5] or 0),
+            discount_amount=str(row[6] or 0),
+            net_revenue_amount=str(row[7] or 0),
+            refund_amount=str(row[8] or 0),
+        )
+        for row in rows
+    ]
+
+
 @router.post("", response_model=PromotionResponse, status_code=status.HTTP_201_CREATED)
 async def create_promotion(
     payload: PromotionWrite, context: PromotionsWriteDep, service: PromotionServiceDep
 ):
-    return PromotionResponse.from_entity(await service.create(context, payload))
+    return await _call(service.create(context, payload))
 
 
 @router.get("/{promotion_id}", response_model=PromotionResponse)
@@ -72,21 +104,16 @@ async def preview_promotion(
     context: PromotionsReadDep,
     service: PromotionServiceDep,
 ):
-    promotion = await service.get(context, promotion_id)
-    result = price_order(
-        tuple(PricingItem(**item.model_dump()) for item in payload.items),
-        (promotion,),
-        location_id=payload.location_id,
-        location_timezone=payload.location_timezone,
-        occurred_at=payload.occurred_at,
-        selected=(
-            SelectedPromotion(
-                promotion,
-                DiscountSource.MANUAL,
-                applied_by_user_id=context.user_id,
-            ),
-        ),
-    )
+    try:
+        result = await service.preview(context, promotion_id, payload)
+    except PromotionNotFound as exc:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, {"code": exc.code, "message": str(exc)}
+        ) from exc
+    except PromotionConflict as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, {"code": exc.code, "message": str(exc)}
+        ) from exc
     return PromotionPreviewResponse(
         subtotal_minor=str(result.subtotal_minor),
         discount_total_minor=str(result.discount_total_minor),

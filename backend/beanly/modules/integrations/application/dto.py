@@ -26,12 +26,24 @@ class FiscalItem:
     quantity: int
     unit_price_minor: int
     total_minor: int
+    gross_total_minor: int | None = None
+    discount_minor: int = 0
     nkt_code: str | None = None
     nkt_code_type: str | None = None
     unit_code: str = "pcs"
     vat_rate: Decimal | None = None
     vat_amount_minor: int = 0
     marking_codes: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        gross = (
+            self.total_minor + self.discount_minor
+            if self.gross_total_minor is None
+            else self.gross_total_minor
+        )
+        if gross - self.discount_minor != self.total_minor:
+            raise ValueError("Fiscal item gross - discount must equal total")
+        object.__setattr__(self, "gross_total_minor", gross)
 
     @property
     def name(self) -> str:
@@ -53,6 +65,13 @@ class FiscalSaleCommand:
     items: tuple[FiscalItem, ...]
     payment_lines: tuple[FiscalPaymentLine, ...]
     total_minor: int
+    discount_total_minor: int = 0
+
+    def __post_init__(self) -> None:
+        if sum(item.total_minor for item in self.items) != self.total_minor:
+            raise ValueError("Fiscal sale item totals must reconcile")
+        if sum(item.discount_minor for item in self.items) != self.discount_total_minor:
+            raise ValueError("Fiscal sale discounts must reconcile")
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +85,18 @@ class FiscalRefundCommand:
     payment_lines: tuple[FiscalPaymentLine, ...]
     total_minor: int
     reason: str
+    gross_total_minor: int | None = None
+    discount_total_minor: int = 0
+
+    def __post_init__(self) -> None:
+        gross = (
+            self.total_minor + self.discount_total_minor
+            if self.gross_total_minor is None
+            else self.gross_total_minor
+        )
+        if gross - self.discount_total_minor != self.total_minor:
+            raise ValueError("Fiscal refund gross - discount must equal total")
+        object.__setattr__(self, "gross_total_minor", gross)
 
 
 @dataclass(frozen=True, slots=True)

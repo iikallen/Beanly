@@ -8,6 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from beanly.core.observability import metrics
 from beanly.core.security.audit import SecurityAuditRecorder
 from beanly.modules.menu.infrastructure.db.models import ProductModel
+from beanly.modules.organizations.application.services.organization_service import (
+    OrganizationService,
+)
+from beanly.modules.organizations.domain.entities import TenantContext
+from beanly.modules.organizations.domain.exceptions import OrganizationAccessDenied
+from beanly.modules.organizations.domain.permissions import Permission
 from beanly.modules.organizations.infrastructure.db.models import LocationModel
 from beanly.modules.promotions.application.pricing_engine import (
     CustomDiscount,
@@ -109,6 +115,7 @@ async def reprice_order(
                 .select_from(SalesOrderDiscountModel)
                 .join(SalesOrderModel, SalesOrderModel.id == SalesOrderDiscountModel.order_id)
                 .where(
+                    SalesOrderModel.organization_id == organization_id,
                     SalesOrderDiscountModel.promo_code_snapshot == code.code_normalized,
                     SalesOrderModel.status == OrderStatus.PAID.value,
                 )
@@ -229,24 +236,32 @@ async def reprice_order(
 
 
 class OrderDiscountService:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, organizations: OrganizationService) -> None:
         self.session = session
+        self.organizations = organizations
         self.audit = SecurityAuditRecorder(session)
 
     async def manual(
         self,
-        organization_id: UUID,
-        user_id: UUID,
+        context: TenantContext,
         order_id: UUID,
         client_id: UUID,
         promotion_id: UUID,
     ):
+        order = await self._ensure_order_access(context, order_id)
         if await self._idempotency(order_id, client_id, promotion_id=promotion_id):
             return order_id
         promotion = await SqlAlchemyPromotionRepository(self.session).get(
-            organization_id, promotion_id
+            context.organization_id, promotion_id
         )
         if promotion is None or promotion.status != PromotionStatus.ACTIVE:
+            raise PromotionNotFound("Active promotion not found")
+        if (
+            promotion.requires_override_permission
+            and Permission.DISCOUNTS_OVERRIDE not in context.permissions
+        ):
+            raise PromotionNotFound("Active promotion not found")
+        if not promotion.all_locations and order.location_id not in promotion.location_ids:
             raise PromotionNotFound("Active promotion not found")
         self._intent(
             order_id,
@@ -258,22 +273,25 @@ class OrderDiscountService:
             promotion.scope,
             promotion.percent_rate,
             promotion.amount_minor or promotion.fixed_price_minor,
-            user_id,
+            context.user_id,
         )
-        await self._audit(organization_id, user_id, order_id, "MANUAL_DISCOUNT_APPLIED")
-        return await self._finish(organization_id, order_id)
+        await self._audit(
+            context.organization_id, context.user_id, order_id, "MANUAL_DISCOUNT_APPLIED"
+        )
+        return await self._finish(context.organization_id, order_id)
 
     async def code(
-        self, organization_id: UUID, user_id: UUID, order_id: UUID, client_id: UUID, code: str
+        self, context: TenantContext, order_id: UUID, client_id: UUID, code: str
     ):
         metrics.promo_code_attempts_total.add(1)
         normalized = "".join(code.upper().split())
+        order = await self._ensure_order_access(context, order_id)
         if await self._idempotency(order_id, client_id, code=normalized):
             return order_id
         row = await self.session.scalar(
             select(PromotionCodeModel)
             .where(
-                PromotionCodeModel.organization_id == organization_id,
+                PromotionCodeModel.organization_id == context.organization_id,
                 PromotionCodeModel.code_normalized == normalized,
                 PromotionCodeModel.is_active.is_(True),
             )
@@ -285,24 +303,27 @@ class OrderDiscountService:
             or (row.valid_from and now < row.valid_from)
             or (row.valid_to and now >= row.valid_to)
         ):
-            raise PromotionCodeUnavailable("Promo code is unavailable")
+            return self._reject_code("Promo code is unavailable")
         if row.max_redemptions is not None:
             count = await self.session.scalar(
                 select(func.count())
                 .select_from(SalesOrderDiscountModel)
                 .join(SalesOrderModel, SalesOrderModel.id == SalesOrderDiscountModel.order_id)
                 .where(
+                    SalesOrderModel.organization_id == context.organization_id,
                     SalesOrderDiscountModel.promo_code_snapshot == normalized,
                     SalesOrderModel.status == OrderStatus.PAID.value,
                 )
             )
             if int(count or 0) >= row.max_redemptions:
-                raise PromotionCodeUnavailable("Promo code redemption limit reached")
+                return self._reject_code("Promo code redemption limit reached")
         promotion = await SqlAlchemyPromotionRepository(self.session).get(
-            organization_id, row.promotion_id
+            context.organization_id, row.promotion_id
         )
         if promotion is None or promotion.status != PromotionStatus.ACTIVE:
-            raise PromotionCodeUnavailable("Promo code promotion is unavailable")
+            return self._reject_code("Promo code promotion is unavailable")
+        if not promotion.all_locations and order.location_id not in promotion.location_ids:
+            return self._reject_code("Promo code is unavailable at this location")
         self._intent(
             order_id,
             client_id,
@@ -313,16 +334,17 @@ class OrderDiscountService:
             promotion.scope,
             promotion.percent_rate,
             promotion.amount_minor or promotion.fixed_price_minor,
-            user_id,
+            context.user_id,
             code=normalized,
         )
-        await self._audit(organization_id, user_id, order_id, "PROMO_CODE_APPLIED")
-        return await self._finish(organization_id, order_id)
+        await self._audit(
+            context.organization_id, context.user_id, order_id, "PROMO_CODE_APPLIED"
+        )
+        return await self._finish(context.organization_id, order_id)
 
     async def custom(
         self,
-        organization_id: UUID,
-        user_id: UUID,
+        context: TenantContext,
         order_id: UUID,
         client_id: UUID,
         kind: DiscountKind,
@@ -330,6 +352,7 @@ class OrderDiscountService:
         amount: int | None,
         reason: str,
     ):
+        await self._ensure_order_access(context, order_id)
         if await self._idempotency(
             order_id, client_id, kind=kind.value, percent=percent, amount=amount, reason=reason
         ):
@@ -344,34 +367,69 @@ class OrderDiscountService:
             PromotionScope.ORDER,
             percent,
             amount,
-            user_id,
+            context.user_id,
             reason=reason,
         )
-        metrics.custom_discount_total.add(amount or 0)
         await self._audit(
-            organization_id,
-            user_id,
+            context.organization_id,
+            context.user_id,
             order_id,
             "CUSTOM_DISCOUNT_APPLIED",
             {"reason": reason, "configured_amount_minor": amount or 0},
         )
-        return await self._finish(organization_id, order_id)
+        await self._finish(context.organization_id, order_id)
+        applied = await self.session.scalar(
+            select(SalesOrderDiscountModel.discount_total_minor).where(
+                SalesOrderDiscountModel.order_id == order_id,
+                SalesOrderDiscountModel.client_discount_id == client_id,
+            )
+        )
+        metrics.custom_discount_total.add(int(applied or 0))
+        return order_id
 
-    async def remove(self, organization_id: UUID, order_id: UUID, discount_id: UUID):
-        await self.session.execute(
+    async def remove(self, context: TenantContext, order_id: UUID, discount_id: UUID):
+        await self._ensure_order_access(context, order_id)
+        result = await self.session.execute(
             delete(SalesOrderDiscountModel).where(
                 SalesOrderDiscountModel.id == discount_id,
                 SalesOrderDiscountModel.order_id == order_id,
             )
         )
+        if result.rowcount != 1:
+            raise PromotionNotFound("Discount not found")
         await self.audit.record(
             action="DISCOUNT_REMOVED",
             resource_type="sales_order",
-            organization_id=organization_id,
+            organization_id=context.organization_id,
+            actor_user_id=context.user_id,
             resource_id=order_id,
             metadata={"discount_id": str(discount_id)},
         )
-        return await self._finish(organization_id, order_id)
+        return await self._finish(context.organization_id, order_id)
+
+    async def _ensure_order_access(
+        self, context: TenantContext, order_id: UUID
+    ) -> SalesOrderModel:
+        order = await self.session.scalar(
+            select(SalesOrderModel).where(
+                SalesOrderModel.id == order_id,
+                SalesOrderModel.organization_id == context.organization_id,
+            )
+        )
+        if order is None:
+            raise PromotionNotFound("Order not found")
+        try:
+            await self.organizations.ensure_location_access(context, order.location_id)
+        except OrganizationAccessDenied as exc:
+            raise PromotionNotFound("Order not found") from exc
+        if order.status != OrderStatus.OPEN.value:
+            raise PromotionCodeUnavailable("Order is immutable")
+        return order
+
+    @staticmethod
+    def _reject_code(message: str):
+        metrics.promo_code_rejected_total.add(1)
+        raise PromotionCodeUnavailable(message)
 
     async def _audit(
         self,

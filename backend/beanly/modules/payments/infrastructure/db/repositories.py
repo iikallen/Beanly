@@ -17,6 +17,7 @@ from beanly.modules.payments.domain.entities import (
 )
 from beanly.modules.payments.domain.enums import PaymentMethod
 from beanly.modules.payments.domain.exceptions import (
+    InvalidPayment,
     PaymentConflict,
     TerminalBindingConflict,
     TerminalBindingNotFound,
@@ -48,6 +49,41 @@ class SqlAlchemyPaymentRepository:
         except IntegrityError as exc:
             raise PaymentConflict("Payment already exists") from exc
         return to_payment(model)
+
+    async def validate_external_attempts(
+        self,
+        organization_id: UUID,
+        order_id: UUID,
+        pricing_revision: int,
+        lines: tuple[tuple[UUID, int, str | None, str | None], ...],
+    ) -> UUID | None:
+        if not lines:
+            return None
+        payment_ids: set[UUID] = set()
+        for attempt_id, amount, provider_code, provider_transaction_id in lines:
+            attempt = await self.session.scalar(
+                select(ExternalPaymentAttemptModel)
+                .where(
+                    ExternalPaymentAttemptModel.organization_id == organization_id,
+                    ExternalPaymentAttemptModel.id == attempt_id,
+                )
+                .with_for_update()
+            )
+            if (
+                attempt is None
+                or attempt.order_id != order_id
+                or attempt.status != "APPROVED"
+                or attempt.order_pricing_revision != pricing_revision
+                or attempt.amount_minor != amount
+                or attempt.payment_id is None
+                or attempt.provider_code != provider_code
+                or attempt.provider_reference != provider_transaction_id
+            ):
+                raise InvalidPayment("External payment approval does not match current pricing")
+            payment_ids.add(attempt.payment_id)
+        if len(payment_ids) != 1:
+            raise InvalidPayment("External payment attempts must belong to one payment")
+        return next(iter(payment_ids))
 
     async def list_terminal_bindings(
         self, organization_id: UUID, register_id: UUID

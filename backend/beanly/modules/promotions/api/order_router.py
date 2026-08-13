@@ -31,8 +31,7 @@ async def manual(
         context,
         order_id,
         service.manual(
-            context.organization_id,
-            context.user_id,
+            context,
             order_id,
             payload.client_discount_id,
             payload.promotion_id,
@@ -52,8 +51,7 @@ async def code(
         context,
         order_id,
         service.code(
-            context.organization_id,
-            context.user_id,
+            context,
             order_id,
             payload.client_discount_id,
             payload.code,
@@ -73,8 +71,7 @@ async def custom(
         context,
         order_id,
         service.custom(
-            context.organization_id,
-            context.user_id,
+            context,
             order_id,
             payload.client_discount_id,
             payload.type,
@@ -90,7 +87,7 @@ async def remove(
     order_id: UUID, discount_id: UUID, context: DiscountApplyDep, service: OrderDiscountServiceDep
 ):
     return await _run(
-        service, context, order_id, service.remove(context.organization_id, order_id, discount_id)
+        service, context, order_id, service.remove(context, order_id, discount_id)
     )
 
 

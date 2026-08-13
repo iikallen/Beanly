@@ -15,6 +15,13 @@ class PaymentRepository(Protocol):
     async def get_by_client_id(
         self, organization_id: UUID, client_payment_id: UUID
     ) -> Payment | None: ...
+    async def validate_external_attempts(
+        self,
+        organization_id: UUID,
+        order_id: UUID,
+        pricing_revision: int,
+        lines: tuple[tuple[UUID, int, str | None, str | None], ...],
+    ) -> UUID | None: ...
     async def list(
         self,
         organization_id: UUID,

@@ -61,10 +61,7 @@ def dashboard_query_service(session: SessionDep) -> DashboardQueryService:
     payments = PaymentsReportingService(SqlAlchemyPaymentRepository(session))
     return DashboardQueryService(
         OrganizationDashboardGateway(OrganizationReportingService(organization_service)),
-        SalesDashboardGateway(
-            payments,
-            SalesReportingService(SqlAlchemySalesRepository(session)),
-        ),
+        SalesDashboardGateway(SalesReportingService(SqlAlchemySalesRepository(session))),
         PaymentsDashboardGateway(payments),
         InventoryDashboardGateway(
             InventoryReportingService(SqlAlchemyInventoryRepository(session))

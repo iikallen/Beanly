@@ -102,7 +102,7 @@ class AnalyticsProjectionService:
                     local_date,
                     promotion.promotion_id,
                     promotion.promotion_name,
-                    refunded_discount_amount=_amount(promotion.discount_amount),
+                    refund_amount=_amount(promotion.refund_amount),
                 )
             )
         return True
@@ -198,8 +198,10 @@ class AnalyticsProjectionService:
                     promotion.promotion_id,
                     promotion.promotion_name,
                     orders_count=1,
+                    applications_count=promotion.applications_count,
+                    items_count=promotion.items_count,
+                    gross_eligible_amount=_amount(promotion.gross_eligible_amount),
                     discount_amount=_amount(promotion.discount_amount),
-                    gross_revenue_amount=_amount(promotion.gross_eligible_amount),
                     net_revenue_amount=_amount(
                         promotion.gross_eligible_amount - promotion.discount_amount
                     ),

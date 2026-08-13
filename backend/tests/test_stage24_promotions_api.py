@@ -68,7 +68,32 @@ async def test_promotion_crud_is_tenant_scoped_and_code_is_normalized(app_client
     headers_a, organization_a = await _workspace(
         client, "stage24-a@example.com", "Stage 24 Tenant A"
     )
-    headers_b, _ = await _workspace(client, "stage24-b@example.com", "Stage 24 Tenant B")
+    headers_b, organization_b = await _workspace(
+        client, "stage24-b@example.com", "Stage 24 Tenant B"
+    )
+    location_b = (
+        await client.get(
+            f"/api/v1/organizations/{organization_b}/locations", headers=headers_b
+        )
+    ).json()[0]["id"]
+    category_b = await client.post(
+        "/api/v1/menu/categories", headers=headers_b, json={"name": "Foreign"}
+    )
+    assert category_b.status_code == 201
+
+    foreign_target = _payload()
+    foreign_target["targets"] = [
+        {
+            "role": "ELIGIBLE",
+            "target_type": "CATEGORY",
+            "target_id": category_b.json()["id"],
+            "quantity": 1,
+            "sort_order": 0,
+        }
+    ]
+    assert (
+        await client.post("/api/v1/promotions", headers=headers_a, json=foreign_target)
+    ).status_code == 404
 
     created = await client.post("/api/v1/promotions", headers=headers_a, json=_payload())
     assert created.status_code == 201, created.text
@@ -81,6 +106,12 @@ async def test_promotion_crud_is_tenant_scoped_and_code_is_normalized(app_client
     assert listed.json()[0]["id"] == promotion_id
     cross_tenant = await client.get(f"/api/v1/promotions/{promotion_id}", headers=headers_b)
     assert cross_tenant.status_code == 404
+    foreign_preview = await client.post(
+        f"/api/v1/promotions/{promotion_id}/preview",
+        headers=headers_a,
+        json={"location_id": location_b, "occurred_at": "2026-08-10T10:00:00Z", "items": []},
+    )
+    assert foreign_preview.status_code == 404
 
     code = await client.post(
         f"/api/v1/promotions/{promotion_id}/codes",

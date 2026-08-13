@@ -134,6 +134,26 @@ class PaymentService:
             raise InvalidPayment("Payment total exceeds the finance ledger limit")
         if amount_minor != order.total_minor:
             raise PaymentAmountMismatch("Payment lines must equal the order total")
+        external_lines = tuple(
+            (
+                line.external_payment_attempt_id,
+                line.amount_minor,
+                line.provider_code,
+                line.provider_transaction_id,
+            )
+            for line in lines
+            if line.external_payment_attempt_id is not None
+        )
+        approved_payment_id = (
+            await self.repository.validate_external_attempts(
+                context.organization_id,
+                order.id,
+                order.pricing_revision,
+                external_lines,
+            )
+            if external_lines
+            else None
+        )
         completed_at = value.completed_at or datetime.now(UTC)
         if completed_at.utcoffset() is None:
             raise InvalidPayment("Payment completed_at must include a timezone")
@@ -165,7 +185,7 @@ class PaymentService:
                     lines=sale_lines,
                 )
         recorded_at = datetime.now(UTC)
-        payment_id = uuid4()
+        payment_id = approved_payment_id or uuid4()
         payment = Payment(
             payment_id,
             order.organization_id,

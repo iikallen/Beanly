@@ -76,6 +76,7 @@ class SqlAlchemyAnalyticsSourceReader:
                 SalesOrderDiscountModel.promotion_id,
                 SalesOrderDiscountModel.promotion_name,
                 func.sum(RefundDiscountAllocationModel.discount_amount_minor),
+                func.sum(RefundLineModel.net_refund_minor),
             )
             .join(
                 RefundDiscountAllocationModel,
@@ -120,8 +121,9 @@ class SqlAlchemyAnalyticsSourceReader:
                     name,
                     Decimal(0),
                     Decimal(amount) / 100,
+                    refund_amount=Decimal(refund_amount) / 100,
                 )
-                for promotion_id, name, amount in promotion_rows
+                for promotion_id, name, amount, refund_amount in promotion_rows
             ),
         )
 
@@ -154,11 +156,17 @@ class SqlAlchemyAnalyticsSourceReader:
                 SalesOrderDiscountModel.promotion_name,
                 func.sum(SalesOrderDiscountAllocationModel.eligible_amount_minor),
                 func.sum(SalesOrderDiscountAllocationModel.discount_amount_minor),
+                func.count(func.distinct(SalesOrderDiscountModel.id)),
+                func.sum(SalesOrderItemModel.quantity),
             )
             .join(
                 SalesOrderDiscountAllocationModel,
                 SalesOrderDiscountAllocationModel.order_discount_id
                 == SalesOrderDiscountModel.id,
+            )
+            .join(
+                SalesOrderItemModel,
+                SalesOrderItemModel.id == SalesOrderDiscountAllocationModel.order_item_id,
             )
             .where(
                 SalesOrderDiscountModel.order_id == order.id,
@@ -251,8 +259,10 @@ class SqlAlchemyAnalyticsSourceReader:
                     name,
                     Decimal(gross) / 100,
                     Decimal(discount) / 100,
+                    int(applications),
+                    int(items_count),
                 )
-                for promotion_id, name, gross, discount in promotion_rows
+                for promotion_id, name, gross, discount, applications, items_count in promotion_rows
             ),
         )
 

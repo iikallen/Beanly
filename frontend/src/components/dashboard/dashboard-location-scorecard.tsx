@@ -23,7 +23,7 @@ export function DashboardLocationScorecard({
               {locations.map((location) => (
                 <tr key={location.location_id}>
                   <th scope="row">{location.location_name}</th>
-                  <td>{location.net_sales_minor !== undefined ? formatDashboardMinor(location.net_sales_minor, currency) : formatDashboardMoney(location.revenue, currency)}{location.gross_sales_minor !== undefined && location.refund_amount_minor !== undefined && <small>Gross {formatDashboardMinor(location.gross_sales_minor, currency)} · Refunds −{formatDashboardMinor(location.refund_amount_minor, currency)}</small>}</td>
+                  <td>{location.net_sales_minor !== undefined ? formatDashboardMinor(location.net_sales_minor, currency) : formatDashboardMoney(location.revenue, currency)}{location.gross_sales_minor !== undefined && location.refund_amount_minor !== undefined && <small>Gross {formatDashboardMinor(location.gross_sales_minor, currency)} · Discounts −{formatDashboardMinor(location.discount_amount_minor, currency)} · Refunds −{formatDashboardMinor(location.refund_amount_minor, currency)}</small>}</td>
                   <td>{new Intl.NumberFormat().format(location.paid_orders)}</td>
                   <td>{formatDashboardMoney(location.average_check, currency)}</td>
                   {showProfit && <td>{location.operating_profit === null ? "—" : formatDashboardMoney(location.operating_profit, currency)}</td>}

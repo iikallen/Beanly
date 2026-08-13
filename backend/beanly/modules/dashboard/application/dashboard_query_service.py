@@ -114,8 +114,14 @@ class DashboardQueryService:
         )
         current_gross_minor = _minor(current_sales.revenue)
         previous_gross_minor = _minor(previous_sales.revenue)
-        current_net = _major(current_gross_minor - current_refunds.amount_minor)
-        previous_net = _major(previous_gross_minor - previous_refunds.amount_minor)
+        current_discount_minor = _minor(current_sales.discount)
+        previous_discount_minor = _minor(previous_sales.discount)
+        current_net = _major(
+            current_gross_minor - current_discount_minor - current_refunds.amount_minor
+        )
+        previous_net = _major(
+            previous_gross_minor - previous_discount_minor - previous_refunds.amount_minor
+        )
         open_orders, open_shifts = await self.sales.operations(
             context.organization_id, location_ids
         )
@@ -129,8 +135,11 @@ class DashboardQueryService:
             open_orders=open_orders,
             open_shifts=open_shifts,
             gross_sales_minor=str(current_gross_minor),
+            discount_amount_minor=str(current_discount_minor),
             refund_amount_minor=str(current_refunds.amount_minor),
-            net_sales_minor=str(current_gross_minor - current_refunds.amount_minor),
+            net_sales_minor=str(
+                current_gross_minor - current_discount_minor - current_refunds.amount_minor
+            ),
         )
 
         health = await self.inventory.health(context.organization_id, location_ids)
@@ -201,14 +210,7 @@ class DashboardQueryService:
             else tuple(RefundTrendRow(0) for _ in gross_trend)
         )
         trend = tuple(
-            type(gross)(
-                bucket_start=gross.bucket_start,
-                revenue=_major(_minor(gross.revenue) - refund.amount_minor),
-                orders=gross.orders,
-                gross_sales_minor=str(_minor(gross.revenue)),
-                refund_amount_minor=str(refund.amount_minor),
-                net_sales_minor=str(_minor(gross.revenue) - refund.amount_minor),
-            )
+            _trend_row(gross, refund)
             for gross, refund in zip(gross_trend, refund_trend, strict=True)
         )
         location_sales = await self.sales.locations(
@@ -345,10 +347,10 @@ def _location_row(
     profits: dict[UUID, Decimal] | None,
 ) -> LocationScorecardRow:
     row = sales.get(location_id)
-    gross = row.revenue if row else Decimal(0)
-    gross_minor = _minor(gross)
+    gross_minor = _minor(row.revenue + row.discount) if row else 0
+    discount_minor = _minor(row.discount) if row else 0
     refund_minor = refunds.get(location_id, 0)
-    net = _major(gross_minor - refund_minor)
+    net = _major(gross_minor - discount_minor - refund_minor)
     paid_orders = row.paid_orders if row else 0
     return LocationScorecardRow(
         location_id=location_id,
@@ -358,8 +360,26 @@ def _location_row(
         average_check=_average(net, paid_orders),
         operating_profit=profits.get(location_id) if profits is not None else None,
         gross_sales_minor=str(gross_minor),
+        discount_amount_minor=str(discount_minor),
         refund_amount_minor=str(refund_minor),
-        net_sales_minor=str(gross_minor - refund_minor),
+        net_sales_minor=str(gross_minor - discount_minor - refund_minor),
+    )
+
+
+def _trend_row(gross, refund: RefundTrendRow):
+    discount_minor = int(gross.discount_amount_minor)
+    gross_minor = int(gross.gross_sales_minor)
+    if not gross_minor and gross.revenue:
+        gross_minor = _minor(gross.revenue) + discount_minor
+    net_minor = gross_minor - discount_minor - refund.amount_minor
+    return type(gross)(
+        bucket_start=gross.bucket_start,
+        revenue=_major(net_minor),
+        orders=gross.orders,
+        gross_sales_minor=str(gross_minor),
+        discount_amount_minor=str(discount_minor),
+        refund_amount_minor=str(refund.amount_minor),
+        net_sales_minor=str(net_minor),
     )
 
 

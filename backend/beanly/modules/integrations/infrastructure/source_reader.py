@@ -68,6 +68,7 @@ class SqlAlchemyIntegrationSourceReader:
                 for line in payment.lines
             ),
             total_minor=snapshot.total_minor,
+            discount_total_minor=snapshot.discount_total_minor,
         )
 
     async def fiscal_refund(
@@ -119,6 +120,8 @@ class SqlAlchemyIntegrationSourceReader:
                     quantity=line.quantity,
                     unit_price_minor=line.unit_refund_minor,
                     total_minor=line.total_refund_minor,
+                    gross_total_minor=line.gross_refund_minor,
+                    discount_minor=line.discount_refund_minor,
                     nkt_code=original.nkt_code,
                     nkt_code_type=original.nkt_code_type,
                     unit_code=original.unit_code,
@@ -139,6 +142,8 @@ class SqlAlchemyIntegrationSourceReader:
             ),
             refund.total_amount_minor,
             refund.reason,
+            sum(line.gross_refund_minor for line in refund.lines),
+            sum(line.discount_refund_minor for line in refund.lines),
         )
 
 
@@ -148,6 +153,8 @@ def _item(line: FiscalSaleSnapshotLineModel) -> FiscalItem:
         quantity=line.quantity,
         unit_price_minor=line.unit_price_minor,
         total_minor=line.total_minor,
+        gross_total_minor=line.gross_total_minor,
+        discount_minor=line.discount_minor,
         nkt_code=line.nkt_code,
         nkt_code_type=line.nkt_code_type,
         unit_code=line.unit_code,

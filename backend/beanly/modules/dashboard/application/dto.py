@@ -67,6 +67,7 @@ class CountMetric:
 class SalesAggregate:
     revenue: Decimal
     paid_orders: int
+    discount: Decimal = Decimal(0)
 
     @property
     def average_check(self) -> Decimal:
@@ -83,6 +84,7 @@ class SalesBlock:
     open_orders: int
     open_shifts: int
     gross_sales_minor: str = "0"
+    discount_amount_minor: str = "0"
     refund_amount_minor: str = "0"
     net_sales_minor: str = "0"
 
@@ -162,6 +164,7 @@ class TrendPoint:
     revenue: Decimal
     orders: int
     gross_sales_minor: str = "0"
+    discount_amount_minor: str = "0"
     refund_amount_minor: str = "0"
     net_sales_minor: str = "0"
 
@@ -171,6 +174,7 @@ class LocationSalesRow:
     location_id: UUID
     revenue: Decimal
     paid_orders: int
+    discount: Decimal = Decimal(0)
 
     @property
     def average_check(self) -> Decimal:
@@ -194,6 +198,7 @@ class LocationScorecardRow:
     average_check: Decimal
     operating_profit: Decimal | None
     gross_sales_minor: str = "0"
+    discount_amount_minor: str = "0"
     refund_amount_minor: str = "0"
     net_sales_minor: str = "0"
 

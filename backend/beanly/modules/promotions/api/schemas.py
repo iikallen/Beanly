@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
+from beanly.core.money import MAX_NUMERIC_20_6_MINOR
 from beanly.modules.promotions.domain.entities import Promotion
 from beanly.modules.promotions.domain.enums import (
     ApplicationMode,
@@ -38,13 +39,13 @@ class PromotionWrite(BaseModel):
     discount_kind: DiscountKind
     scope: PromotionScope
     percent_rate: Annotated[Decimal | None, Field(gt=0, le=100)] = None
-    amount_minor: Annotated[int | None, Field(ge=0)] = None
-    fixed_price_minor: Annotated[int | None, Field(ge=0)] = None
+    amount_minor: Annotated[int | None, Field(ge=0, le=MAX_NUMERIC_20_6_MINOR)] = None
+    fixed_price_minor: Annotated[int | None, Field(ge=0, le=MAX_NUMERIC_20_6_MINOR)] = None
     priority: int = 0
     stacking_policy: StackingPolicy = StackingPolicy.EXCLUSIVE
     include_modifier_price: bool = False
-    minimum_subtotal_minor: Annotated[int | None, Field(ge=0)] = None
-    maximum_discount_minor: Annotated[int | None, Field(ge=0)] = None
+    minimum_subtotal_minor: Annotated[int | None, Field(ge=0, le=MAX_NUMERIC_20_6_MINOR)] = None
+    maximum_discount_minor: Annotated[int | None, Field(ge=0, le=MAX_NUMERIC_20_6_MINOR)] = None
     valid_from: datetime | None = None
     valid_to: datetime | None = None
     all_locations: bool = True
@@ -62,6 +63,10 @@ class PromotionWrite(BaseModel):
         }.get(self.discount_kind)
         if self.discount_kind != DiscountKind.BOGO and field is None:
             raise ValueError("Selected discount kind requires its value")
+        values = (self.percent_rate, self.amount_minor, self.fixed_price_minor)
+        expected_values = 0 if self.discount_kind == DiscountKind.BOGO else 1
+        if sum(value is not None for value in values) != expected_values:
+            raise ValueError("Only the selected discount value may be set")
         if self.valid_from and self.valid_to and self.valid_to <= self.valid_from:
             raise ValueError("valid_to must be after valid_from")
         if not self.all_locations and not self.location_ids:
@@ -73,6 +78,17 @@ class PromotionWrite(BaseModel):
             for value in self.targets
         ):
             raise ValueError("ALL target must omit target_id; other targets require it")
+        roles = {value.role for value in self.targets}
+        if self.discount_kind == DiscountKind.BOGO:
+            if self.scope != PromotionScope.ITEM or not {TargetRole.BUY, TargetRole.GET} <= roles:
+                raise ValueError("BOGO requires ITEM scope with BUY and GET targets")
+        elif self.scope == PromotionScope.COMBO:
+            if self.discount_kind != DiscountKind.FIXED_PRICE or sum(
+                value.role == TargetRole.COMBO_COMPONENT for value in self.targets
+            ) < 2:
+                raise ValueError("COMBO requires FIXED_PRICE and at least two components")
+        elif self.scope == PromotionScope.ITEM and TargetRole.ELIGIBLE not in roles:
+            raise ValueError("ITEM promotion requires an ELIGIBLE target")
         return self
 
 
@@ -174,11 +190,29 @@ class PromotionResponse(BaseModel):
         )
 
 
+class PromotionPerformanceResponse(BaseModel):
+    promotion_id: UUID
+    promotion_name: str
+    orders_count: int
+    applications_count: int
+    items_count: int
+    gross_eligible_amount: str
+    discount_amount: str
+    net_revenue_amount: str
+    refund_amount: str
+
+
 class CodeCreate(BaseModel):
     code: Annotated[str, Field(min_length=1, max_length=80)]
     valid_from: datetime | None = None
     valid_to: datetime | None = None
     max_redemptions: Annotated[int | None, Field(gt=0)] = None
+
+    @model_validator(mode="after")
+    def validate_dates(self):
+        if self.valid_from and self.valid_to and self.valid_to <= self.valid_from:
+            raise ValueError("valid_to must be after valid_from")
+        return self
 
 
 class ManualDiscountRequest(BaseModel):
@@ -195,7 +229,7 @@ class CustomDiscountRequest(BaseModel):
     client_discount_id: UUID
     type: DiscountKind
     percent: Annotated[Decimal | None, Field(gt=0, le=100)] = None
-    amount_minor: Annotated[int | None, Field(gt=0)] = None
+    amount_minor: Annotated[int | None, Field(gt=0, le=MAX_NUMERIC_20_6_MINOR)] = None
     reason: Annotated[str, Field(min_length=1, max_length=1000)]
 
     @model_validator(mode="after")
@@ -219,7 +253,6 @@ class PreviewItem(BaseModel):
 
 class PromotionPreviewRequest(BaseModel):
     location_id: UUID
-    location_timezone: str
     occurred_at: datetime
     items: list[PreviewItem]
 

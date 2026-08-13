@@ -33,6 +33,26 @@ class SalesRepository(Protocol):
     async def dashboard_open_counts(
         self, organization_id: UUID, location_ids: tuple[UUID, ...]
     ) -> tuple[int, int]: ...
+    async def dashboard_pricing_summary(
+        self,
+        organization_id: UUID,
+        location_ids: tuple[UUID, ...],
+        date_from: datetime,
+        date_to: datetime,
+    ) -> tuple[int, int, int]: ...
+    async def dashboard_pricing_trend(
+        self,
+        organization_id: UUID,
+        location_ids: tuple[UUID, ...],
+        buckets: tuple[tuple[datetime, datetime], ...],
+    ) -> tuple[tuple[int, int, int], ...]: ...
+    async def dashboard_pricing_locations(
+        self,
+        organization_id: UUID,
+        location_ids: tuple[UUID, ...],
+        date_from: datetime,
+        date_to: datetime,
+    ) -> tuple[tuple[UUID, int, int, int], ...]: ...
     async def next_order_number(self) -> int: ...
     async def add_order(self, value: SalesOrder) -> SalesOrder: ...
     async def get_order(

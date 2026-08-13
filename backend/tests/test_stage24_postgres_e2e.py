@@ -169,6 +169,9 @@ async def test_last_redemption_is_serialized_before_money_and_paid_snapshot_is_n
         )
         assert promotion_analytics is not None
         assert promotion_analytics.discount_amount == 200
+        assert promotion_analytics.applications_count == 1
+        assert promotion_analytics.items_count == 1
+        assert promotion_analytics.gross_eligible_amount == 1000
 
     refund = await client.post(
         "/api/v1/refunds",
@@ -278,7 +281,7 @@ async def test_last_redemption_is_serialized_before_money_and_paid_snapshot_is_n
             )
         )
         assert promotion_analytics is not None
-        assert promotion_analytics.refunded_discount_amount == 200
+        assert promotion_analytics.refund_amount == 800
 
     assert sorted(getattr(response, "status_code", 500) for response in responses) == [201, 409]
 

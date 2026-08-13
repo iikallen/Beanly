@@ -153,10 +153,12 @@ class SqlAlchemyAnalyticsRepository:
         excluded = insert.excluded
         columns = (
             "orders_count",
+            "applications_count",
+            "items_count",
+            "gross_eligible_amount",
             "discount_amount",
-            "gross_revenue_amount",
             "net_revenue_amount",
-            "refunded_discount_amount",
+            "refund_amount",
         )
         await self.session.execute(
             insert.on_conflict_do_update(

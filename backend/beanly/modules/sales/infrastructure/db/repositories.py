@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -213,6 +213,105 @@ class SqlAlchemySalesRepository:
             or 0
         )
         return open_orders, open_shifts
+
+    async def dashboard_pricing_summary(
+        self,
+        organization_id: UUID,
+        location_ids: tuple[UUID, ...],
+        date_from: datetime,
+        date_to: datetime,
+    ) -> tuple[int, int, int]:
+        if not location_ids:
+            return 0, 0, 0
+        row = (
+            await self.session.execute(
+                select(
+                    func.coalesce(func.sum(SalesOrderModel.subtotal_minor), 0),
+                    func.coalesce(func.sum(SalesOrderModel.discount_total_minor), 0),
+                    func.count(SalesOrderModel.id),
+                ).where(
+                    SalesOrderModel.organization_id == organization_id,
+                    SalesOrderModel.location_id.in_(location_ids),
+                    SalesOrderModel.status == OrderStatus.PAID.value,
+                    SalesOrderModel.paid_at >= date_from,
+                    SalesOrderModel.paid_at < date_to,
+                )
+            )
+        ).one()
+        return tuple(int(value) for value in row)
+
+    async def dashboard_pricing_trend(
+        self,
+        organization_id: UUID,
+        location_ids: tuple[UUID, ...],
+        buckets: tuple[tuple[datetime, datetime], ...],
+    ) -> tuple[tuple[int, int, int], ...]:
+        if not location_ids or not buckets:
+            return tuple((0, 0, 0) for _ in buckets)
+        columns = []
+        for date_from, date_to in buckets:
+            condition = (SalesOrderModel.paid_at >= date_from) & (
+                SalesOrderModel.paid_at < date_to
+            )
+            columns.extend(
+                (
+                    func.coalesce(
+                        func.sum(case((condition, SalesOrderModel.subtotal_minor), else_=0)), 0
+                    ),
+                    func.coalesce(
+                        func.sum(
+                            case((condition, SalesOrderModel.discount_total_minor), else_=0)
+                        ),
+                        0,
+                    ),
+                    func.coalesce(func.sum(case((condition, 1), else_=0)), 0),
+                )
+            )
+        row = (
+            await self.session.execute(
+                select(*columns).where(
+                    SalesOrderModel.organization_id == organization_id,
+                    SalesOrderModel.location_id.in_(location_ids),
+                    SalesOrderModel.status == OrderStatus.PAID.value,
+                    SalesOrderModel.paid_at >= buckets[0][0],
+                    SalesOrderModel.paid_at < buckets[-1][1],
+                )
+            )
+        ).one()
+        return tuple(
+            (int(row[index]), int(row[index + 1]), int(row[index + 2]))
+            for index in range(0, len(row), 3)
+        )
+
+    async def dashboard_pricing_locations(
+        self,
+        organization_id: UUID,
+        location_ids: tuple[UUID, ...],
+        date_from: datetime,
+        date_to: datetime,
+    ) -> tuple[tuple[UUID, int, int, int], ...]:
+        if not location_ids:
+            return ()
+        rows = await self.session.execute(
+            select(
+                SalesOrderModel.location_id,
+                func.coalesce(func.sum(SalesOrderModel.subtotal_minor), 0),
+                func.coalesce(func.sum(SalesOrderModel.discount_total_minor), 0),
+                func.count(SalesOrderModel.id),
+            )
+            .where(
+                SalesOrderModel.organization_id == organization_id,
+                SalesOrderModel.location_id.in_(location_ids),
+                SalesOrderModel.status == OrderStatus.PAID.value,
+                SalesOrderModel.paid_at >= date_from,
+                SalesOrderModel.paid_at < date_to,
+            )
+            .group_by(SalesOrderModel.location_id)
+        )
+        return tuple(
+            (location_id, int(gross), int(discount), int(orders))
+            for location_id, gross, discount, orders in rows
+        )
 
     async def next_order_number(self) -> int:
         if self.session.get_bind().dialect.name == "postgresql":

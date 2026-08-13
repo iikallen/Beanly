@@ -407,14 +407,18 @@ def upgrade() -> None:
         sa.Column("promotion_id", sa.Uuid(), primary_key=True),
         sa.Column("promotion_name", sa.String(200), nullable=False),
         sa.Column("orders_count", sa.BigInteger(), nullable=False, server_default="0"),
+        sa.Column("applications_count", sa.BigInteger(), nullable=False, server_default="0"),
+        sa.Column("items_count", sa.BigInteger(), nullable=False, server_default="0"),
+        sa.Column("gross_eligible_amount", sa.Numeric(20, 6), nullable=False, server_default="0"),
         sa.Column("discount_amount", sa.Numeric(20, 6), nullable=False, server_default="0"),
-        sa.Column("gross_revenue_amount", sa.Numeric(20, 6), nullable=False, server_default="0"),
         sa.Column("net_revenue_amount", sa.Numeric(20, 6), nullable=False, server_default="0"),
-        sa.Column(
-            "refunded_discount_amount", sa.Numeric(20, 6), nullable=False, server_default="0"
-        ),
+        sa.Column("refund_amount", sa.Numeric(20, 6), nullable=False, server_default="0"),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint("orders_count >= 0", name="ck_analytics_promotion_orders"),
+        sa.CheckConstraint(
+            "applications_count >= 0", name="ck_analytics_promotion_applications"
+        ),
+        sa.CheckConstraint("items_count >= 0", name="ck_analytics_promotion_items"),
     )
     op.create_index(
         "ix_analytics_promotions_org_date",

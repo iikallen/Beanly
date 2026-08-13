@@ -527,6 +527,18 @@ export type Promotion = {
 
 export type PromotionInput = Omit<Promotion, "id" | "organization_id" | "status" | "created_by" | "created_at" | "updated_at" | "codes">;
 
+export type PromotionPerformance = {
+  promotion_id: string;
+  promotion_name: string;
+  orders_count: number;
+  applications_count: number;
+  items_count: number;
+  gross_eligible_amount: string;
+  discount_amount: string;
+  net_revenue_amount: string;
+  refund_amount: string;
+};
+
 export type SalesOrderDiscount = {
   id: string;
   promotion_id: string | null;
@@ -1341,6 +1353,7 @@ export type DashboardOverview = {
   sales: {
     revenue: DashboardMetric<string>;
     gross_sales_minor: string;
+    discount_amount_minor: string;
     refund_amount_minor: string;
     net_sales_minor: string;
     paid_orders: DashboardMetric<number>;
@@ -1383,6 +1396,7 @@ export type DashboardOverview = {
     bucket_start: string;
     revenue: string;
     gross_sales_minor: string;
+    discount_amount_minor: string;
     refund_amount_minor: string;
     net_sales_minor: string;
     orders: number;
@@ -1392,6 +1406,7 @@ export type DashboardOverview = {
     location_name: string;
     revenue: string;
     gross_sales_minor: string;
+    discount_amount_minor: string;
     refund_amount_minor: string;
     net_sales_minor: string;
     paid_orders: number;
@@ -2497,6 +2512,19 @@ export const api = {
     request<Promotion[]>("/api/v1/promotions", {
       headers: tenantAuthorization(organizationId, accessToken),
     }),
+  getPromotionPerformance: (
+    dateFrom: string,
+    dateTo: string,
+    organizationId: string,
+    accessToken: string,
+    locationId?: string,
+  ) => {
+    const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
+    if (locationId) params.set("location_id", locationId);
+    return request<PromotionPerformance[]>(`/api/v1/promotions/performance?${params}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    });
+  },
   getPromotion: (promotionId: string, organizationId: string, accessToken: string) =>
     request<Promotion>(`/api/v1/promotions/${promotionId}`, {
       headers: tenantAuthorization(organizationId, accessToken),
@@ -2525,7 +2553,7 @@ export const api = {
     }),
   previewPromotion: (
     promotionId: string,
-    input: { location_id: string; location_timezone: string; occurred_at: string; items: Array<{ id: string; category_id: string | null; product_id: string; variant_id: string; quantity: number; base_price_minor: string; modifier_price_minor: string }> },
+    input: { location_id: string; occurred_at: string; items: Array<{ id: string; category_id: string | null; product_id: string; variant_id: string; quantity: number; base_price_minor: string; modifier_price_minor: string }> },
     organizationId: string,
     accessToken: string,
   ) => request<PromotionPreview>(`/api/v1/promotions/${promotionId}/preview`, {

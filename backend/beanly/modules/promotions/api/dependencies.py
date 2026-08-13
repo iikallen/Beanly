@@ -4,21 +4,29 @@ from fastapi import Depends, HTTPException, status
 
 from beanly.modules.identity.api.dependencies import SessionDep
 from beanly.modules.organizations.api.dependencies import TenantContextDep
+from beanly.modules.organizations.application.services.organization_service import (
+    OrganizationService,
+)
 from beanly.modules.organizations.domain.entities import TenantContext
 from beanly.modules.organizations.domain.permissions import Permission
+from beanly.modules.organizations.infrastructure.db.repositories import (
+    SqlAlchemyOrganizationRepository,
+)
 from beanly.modules.promotions.infrastructure.pricing_service import OrderDiscountService
 from beanly.modules.promotions.infrastructure.promotion_service import PromotionService
 
 
 def promotion_service(session: SessionDep) -> PromotionService:
-    return PromotionService(session)
+    return PromotionService(session, OrganizationService(SqlAlchemyOrganizationRepository(session)))
 
 
 PromotionServiceDep = Annotated[PromotionService, Depends(promotion_service)]
 
 
 def order_discount_service(session: SessionDep) -> OrderDiscountService:
-    return OrderDiscountService(session)
+    return OrderDiscountService(
+        session, OrganizationService(SqlAlchemyOrganizationRepository(session))
+    )
 
 
 OrderDiscountServiceDep = Annotated[OrderDiscountService, Depends(order_discount_service)]

@@ -62,10 +62,12 @@ class PromotionDailyDelta:
     promotion_id: UUID
     promotion_name: str
     orders_count: int = 0
+    applications_count: int = 0
+    items_count: int = 0
+    gross_eligible_amount: Decimal = Decimal(0)
     discount_amount: Decimal = Decimal(0)
-    gross_revenue_amount: Decimal = Decimal(0)
     net_revenue_amount: Decimal = Decimal(0)
-    refunded_discount_amount: Decimal = Decimal(0)
+    refund_amount: Decimal = Decimal(0)
 
 
 @dataclass(frozen=True, slots=True)

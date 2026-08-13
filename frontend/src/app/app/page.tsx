@@ -144,7 +144,7 @@ export default function AppPage() {
       metric: dashboard.sales.revenue,
       icon: <Banknote />,
       breakdown: hasRefundBreakdown
-        ? `Gross ${formatDashboardMinor(dashboard.sales.gross_sales_minor!, currency)} · Refunds −${formatDashboardMinor(dashboard.sales.refund_amount_minor!, currency)}`
+        ? `Gross ${formatDashboardMinor(dashboard.sales.gross_sales_minor!, currency)} · Discounts −${formatDashboardMinor(dashboard.sales.discount_amount_minor, currency)} · Refunds −${formatDashboardMinor(dashboard.sales.refund_amount_minor!, currency)}`
         : undefined,
     },
     {

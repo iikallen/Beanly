@@ -1,39 +1,110 @@
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from beanly.core.observability import metrics
 from beanly.core.security.audit import SecurityAuditRecorder
+from beanly.modules.analytics.infrastructure.db.models import AnalyticsPromotionsDailyModel
+from beanly.modules.menu.infrastructure.db.models import (
+    MenuCategoryModel,
+    ProductModel,
+    ProductVariantModel,
+)
+from beanly.modules.organizations.application.services.organization_service import (
+    OrganizationService,
+)
 from beanly.modules.organizations.domain.entities import TenantContext
-from beanly.modules.promotions.domain.entities import Promotion, PromotionSchedule, PromotionTarget
-from beanly.modules.promotions.domain.enums import PromotionStatus
+from beanly.modules.organizations.domain.exceptions import OrganizationAccessDenied
+from beanly.modules.organizations.infrastructure.db.models import LocationModel
+from beanly.modules.promotions.application.pricing_engine import SelectedPromotion, price_order
+from beanly.modules.promotions.domain.entities import (
+    PricingItem,
+    Promotion,
+    PromotionSchedule,
+    PromotionTarget,
+)
+from beanly.modules.promotions.domain.enums import (
+    DiscountSource,
+    PromotionStatus,
+    TargetType,
+)
 from beanly.modules.promotions.domain.exceptions import PromotionConflict, PromotionNotFound
 from beanly.modules.promotions.infrastructure.db.models import PromotionCodeModel
 from beanly.modules.promotions.infrastructure.db.repositories import SqlAlchemyPromotionRepository
 
 
 class PromotionService:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, organizations: OrganizationService) -> None:
         self.session = session
+        self.organizations = organizations
         self.repository = SqlAlchemyPromotionRepository(session)
         self.audit = SecurityAuditRecorder(session)
 
     async def list(self, context: TenantContext) -> list[Promotion]:
-        return await self.repository.list(context.organization_id)
+        values = await self.repository.list(context.organization_id)
+        allowed = await self._accessible_location_ids(context)
+        return [
+            value
+            for value in values
+            if value.all_locations or bool(allowed.intersection(value.location_ids))
+        ]
 
     async def get(self, context: TenantContext, promotion_id: UUID) -> Promotion:
         value = await self.repository.get(context.organization_id, promotion_id)
         if value is None:
             raise PromotionNotFound("Promotion not found")
+        if not value.all_locations and not (
+            await self._accessible_location_ids(context)
+        ).intersection(value.location_ids):
+            raise PromotionNotFound("Promotion not found")
         return value
 
+    async def performance(
+        self,
+        context: TenantContext,
+        date_from: date,
+        date_to: date,
+        location_id: UUID | None,
+    ):
+        allowed = await self._accessible_location_ids(context)
+        if location_id is not None and location_id not in allowed:
+            raise PromotionNotFound("Location not found")
+        locations = (location_id,) if location_id else tuple(allowed)
+        if not locations:
+            return []
+        rows = await self.session.execute(
+            select(
+                AnalyticsPromotionsDailyModel.promotion_id,
+                AnalyticsPromotionsDailyModel.promotion_name,
+                func.sum(AnalyticsPromotionsDailyModel.orders_count),
+                func.sum(AnalyticsPromotionsDailyModel.applications_count),
+                func.sum(AnalyticsPromotionsDailyModel.items_count),
+                func.sum(AnalyticsPromotionsDailyModel.gross_eligible_amount),
+                func.sum(AnalyticsPromotionsDailyModel.discount_amount),
+                func.sum(AnalyticsPromotionsDailyModel.net_revenue_amount),
+                func.sum(AnalyticsPromotionsDailyModel.refund_amount),
+            )
+            .where(
+                AnalyticsPromotionsDailyModel.organization_id == context.organization_id,
+                AnalyticsPromotionsDailyModel.location_id.in_(locations),
+                AnalyticsPromotionsDailyModel.local_date >= date_from,
+                AnalyticsPromotionsDailyModel.local_date <= date_to,
+            )
+            .group_by(
+                AnalyticsPromotionsDailyModel.promotion_id,
+                AnalyticsPromotionsDailyModel.promotion_name,
+            )
+            .order_by(func.sum(AnalyticsPromotionsDailyModel.discount_amount).desc())
+        )
+        return list(rows)
+
     async def create(self, context: TenantContext, payload: Any) -> Promotion:
-        now = datetime.now(UTC)
-        promotion_id = uuid4()
+        await self._validate_payload(context, payload)
+        now, promotion_id = datetime.now(UTC), uuid4()
         value = Promotion(
             promotion_id,
             context.organization_id,
@@ -78,15 +149,13 @@ class PromotionService:
                 for item in payload.targets
             ),
         )
-        saved = await self.repository.save(value)
-        await self._audit(context, "PROMOTION_CREATED", saved.id)
-        await self.session.commit()
-        return saved
+        return await self._save(context, value, "PROMOTION_CREATED")
 
     async def update(self, context: TenantContext, promotion_id: UUID, payload: Any) -> Promotion:
         current = await self.get(context, promotion_id)
         if current.status == PromotionStatus.ARCHIVED:
             raise PromotionConflict("Archived promotions are immutable")
+        await self._validate_payload(context, payload)
         value = replace(
             current,
             name=payload.name.strip(),
@@ -127,10 +196,7 @@ class PromotionService:
                 for item in payload.targets
             ),
         )
-        saved = await self.repository.save(value)
-        await self._audit(context, "PROMOTION_UPDATED", saved.id)
-        await self.session.commit()
-        return saved
+        return await self._save(context, value, "PROMOTION_UPDATED")
 
     async def set_status(
         self, context: TenantContext, promotion_id: UUID, status: PromotionStatus
@@ -138,17 +204,58 @@ class PromotionService:
         current = await self.get(context, promotion_id)
         if current.status == PromotionStatus.ARCHIVED:
             raise PromotionConflict("Archived promotions are immutable")
-        saved = await self.repository.save(
-            replace(current, status=status, updated_at=datetime.now(UTC))
+        if current.status == status:
+            return current
+        try:
+            saved = await self.repository.save(
+                replace(current, status=status, updated_at=datetime.now(UTC))
+            )
+            action = (
+                "PROMOTION_ACTIVATED"
+                if status == PromotionStatus.ACTIVE
+                else "PROMOTION_ARCHIVED"
+            )
+            await self._audit(context, action, saved.id)
+            await self.session.commit()
+            if current.status == PromotionStatus.ACTIVE or status == PromotionStatus.ACTIVE:
+                metrics.promotions_active.add(1 if status == PromotionStatus.ACTIVE else -1)
+            return saved
+        except Exception:
+            await self.session.rollback()
+            raise
+
+    async def preview(self, context: TenantContext, promotion_id: UUID, payload: Any):
+        promotion = await self.get(context, promotion_id)
+        try:
+            await self.organizations.ensure_location_access(context, payload.location_id)
+        except OrganizationAccessDenied as exc:
+            raise PromotionNotFound("Location not found") from exc
+        timezone = await self.session.scalar(
+            select(LocationModel.timezone).where(
+                LocationModel.organization_id == context.organization_id,
+                LocationModel.id == payload.location_id,
+            )
         )
-        action = "PROMOTION_ACTIVATED" if status == PromotionStatus.ACTIVE else "PROMOTION_ARCHIVED"
-        await self._audit(context, action, saved.id)
-        metrics.promotions_active.add(1 if status == PromotionStatus.ACTIVE else -1)
-        await self.session.commit()
-        return saved
+        if timezone is None:
+            raise PromotionNotFound("Location not found")
+        preview = replace(promotion, status=PromotionStatus.ACTIVE)
+        return price_order(
+            tuple(PricingItem(**item.model_dump()) for item in payload.items),
+            (preview,),
+            location_id=payload.location_id,
+            location_timezone=timezone,
+            occurred_at=payload.occurred_at,
+            selected=(
+                SelectedPromotion(
+                    preview, DiscountSource.MANUAL, applied_by_user_id=context.user_id
+                ),
+            ),
+        )
 
     async def add_code(self, context: TenantContext, promotion_id: UUID, payload: Any) -> Promotion:
         promotion = await self.get(context, promotion_id)
+        if promotion.status == PromotionStatus.ARCHIVED:
+            raise PromotionConflict("Archived promotions are immutable")
         normalized = "".join(payload.code.upper().split())
         if not normalized:
             raise PromotionConflict("Promo code is empty")
@@ -160,46 +267,97 @@ class PromotionService:
         )
         if existing:
             raise PromotionConflict("Promo code already exists")
-        self.session.add(
-            PromotionCodeModel(
-                id=uuid4(),
-                organization_id=context.organization_id,
-                promotion_id=promotion.id,
-                code_normalized=normalized,
-                is_active=True,
-                valid_from=payload.valid_from,
-                valid_to=payload.valid_to,
-                max_redemptions=payload.max_redemptions,
-                created_at=datetime.now(UTC),
+        try:
+            self.session.add(
+                PromotionCodeModel(
+                    id=uuid4(),
+                    organization_id=context.organization_id,
+                    promotion_id=promotion.id,
+                    code_normalized=normalized,
+                    is_active=True,
+                    valid_from=payload.valid_from,
+                    valid_to=payload.valid_to,
+                    max_redemptions=payload.max_redemptions,
+                    created_at=datetime.now(UTC),
+                )
             )
-        )
-        await self.session.commit()
-        return await self.get(context, promotion_id)
+            await self.session.commit()
+            return await self.get(context, promotion_id)
+        except Exception:
+            await self.session.rollback()
+            raise
 
     async def delete_code(
         self, context: TenantContext, promotion_id: UUID, code_id: UUID
     ) -> Promotion:
-        await self.get(context, promotion_id)
-        result = await self.session.execute(
-            delete(PromotionCodeModel).where(
-                PromotionCodeModel.id == code_id,
-                PromotionCodeModel.promotion_id == promotion_id,
-                PromotionCodeModel.organization_id == context.organization_id,
-            )
-        )
-        if result.rowcount != 1:
-            raise PromotionNotFound("Promo code not found")
-        await self.session.commit()
-        return await self.get(context, promotion_id)
-
-    async def _commit(self, operation):
+        promotion = await self.get(context, promotion_id)
+        if promotion.status == PromotionStatus.ARCHIVED:
+            raise PromotionConflict("Archived promotions are immutable")
         try:
-            value = await operation
+            result = await self.session.execute(
+                delete(PromotionCodeModel).where(
+                    PromotionCodeModel.id == code_id,
+                    PromotionCodeModel.promotion_id == promotion_id,
+                    PromotionCodeModel.organization_id == context.organization_id,
+                )
+            )
+            if result.rowcount != 1:
+                raise PromotionNotFound("Promo code not found")
             await self.session.commit()
-            return value
+            return await self.get(context, promotion_id)
         except Exception:
             await self.session.rollback()
             raise
+
+    async def _save(self, context: TenantContext, value: Promotion, action: str) -> Promotion:
+        try:
+            saved = await self.repository.save(value)
+            await self._audit(context, action, saved.id)
+            await self.session.commit()
+            return saved
+        except Exception:
+            await self.session.rollback()
+            raise
+
+    async def _accessible_location_ids(self, context: TenantContext) -> set[UUID]:
+        membership = await self.organizations.repository.get_membership(
+            context.organization_id, context.user_id
+        )
+        if membership is None:
+            return set()
+        return {
+            value.id
+            for value in await self.organizations.repository.list_accessible_locations(membership)
+        }
+
+    async def _validate_payload(self, context: TenantContext, payload: Any) -> None:
+        for location_id in payload.location_ids:
+            try:
+                await self.organizations.ensure_location_access(context, location_id)
+            except OrganizationAccessDenied as exc:
+                raise PromotionNotFound("Location not found") from exc
+        for target in payload.targets:
+            if target.target_type == TargetType.ALL:
+                continue
+            model, where = {
+                TargetType.CATEGORY: (
+                    MenuCategoryModel,
+                    MenuCategoryModel.organization_id == context.organization_id,
+                ),
+                TargetType.PRODUCT: (
+                    ProductModel,
+                    ProductModel.organization_id == context.organization_id,
+                ),
+                TargetType.VARIANT: (
+                    ProductVariantModel,
+                    ProductVariantModel.organization_id == context.organization_id,
+                ),
+            }[target.target_type]
+            found = await self.session.scalar(
+                select(model.id).where(model.id == target.target_id, where)
+            )
+            if found is None:
+                raise PromotionNotFound("Promotion target not found")
 
     async def _audit(self, context: TenantContext, action: str, resource_id: UUID) -> None:
         await self.audit.record(

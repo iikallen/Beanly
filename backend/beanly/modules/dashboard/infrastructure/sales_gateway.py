@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 from beanly.modules.dashboard.application.dto import (
@@ -6,19 +7,14 @@ from beanly.modules.dashboard.application.dto import (
     SalesAggregate,
     TrendPoint,
 )
-from beanly.modules.payments.application.reporting_service import (
-    PaymentsReportingService,
-)
 from beanly.modules.sales.application.reporting_service import SalesReportingService
 
 
 class SalesDashboardGateway:
     def __init__(
         self,
-        payments: PaymentsReportingService,
         sales: SalesReportingService,
     ) -> None:
-        self.payments = payments
         self.sales = sales
 
     async def summary(
@@ -28,10 +24,14 @@ class SalesDashboardGateway:
         date_from: datetime,
         date_to: datetime,
     ) -> SalesAggregate:
-        value = await self.payments.sales_summary(
+        value = await self.sales.pricing_summary(
             organization_id, location_ids, date_from, date_to
         )
-        return SalesAggregate(value.revenue, value.paid_orders)
+        return SalesAggregate(
+            Decimal(value.gross_minor) / 100,
+            value.paid_orders,
+            Decimal(value.discount_minor) / 100,
+        )
 
     async def operations(
         self, organization_id: UUID, location_ids: tuple[UUID, ...]
@@ -45,11 +45,17 @@ class SalesDashboardGateway:
         location_ids: tuple[UUID, ...],
         buckets: tuple[tuple[datetime, datetime], ...],
     ) -> tuple[TrendPoint, ...]:
-        values = await self.payments.sales_trend(
+        values = await self.sales.pricing_trend(
             organization_id, location_ids, buckets
         )
         return tuple(
-            TrendPoint(bucket[0], value.revenue, value.orders)
+            TrendPoint(
+                bucket[0],
+                Decimal(value.gross_minor - value.discount_minor) / 100,
+                value.paid_orders,
+                str(value.gross_minor),
+                str(value.discount_minor),
+            )
             for bucket, value in zip(buckets, values, strict=True)
         )
 
@@ -60,10 +66,15 @@ class SalesDashboardGateway:
         date_from: datetime,
         date_to: datetime,
     ) -> tuple[LocationSalesRow, ...]:
-        values = await self.payments.location_sales_summary(
+        values = await self.sales.pricing_locations(
             organization_id, location_ids, date_from, date_to
         )
         return tuple(
-            LocationSalesRow(value.location_id, value.revenue, value.paid_orders)
+            LocationSalesRow(
+                value.location_id,
+                Decimal(value.gross_minor - value.discount_minor) / 100,
+                value.paid_orders,
+                Decimal(value.discount_minor) / 100,
+            )
             for value in values
         )

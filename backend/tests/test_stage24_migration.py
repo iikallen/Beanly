@@ -102,6 +102,15 @@ async def test_stage24_migration_up_down_reup_is_exact_and_reversible() -> None:
         assert set(upgraded["tables"]) - set(before["tables"]) == STAGE24_TABLES
         for table, columns in EXTENDED_COLUMNS.items():
             assert columns <= upgraded["columns"][table]
+        assert {
+            "orders_count",
+            "applications_count",
+            "items_count",
+            "gross_eligible_amount",
+            "discount_amount",
+            "net_revenue_amount",
+            "refund_amount",
+        } <= upgraded["columns"]["analytics_promotions_daily"]
 
         assert {
             "ck_promotions_status",

@@ -32,7 +32,7 @@ export function DashboardTrend({
   if (!points.some((point) => point.orders > 0)) {
     return (
       <section className="dashboard-panel dashboard-trend-panel">
-        <header><h2>{hasRefundMetrics ? "Net sales" : "Revenue"} trend</h2><span>{hasRefundMetrics ? "Sales after refunds" : "Revenue"} and paid orders</span></header>
+        <header><h2>{hasRefundMetrics ? "Net sales" : "Revenue"} trend</h2><span>{hasRefundMetrics ? "Sales after discounts and refunds" : "Revenue"} and paid orders</span></header>
         <DashboardEmpty actions={emptyActions} />
       </section>
     );
@@ -54,10 +54,10 @@ export function DashboardTrend({
 
   return (
     <section className="dashboard-panel dashboard-trend-panel">
-      <header><h2>{hasRefundMetrics ? "Net sales" : "Revenue"} trend</h2><span>{hasRefundMetrics ? "Sales after refunds" : "Revenue"} and paid orders</span></header>
+      <header><h2>{hasRefundMetrics ? "Net sales" : "Revenue"} trend</h2><span>{hasRefundMetrics ? "Sales after discounts and refunds" : "Revenue"} and paid orders</span></header>
       <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-labelledby="dashboard-trend-title dashboard-trend-description">
         <title id="dashboard-trend-title">{hasRefundMetrics ? "Net sales" : "Revenue"} trend</title>
-        <desc id="dashboard-trend-description">{hasRefundMetrics ? "Net sales after refunds" : "Revenue"} across the selected reporting period. Each point also includes its paid order count.</desc>
+        <desc id="dashboard-trend-description">{hasRefundMetrics ? "Net sales after discounts and refunds" : "Revenue"} across the selected reporting period. Each point also includes its paid order count.</desc>
         {[0, 1, 2, 3].map((lineIndex) => {
           const y = TOP + (usableHeight * lineIndex) / 3;
           return <line key={lineIndex} x1={LEFT} x2={WIDTH - RIGHT} y1={y} y2={y} className="dashboard-chart-grid" />;

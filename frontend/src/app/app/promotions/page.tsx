@@ -14,11 +14,13 @@ import {
   type PromotionApplicationMode,
   type PromotionDiscountKind,
   type PromotionInput,
+  type PromotionPerformance,
   type PromotionPreview,
   type PromotionScope,
   type PromotionTarget,
 } from "@/lib/api";
 import { formatMenuPriceMinor, parseMenuPriceToMinor, priceMinorToInput } from "@/lib/menu";
+import { formatDashboardMoney } from "@/lib/dashboard";
 
 type Draft = Omit<PromotionInput, "amount_minor" | "fixed_price_minor" | "minimum_subtotal_minor" | "maximum_discount_minor"> & {
   amount_minor: string | null;
@@ -52,6 +54,7 @@ export default function PromotionsPage() {
   const workspace = useWorkspace();
   const permissions = usePromotionPermissions();
   const [promotions, setPromotions] = useState<Promotion[]>([]);
+  const [performance, setPerformance] = useState<PromotionPerformance[]>([]);
   const [categories, setCategories] = useState<MenuCategory[]>([]);
   const [products, setProducts] = useState<MenuProduct[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -65,6 +68,7 @@ export default function PromotionsPage() {
   const [preview, setPreview] = useState<PromotionPreview | null>(null);
   const [newCode, setNewCode] = useState("");
   const organization = workspace.currentOrganization;
+  const currentLocationId = workspace.currentLocation?.id;
   const currency = organization?.currency_code ?? "KZT";
 
   const load = useCallback(async () => {
@@ -72,17 +76,22 @@ export default function PromotionsPage() {
     setLoading(true);
     setError("");
     try {
-      const [promotionRows, categoryRows, productRows] = await Promise.all([
+      const today = new Date();
+      const from = new Date(today);
+      from.setUTCDate(from.getUTCDate() - 29);
+      const [promotionRows, performanceRows, categoryRows, productRows] = await Promise.all([
         api.listPromotions(organization.id, accessToken),
+        api.getPromotionPerformance(from.toISOString().slice(0, 10), today.toISOString().slice(0, 10), organization.id, accessToken, currentLocationId),
         api.listMenuCategories(organization.id, accessToken),
         api.listMenuProducts(organization.id, accessToken),
       ]);
       setPromotions(promotionRows);
+      setPerformance(performanceRows);
       setCategories(categoryRows);
       setProducts(productRows);
     } catch (caught) { setError(messageOf(caught)); }
     finally { setLoading(false); }
-  }, [accessToken, organization]);
+  }, [accessToken, currentLocationId, organization]);
 
   useEffect(() => {
     let cancelled = false;
@@ -155,7 +164,7 @@ export default function PromotionsPage() {
         const match = variants.find(({ variant }) => variant.id === line.variant_id)!;
         return { id: line.id, category_id: match.product.category_id, product_id: match.product.id, variant_id: match.variant.id, quantity: line.quantity, base_price_minor: match.variant.effective_price_minor, modifier_price_minor: moneyOrNull(line.modifier_minor) ?? "0" };
       });
-      setPreview(await api.previewPromotion(selectedId, { location_id: workspace.currentLocation.id, location_timezone: workspace.currentLocation.timezone, occurred_at: new Date().toISOString(), items }, organization.id, accessToken));
+      setPreview(await api.previewPromotion(selectedId, { location_id: workspace.currentLocation.id, occurred_at: new Date().toISOString(), items }, organization.id, accessToken));
     } catch (caught) { setError(messageOf(caught)); }
     finally { setBusy(false); }
   }
@@ -189,6 +198,8 @@ export default function PromotionsPage() {
       {!editing && permissions.canWrite && <section className="promotion-presets" aria-labelledby="preset-title"><div className="menu-section-heading"><div><h2 id="preset-title">Quick templates</h2><p>Templates only prefill the builder; every rule remains editable.</p></div></div><div>{PRESETS.map((preset) => <button key={preset.name} type="button" onClick={() => newPromotion(preset.draft)}><Sparkles /><strong>{preset.name}</strong><span>{preset.description}</span></button>)}</div></section>}
 
       {!editing && (loading ? <div className="menu-state">Loading promotions…</div> : promotions.length === 0 ? <div className="menu-state"><strong>No promotions yet</strong><span>Start from a quick template or create a blank promotion.</span></div> : <section className="promotion-list" aria-label="Promotions">{promotions.map((promotion) => <button key={promotion.id} type="button" onClick={() => editPromotion(promotion)}><span><strong>{promotion.name}</strong><small>{promotion.pos_name}</small></span><span>{kindLabel(promotion.discount_kind, promotion)}</span><span>{promotion.application_mode}</span><span className={`menu-status status-${promotion.status.toLowerCase()}`}>{promotion.status}</span></button>)}</section>)}
+
+      {!editing && performance.length > 0 && <section className="dashboard-panel"><header><h2>Promotion performance</h2><span>Last 30 days</span></header><div className="dashboard-table-wrap"><table><thead><tr><th>Promotion</th><th>Orders</th><th>Applications</th><th>Items</th><th>Eligible gross</th><th>Discount</th><th>Net</th><th>Refunds</th></tr></thead><tbody>{performance.map((row) => <tr key={row.promotion_id}><th scope="row">{row.promotion_name}</th><td>{row.orders_count}</td><td>{row.applications_count}</td><td>{row.items_count}</td><td>{formatDashboardMoney(row.gross_eligible_amount, currency)}</td><td>−{formatDashboardMoney(row.discount_amount, currency)}</td><td>{formatDashboardMoney(row.net_revenue_amount, currency)}</td><td>−{formatDashboardMoney(row.refund_amount, currency)}</td></tr>)}</tbody></table></div></section>}
 
       {editing && <form className="promotion-builder" onSubmit={save}>
         <header><div><button className="menu-back-link" type="button" onClick={() => setEditing(false)}>← All promotions</button><h2>{selected ? selected.name : "New promotion"}</h2>{selected && <span className={`menu-status status-${selected.status.toLowerCase()}`}>{selected.status}</span>}</div><div>{selected?.status === "ACTIVE" && <button className="menu-danger-button" disabled={busy} type="button" onClick={() => void changeStatus("archive")}><Archive />Archive</button>}<button className="menu-primary-button" disabled={busy || !permissions.canWrite} type="submit"><Save />{busy ? "Saving…" : "Save draft"}</button></div></header>

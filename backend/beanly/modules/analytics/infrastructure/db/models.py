@@ -142,6 +142,8 @@ class AnalyticsPromotionsDailyModel(Base):
     __tablename__ = "analytics_promotions_daily"
     __table_args__ = (
         CheckConstraint("orders_count >= 0", name="ck_analytics_promotion_orders"),
+        CheckConstraint("applications_count >= 0", name="ck_analytics_promotion_applications"),
+        CheckConstraint("items_count >= 0", name="ck_analytics_promotion_items"),
         Index("ix_analytics_promotions_org_date", "organization_id", "local_date"),
     )
 
@@ -155,10 +157,12 @@ class AnalyticsPromotionsDailyModel(Base):
     promotion_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
     promotion_name: Mapped[str] = mapped_column(String(200))
     orders_count: Mapped[int] = mapped_column(BigInteger, default=0)
+    applications_count: Mapped[int] = mapped_column(BigInteger, default=0)
+    items_count: Mapped[int] = mapped_column(BigInteger, default=0)
+    gross_eligible_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), default=Decimal(0))
     discount_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), default=Decimal(0))
-    gross_revenue_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), default=Decimal(0))
     net_revenue_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), default=Decimal(0))
-    refunded_discount_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), default=Decimal(0))
+    refund_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), default=Decimal(0))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
