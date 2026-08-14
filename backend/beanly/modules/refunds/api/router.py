@@ -3,7 +3,6 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status
-from sqlalchemy.exc import IntegrityError
 
 from beanly.modules.refunds.api.dependencies import RefundReadDep, RefundServiceDep, RefundWriteDep
 from beanly.modules.refunds.api.schemas import (
@@ -124,7 +123,10 @@ def _input(payload: RefundPreviewRequest) -> RefundInput:
 
 
 def _http_error(exc: Exception) -> HTTPException:
-    detail = {"code": getattr(exc, "code", "REFUND_ERROR"), "message": str(exc) or "Refund failed"}
+    detail = {
+        "code": exc.code if isinstance(exc, RefundError) else RefundError.code,
+        "message": str(exc) or "Refund failed",
+    }
     if isinstance(exc, RefundNotFound):
         return HTTPException(status.HTTP_404_NOT_FOUND, detail)
     if isinstance(exc, (InvalidRefund, RefundTotalMismatch, ValueError)):
@@ -137,7 +139,6 @@ def _http_error(exc: Exception) -> HTTPException:
             RefundPaymentAmountExceeded,
             OrderNotRefundable,
             ExternalRefundNotConfirmed,
-            IntegrityError,
         ),
     ):
         return HTTPException(status.HTTP_409_CONFLICT, detail)

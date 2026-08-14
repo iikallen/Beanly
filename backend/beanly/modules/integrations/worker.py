@@ -35,6 +35,7 @@ from beanly.modules.organizations.application.services.organization_service impo
 from beanly.modules.organizations.infrastructure.db.repositories import (
     SqlAlchemyOrganizationRepository,
 )
+from beanly.modules.promotions.infrastructure.db import models as _promotions_models  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

@@ -41,76 +41,76 @@ class SqlAlchemyRefundRepository:
         return to_refund(value) if value else None
 
     async def add(self, value: Refund) -> Refund:
-        model = await self.session.get(RefundModel, value.id)
-        if model is None:
-            model = RefundModel(
-                id=value.id,
-                organization_id=value.organization_id,
-                location_id=value.location_id,
-                order_id=value.order_id,
-                payment_id=value.payment_id,
-                client_refund_id=value.client_refund_id,
-                status=value.status.value,
-                reason=value.reason.value,
-                note=value.note,
-                currency_code=value.currency_code,
-                total_amount_minor=value.total_amount_minor,
-                inventory_transaction_id=value.inventory_transaction_id,
-                cogs_reversal_amount=value.cogs_reversal_amount,
-                cogs_quality_status=value.cogs_quality_status,
-                created_by_user_id=value.created_by_user_id,
-                created_at=value.created_at,
-                completed_by_user_id=value.completed_by_user_id,
-                completed_at=value.completed_at,
-                failed_at=value.failed_at,
-                failure_code=value.failure_code,
-                lines=[
-                    RefundLineModel(
-                        **{
-                            "id": line.id,
-                            "refund_id": line.refund_id,
-                            "order_item_id": line.order_item_id,
-                            "quantity": line.quantity,
-                            "restock_quantity": line.restock_quantity,
-                            "unit_refund_minor": line.unit_refund_minor,
-                            "total_refund_minor": line.total_refund_minor,
-                            "gross_refund_minor": line.gross_refund_minor,
-                            "discount_refund_minor": line.discount_refund_minor,
-                            "net_refund_minor": line.net_refund_minor,
-                            "created_at": line.created_at,
-                        }
-                    )
-                    for line in value.lines
-                ],
-                payment_lines=[
-                    RefundPaymentLineModel(
-                        **{
-                            "id": line.id,
-                            "refund_id": line.refund_id,
-                            "original_payment_line_id": line.original_payment_line_id,
-                            "method": line.method,
-                            "amount_minor": line.amount_minor,
-                            "external_refund_confirmed": line.external_refund_confirmed,
-                            "reference": line.reference,
-                            "created_at": line.created_at,
-                        }
-                    )
-                    for line in value.payment_lines
-                ],
-            )
-            self.session.add(model)
-            await self.session.flush()
-            await self._add_discount_allocations(value)
-        else:
-            model.status = value.status.value
-            model.inventory_transaction_id = value.inventory_transaction_id
-            model.cogs_reversal_amount = value.cogs_reversal_amount
-            model.cogs_quality_status = value.cogs_quality_status
-            model.completed_by_user_id = value.completed_by_user_id
-            model.completed_at = value.completed_at
-            model.failed_at = value.failed_at
-            model.failure_code = value.failure_code
         try:
+            model = await self.session.get(RefundModel, value.id)
+            if model is None:
+                model = RefundModel(
+                    id=value.id,
+                    organization_id=value.organization_id,
+                    location_id=value.location_id,
+                    order_id=value.order_id,
+                    payment_id=value.payment_id,
+                    client_refund_id=value.client_refund_id,
+                    status=value.status.value,
+                    reason=value.reason.value,
+                    note=value.note,
+                    currency_code=value.currency_code,
+                    total_amount_minor=value.total_amount_minor,
+                    inventory_transaction_id=value.inventory_transaction_id,
+                    cogs_reversal_amount=value.cogs_reversal_amount,
+                    cogs_quality_status=value.cogs_quality_status,
+                    created_by_user_id=value.created_by_user_id,
+                    created_at=value.created_at,
+                    completed_by_user_id=value.completed_by_user_id,
+                    completed_at=value.completed_at,
+                    failed_at=value.failed_at,
+                    failure_code=value.failure_code,
+                    lines=[
+                        RefundLineModel(
+                            **{
+                                "id": line.id,
+                                "refund_id": line.refund_id,
+                                "order_item_id": line.order_item_id,
+                                "quantity": line.quantity,
+                                "restock_quantity": line.restock_quantity,
+                                "unit_refund_minor": line.unit_refund_minor,
+                                "total_refund_minor": line.total_refund_minor,
+                                "gross_refund_minor": line.gross_refund_minor,
+                                "discount_refund_minor": line.discount_refund_minor,
+                                "net_refund_minor": line.net_refund_minor,
+                                "created_at": line.created_at,
+                            }
+                        )
+                        for line in value.lines
+                    ],
+                    payment_lines=[
+                        RefundPaymentLineModel(
+                            **{
+                                "id": line.id,
+                                "refund_id": line.refund_id,
+                                "original_payment_line_id": line.original_payment_line_id,
+                                "method": line.method,
+                                "amount_minor": line.amount_minor,
+                                "external_refund_confirmed": line.external_refund_confirmed,
+                                "reference": line.reference,
+                                "created_at": line.created_at,
+                            }
+                        )
+                        for line in value.payment_lines
+                    ],
+                )
+                self.session.add(model)
+                await self.session.flush()
+                await self._add_discount_allocations(value)
+            else:
+                model.status = value.status.value
+                model.inventory_transaction_id = value.inventory_transaction_id
+                model.cogs_reversal_amount = value.cogs_reversal_amount
+                model.cogs_quality_status = value.cogs_quality_status
+                model.completed_by_user_id = value.completed_by_user_id
+                model.completed_at = value.completed_at
+                model.failed_at = value.failed_at
+                model.failure_code = value.failure_code
             await self.session.flush()
         except IntegrityError as exc:
             raise RefundConflict("Refund persistence conflict") from exc

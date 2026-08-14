@@ -93,11 +93,10 @@ def _plan_refund_fiscalization(
         location_id = _id(envelope, "location_id")
         now = datetime.now(UTC)
         resolver = getattr(receipts, "resolve_fiscal_connection", None)
-        if resolver is None:
-            connections = await repository.active_connections(
-                organization_id, IntegrationCapability.FISCAL, location_id
-            )
-        else:
+        connections = await repository.active_connections(
+            organization_id, IntegrationCapability.FISCAL, location_id
+        )
+        if resolver is not None and connections:
             resolved = await resolver(organization_id, "REFUND", refund_id)
             connections = [resolved] if resolved is not None else []
         for connection, bound_location_id in connections[:1]:

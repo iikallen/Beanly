@@ -44,6 +44,9 @@ from beanly.modules.fiscal.infrastructure.db.models import (
     FiscalTaxProfileModel,
     FiscalVariantProfileModel,
 )
+from beanly.modules.fiscal.infrastructure.live_repository import (
+    SqlAlchemyFiscalLiveRepository,
+)
 from beanly.modules.fiscal.infrastructure.nkt.cache_repository import NktCacheRepository
 from beanly.modules.fiscal.infrastructure.operations import SqlAlchemyFiscalOperations
 from beanly.modules.identity.api.dependencies import SessionDep, SettingsDep
@@ -64,10 +67,16 @@ from beanly.modules.integrations.infrastructure.source_reader import (
 )
 from beanly.modules.inventory.infrastructure.db.models import InventoryTransactionLineModel
 from beanly.modules.menu.infrastructure.db.models import RecipeComponentModel, RecipeModel
+from beanly.modules.organizations.application.services.organization_service import (
+    OrganizationService,
+)
 from beanly.modules.organizations.domain.entities import TenantContext
 from beanly.modules.organizations.domain.enums import LocationAccess, MembershipRole
 from beanly.modules.organizations.domain.permissions import permissions_for
 from beanly.modules.organizations.infrastructure.db.models import OrganizationMembershipModel
+from beanly.modules.organizations.infrastructure.db.repositories import (
+    SqlAlchemyOrganizationRepository,
+)
 from beanly.modules.refunds.api.dependencies import refund_service as refund_service_dependency
 from beanly.modules.refunds.infrastructure.db.models import RefundModel
 from beanly.modules.refunds.infrastructure.db.repositories import (
@@ -893,6 +902,75 @@ def test_refund_openapi_uses_lossless_minor_amounts_and_frozen_routes() -> None:
     }.items():
         for field in fields:
             assert schemas[schema]["properties"][field]["type"] == "string"
+
+
+@pytest.mark.anyio
+async def test_unconfigured_refund_fiscal_planner_processes_event_without_job(
+    app_client,
+) -> None:
+    client, sessions = app_client
+    headers, organization_id, location_id, warehouse_id = await _workspace(
+        client, "refund-unconfigured@example.com", "Refund unconfigured"
+    )
+    variant_id = await _variant(client, headers, "Unconfigured refund water", 100000)
+    order, payment = await _paid_order(
+        client, headers, location_id, warehouse_id, variant_id
+    )
+    refund = await client.post(
+        "/api/v1/refunds",
+        headers=headers,
+        json={
+            "client_refund_id": str(uuid4()),
+            "payment_id": payment["id"],
+            "reason": "CUSTOMER_RETURN",
+            "lines": [
+                {
+                    "order_item_id": order["items"][0]["id"],
+                    "quantity": 1,
+                    "restock_quantity": 0,
+                }
+            ],
+            "payment_lines": [
+                {
+                    "original_payment_line_id": payment["lines"][0]["id"],
+                    "amount_minor": order["total_minor"],
+                }
+            ],
+        },
+    )
+    assert refund.status_code == 201, refund.text
+    refund_id = UUID(refund.json()["id"])
+
+    async with sessions() as session:
+        handlers = EventHandlerRegistry()
+        integration_repository = SqlAlchemyIntegrationRepository(session)
+        register_integration_handlers(
+            handlers,
+            integration_repository,
+            SqlAlchemyFiscalLiveRepository(
+                session,
+                OrganizationService(SqlAlchemyOrganizationRepository(session)),
+            ),
+        )
+        assert await OutboxDispatcher(
+            OutboxRepository(session), handlers, "stage24-unconfigured-refund"
+        ).run_once() > 0
+        event = await session.scalar(
+            select(OutboxEventModel).where(
+                OutboxEventModel.event_name == "refund.completed",
+                OutboxEventModel.aggregate_id == refund_id,
+            )
+        )
+        assert event is not None
+        assert event.processed_at is not None
+        assert event.attempts == 0
+        assert not await session.scalar(
+            select(IntegrationJobModel.id).where(
+                IntegrationJobModel.organization_id == organization_id,
+                IntegrationJobModel.source_type == "REFUND",
+                IntegrationJobModel.source_id == refund_id,
+            )
+        )
 
 
 @pytest.mark.anyio
