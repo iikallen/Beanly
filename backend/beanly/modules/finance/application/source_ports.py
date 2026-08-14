@@ -78,7 +78,20 @@ class FinanceCountSnapshot:
     gain_amount: Decimal
 
 
+@dataclass(frozen=True, slots=True)
+class FinanceCashDrawerSnapshot:
+    drawer_id: UUID
+    organization_id: UUID
+    location_id: UUID
+    currency_code: str
+    variance_minor: int
+    closed_at: datetime
+
+
 class FinanceSourceReader(Protocol):
+    async def cash_drawer(
+        self, organization_id: UUID, drawer_id: UUID
+    ) -> FinanceCashDrawerSnapshot: ...
     async def payment(self, organization_id: UUID, payment_id: UUID) -> FinancePaymentSnapshot: ...
 
     async def refund(self, organization_id: UUID, refund_id: UUID) -> FinanceRefundSnapshot: ...

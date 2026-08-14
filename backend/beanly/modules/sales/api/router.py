@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
 
+from beanly.modules.cash_management.domain.exceptions import CashManagementError
 from beanly.modules.organizations.domain.exceptions import (
     InvalidLocationAccess,
     OrganizationAccessDenied,
@@ -134,7 +135,13 @@ async def open_shift(
     service: ShiftServiceDep,
 ) -> ShiftResponse:
     try:
-        value = await service.open(context, payload.register_id, payload.warehouse_id)
+        value = await service.open(
+            context,
+            payload.register_id,
+            payload.warehouse_id,
+            int(payload.starting_cash_minor),
+            payload.client_open_id,
+        )
     except Exception as exc:
         raise _http_error(exc) from exc
     return ShiftResponse.model_validate(value)
@@ -382,6 +389,7 @@ def _http_error(exc: Exception) -> HTTPException:
             SalesConflict,
             OrderImmutable,
             InvalidSalesOperation,
+            CashManagementError,
             IntegrityError,
         ),
     ):

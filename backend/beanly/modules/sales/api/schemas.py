@@ -1,7 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
@@ -49,6 +49,8 @@ class WarehouseChoiceResponse(BaseModel):
 class ShiftOpenRequest(BaseModel):
     register_id: UUID
     warehouse_id: UUID
+    starting_cash_minor: Annotated[str, Field(pattern=r"^\d{1,19}$")] = "0"
+    client_open_id: UUID = Field(default_factory=uuid4)
 
 
 class ShiftResponse(BaseModel):
@@ -66,6 +68,7 @@ class ShiftResponse(BaseModel):
     closed_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    drawer_session_id: UUID | None = None
 
 
 class OrderCreateRequest(BaseModel):

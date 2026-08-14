@@ -347,7 +347,7 @@ export type PosWarehouseChoice = {
   name: string;
 };
 
-export type RegisterShiftStatus = "OPEN" | "CLOSED";
+export type RegisterShiftStatus = "OPEN" | "CLOSING" | "CLOSED";
 
 export type RegisterShift = {
   id: string;
@@ -356,6 +356,7 @@ export type RegisterShift = {
   register_id: string;
   warehouse_id: string;
   status: RegisterShiftStatus;
+  drawer_session_id: string | null;
   opened_by_user_id: string;
   closed_by_user_id: string | null;
   opened_at: string;
@@ -441,6 +442,93 @@ export type SalesOrder = {
   updated_at: string;
   items: SalesOrderItem[];
   discounts: SalesOrderDiscount[];
+};
+
+export type CashDrawerStatus = "OPEN" | "CLOSING" | "CLOSED";
+export type CashMovementKind = "OPENING_FLOAT" | "CASH_PAYMENT" | "CASH_REFUND" | "PAY_IN" | "PAY_OUT";
+
+export type CashDrawer = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  register_id: string;
+  shift_id: string;
+  currency_code: string;
+  status: CashDrawerStatus;
+  starting_cash_minor: string;
+  expected_cash_minor_snapshot: string | null;
+  actual_cash_minor: string | null;
+  variance_minor: string | null;
+  opened_by_user_id: string;
+  opened_at: string;
+  closed_by_user_id: string | null;
+  closed_at: string | null;
+  approved_by_user_id: string | null;
+  approved_at: string | null;
+  close_note: string | null;
+  client_open_id: string;
+  client_close_id: string | null;
+  version: number;
+};
+
+export type CashDrawerMovement = {
+  id: string;
+  organization_id: string;
+  drawer_session_id: string;
+  kind: CashMovementKind;
+  amount_minor: string;
+  source_type: string;
+  source_id: string | null;
+  source_line_id: string | null;
+  client_movement_id: string | null;
+  reason: string | null;
+  note: string | null;
+  created_by_user_id: string | null;
+  occurred_at: string;
+  recorded_at: string;
+};
+
+export type CashDrawerSummary = {
+  drawer: CashDrawer;
+  expected_visible: boolean;
+  starting_cash_minor: string | null;
+  cash_payments_minor: string | null;
+  cash_refunds_minor: string | null;
+  pay_in_minor: string | null;
+  pay_out_minor: string | null;
+  expected_cash_minor: string | null;
+  actual_cash_minor: string | null;
+  variance_minor: string | null;
+};
+
+export type CashDrawerReportRow = {
+  id: string;
+  location_id: string;
+  location_name: string;
+  register_id: string;
+  register_name: string;
+  shift_id: string;
+  cashier_user_id: string;
+  cashier_name: string;
+  status: CashDrawerStatus;
+  opened_at: string;
+  closed_at: string | null;
+  starting_cash_minor: string;
+  expected_cash_minor: string | null;
+  actual_cash_minor: string | null;
+  variance_minor: string | null;
+  currency_code: string;
+};
+
+export type CashDrawerReport = { summary: CashDrawerSummary; movements: CashDrawerMovement[] };
+export type FiscalShiftStatus = "NOT_REQUIRED" | "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED" | "UNKNOWN" | "RECONCILIATION_REQUIRED";
+export type FiscalShiftStatusResponse = {
+  shift_id: string;
+  status: FiscalShiftStatus;
+  job_id: string | null;
+  job_type: "FISCAL_SHIFT_X_REPORT" | "FISCAL_SHIFT_Z_REPORT";
+  provider_code: string | null;
+  updated_at: string | null;
 };
 
 export type OfflinePromotion = {
@@ -2803,7 +2891,7 @@ export const api = {
     { headers: tenantAuthorization(organizationId, accessToken) },
   ),
   openRegisterShift: (
-    input: { register_id: string; warehouse_id: string },
+    input: { register_id: string; warehouse_id: string; starting_cash_minor: string; client_open_id: string },
     organizationId: string,
     accessToken: string,
   ) => request<RegisterShift>("/api/v1/sales/shifts/open", {
@@ -2811,6 +2899,87 @@ export const api = {
     body: JSON.stringify(input),
     headers: tenantAuthorization(organizationId, accessToken),
   }),
+  getCurrentCashDrawer: (
+    registerId: string,
+    organizationId: string,
+    accessToken: string,
+  ) => request<CashDrawer | null>(
+    `/api/v1/cash/drawers/current?${new URLSearchParams({ register_id: registerId })}`,
+    { headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  getCashDrawer: (drawerId: string, organizationId: string, accessToken: string) =>
+    request<CashDrawer>(`/api/v1/cash/drawers/${drawerId}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  getCashDrawerSummary: (drawerId: string, organizationId: string, accessToken: string) =>
+    request<CashDrawerSummary>(`/api/v1/cash/drawers/${drawerId}/summary`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  createCashDrawerMovement: (
+    drawerId: string,
+    kind: "pay-in" | "pay-out",
+    input: { client_movement_id: string; amount_minor: string; reason: string; note?: string },
+    organizationId: string,
+    accessToken: string,
+  ) => request<CashDrawerMovement>(`/api/v1/cash/drawers/${drawerId}/${kind}`, {
+    method: "POST",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  closeCashDrawer: (
+    drawerId: string,
+    input: { client_close_id: string; actual_cash_minor: string; note?: string; pending_offline_operations?: number },
+    organizationId: string,
+    accessToken: string,
+  ) => request<CashDrawerSummary>(`/api/v1/cash/drawers/${drawerId}/close`, {
+    method: "POST",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  approveCashVariance: (
+    drawerId: string,
+    reason: string,
+    organizationId: string,
+    accessToken: string,
+  ) => request<CashDrawerSummary>(`/api/v1/cash/drawers/${drawerId}/approve-variance`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  listCashDrawerReports: (
+    organizationId: string,
+    accessToken: string,
+    filters: { locationId?: string; dateFrom?: string; dateTo?: string; status?: CashDrawerStatus | "" } = {},
+  ) => {
+    const params = new URLSearchParams();
+    if (filters.locationId) params.set("location_id", filters.locationId);
+    if (filters.dateFrom) params.set("date_from", filters.dateFrom);
+    if (filters.dateTo) params.set("date_to", filters.dateTo);
+    if (filters.status) params.set("status", filters.status);
+    return request<CashDrawerReportRow[]>(`/api/v1/cash/reports/drawers?${params}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    });
+  },
+  getCashDrawerReport: (drawerId: string, organizationId: string, accessToken: string) =>
+    request<CashDrawerReport>(`/api/v1/cash/reports/drawers/${drawerId}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  requestFiscalXReport: (shiftId: string, organizationId: string, accessToken: string) =>
+    request<FiscalShiftStatusResponse>(`/api/v1/fiscal/shifts/${shiftId}/x-report`, {
+      method: "POST",
+      body: JSON.stringify({}),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  getFiscalShiftStatus: (shiftId: string, organizationId: string, accessToken: string) =>
+    request<FiscalShiftStatusResponse>(`/api/v1/fiscal/shifts/${shiftId}/status`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  reconcileFiscalShift: (shiftId: string, organizationId: string, accessToken: string) =>
+    request<FiscalShiftStatusResponse>(`/api/v1/fiscal/shifts/${shiftId}/reconcile`, {
+      method: "POST",
+      body: JSON.stringify({}),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
   closeRegisterShift: (
     shiftId: string,
     organizationId: string,

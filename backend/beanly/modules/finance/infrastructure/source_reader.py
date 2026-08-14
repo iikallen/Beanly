@@ -5,7 +5,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from beanly.modules.cash_management.infrastructure.db.models import CashDrawerSessionModel
 from beanly.modules.finance.application.source_ports import (
+    FinanceCashDrawerSnapshot,
     FinanceCountSnapshot,
     FinancePaymentLineSnapshot,
     FinancePaymentSnapshot,
@@ -176,3 +178,24 @@ class SqlAlchemyFinanceSourceReader:
             .order_by(InventoryCountModel.id)
         )
         return tuple(rows)
+
+    async def cash_drawer(
+        self, organization_id: UUID, drawer_id: UUID
+    ) -> FinanceCashDrawerSnapshot:
+        value = await self.session.scalar(
+            select(CashDrawerSessionModel).where(
+                CashDrawerSessionModel.organization_id == organization_id,
+                CashDrawerSessionModel.id == drawer_id,
+                CashDrawerSessionModel.status == "CLOSED",
+            )
+        )
+        if value is None or value.closed_at is None or value.variance_minor is None:
+            raise FinanceNotFound("Closed cash drawer not found")
+        return FinanceCashDrawerSnapshot(
+            value.id,
+            value.organization_id,
+            value.location_id,
+            value.currency_code,
+            value.variance_minor,
+            value.closed_at,
+        )

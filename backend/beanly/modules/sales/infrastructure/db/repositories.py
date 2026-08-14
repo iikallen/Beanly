@@ -90,7 +90,12 @@ class SqlAlchemySalesRepository:
                 select(RegisterShiftModel.id).where(
                     RegisterShiftModel.organization_id == value.organization_id,
                     RegisterShiftModel.register_id == value.id,
-                    RegisterShiftModel.status == RegisterShiftStatus.OPEN.value,
+                    RegisterShiftModel.status.in_(
+                        (
+                            RegisterShiftStatus.OPEN.value,
+                            RegisterShiftStatus.CLOSING.value,
+                        )
+                    ),
                 )
             )
             if open_shift is not None:
@@ -120,7 +125,12 @@ class SqlAlchemySalesRepository:
             select(RegisterShiftModel.id).where(
                 RegisterShiftModel.organization_id == value.organization_id,
                 RegisterShiftModel.register_id == value.register_id,
-                RegisterShiftModel.status == RegisterShiftStatus.OPEN.value,
+                RegisterShiftModel.status.in_(
+                    (
+                        RegisterShiftStatus.OPEN.value,
+                        RegisterShiftStatus.CLOSING.value,
+                    )
+                ),
             )
         )
         if open_shift is not None:
@@ -149,7 +159,12 @@ class SqlAlchemySalesRepository:
             select(RegisterShiftModel).where(
                 RegisterShiftModel.organization_id == organization_id,
                 RegisterShiftModel.register_id == register_id,
-                RegisterShiftModel.status == RegisterShiftStatus.OPEN.value,
+                RegisterShiftModel.status.in_(
+                    (
+                        RegisterShiftStatus.OPEN.value,
+                        RegisterShiftStatus.CLOSING.value,
+                    )
+                ),
             )
         )
         return to_shift(model) if model else None

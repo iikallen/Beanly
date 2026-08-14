@@ -72,6 +72,17 @@ class BeanlyMetrics:
         self.pos_offline_payment_delay = meter.create_histogram(
             "pos.offline.payment.delay", unit="s"
         )
+        self.cash_drawer_sessions = meter.create_counter("cash.drawer_sessions.total")
+        self.cash_drawer_variance_minor = meter.create_histogram(
+            "cash.drawer_variance_minor"
+        )
+        self.cash_drawer_variance_rate = meter.create_histogram(
+            "cash.drawer_variance_rate"
+        )
+        self.cash_sales_minor = meter.create_counter("cash.sales_minor.total")
+        self.cash_refunds_minor = meter.create_counter("cash.refunds_minor.total")
+        self.cash_pay_in_minor = meter.create_counter("cash.pay_in_minor.total")
+        self.cash_pay_out_minor = meter.create_counter("cash.pay_out_minor.total")
         self._lock = Lock()
         self._queue_values: dict[str, float] = {
             "outbox_pending": 0,

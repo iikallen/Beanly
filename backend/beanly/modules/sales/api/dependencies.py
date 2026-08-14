@@ -2,6 +2,7 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 
+from beanly.modules.cash_management.infrastructure.service import CashDrawerService
 from beanly.modules.identity.api.dependencies import SessionDep
 from beanly.modules.inventory.infrastructure.db.repositories import (
     SqlAlchemyInventoryRepository,
@@ -52,7 +53,12 @@ def register_service(session: SessionDep) -> RegisterService:
 
 def shift_service(session: SessionDep) -> ShiftService:
     sales, organizations, inventory, _ = _dependencies(session)
-    return ShiftService(sales, organizations, inventory)
+    return ShiftService(
+        sales,
+        organizations,
+        inventory,
+        cash_drawers=CashDrawerService(session, organizations),
+    )
 
 
 def order_service(session: SessionDep) -> OrderService:

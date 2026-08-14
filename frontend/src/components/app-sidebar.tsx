@@ -11,6 +11,7 @@ import {
   LogOut,
   Monitor,
   ReceiptText,
+  WalletCards,
   Tags,
   Settings as SettingsIcon,
   ShoppingCart,
@@ -24,6 +25,7 @@ import { useAuth } from "@/components/auth-provider";
 import { Brand } from "@/components/auth-shell";
 import { useWorkspace } from "@/components/workspace-provider";
 import { useOnboardingPermissions } from "@/hooks/use-onboarding-permissions";
+import { useCashPermissions } from "@/hooks/use-cash-permissions";
 
 export function AppSidebar({
   active,
@@ -32,7 +34,7 @@ export function AppSidebar({
   settingsCanReadIntegrations,
   settingsCanReadFiscal,
 }: {
-  active: "dashboard" | "analytics" | "pos" | "customers" | "promotions" | "fiscal" | "inventory" | "menu" | "onboarding" | "purchasing" | "finance" | "team" | "settings";
+  active: "dashboard" | "analytics" | "pos" | "cash" | "customers" | "promotions" | "fiscal" | "inventory" | "menu" | "onboarding" | "purchasing" | "finance" | "team" | "settings";
   teamView?: "employees" | "invitations";
   onTeamView?: (view: "employees" | "invitations") => void;
   settingsCanReadIntegrations?: boolean;
@@ -50,6 +52,7 @@ export function AppSidebar({
   const router = useRouter();
   const pathname = usePathname();
   const onboardingPermissions = useOnboardingPermissions();
+  const cashPermissions = useCashPermissions();
 
   if (!currentOrganization || !currentLocation) return null;
 
@@ -132,6 +135,7 @@ export function AppSidebar({
           <Users aria-hidden="true" />
           Customers
         </button>
+        {!cashPermissions.loading && cashPermissions.canReport && <button className={active === "cash" ? "app-nav-item is-active" : "app-nav-item"} type="button" onClick={() => router.push("/app/reports/cash")}><WalletCards aria-hidden="true" />Cash reports</button>}
         <button
           className={active === "promotions" ? "app-nav-item is-active" : "app-nav-item"}
           type="button"

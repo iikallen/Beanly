@@ -264,9 +264,11 @@ async def test_sales_order_snapshots_mutations_idempotency_and_no_side_effects(a
     assert len((await client.get("/api/v1/sales/orders", headers=headers)).json()) == 1
 
     cannot_close = await client.post(
-        f"/api/v1/sales/shifts/{shift['id']}/close", headers=headers
+        f"/api/v1/cash/drawers/{shift['drawer_session_id']}/close",
+        headers=headers,
+        json={"client_close_id": str(uuid4()), "actual_cash_minor": "0"},
     )
-    _coded_error(cannot_close, 409, "SHIFT_HAS_OPEN_ORDERS")
+    _coded_error(cannot_close, 409, "SHIFT_CLOSE_SYNC_PENDING")
     client_item_id = uuid4()
     added = await client.post(
         f"/api/v1/sales/orders/{order_id}/items",
@@ -395,10 +397,12 @@ async def test_sales_order_snapshots_mutations_idempotency_and_no_side_effects(a
     )
     _coded_error(immutable, 409, "ORDER_IMMUTABLE")
     closed = await client.post(
-        f"/api/v1/sales/shifts/{shift['id']}/close", headers=headers
+        f"/api/v1/cash/drawers/{shift['drawer_session_id']}/close",
+        headers=headers,
+        json={"client_close_id": str(uuid4()), "actual_cash_minor": "0"},
     )
     assert closed.status_code == 200, closed.text
-    assert closed.json()["status"] == "CLOSED"
+    assert closed.json()["drawer"]["status"] == "CLOSED"
     closed_order = await client.post(
         "/api/v1/sales/orders",
         headers=headers,

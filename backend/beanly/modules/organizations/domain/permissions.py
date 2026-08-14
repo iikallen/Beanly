@@ -70,6 +70,12 @@ class Permission(StrEnum):
     LOYALTY_ADJUST = "loyalty.adjust"
     LOYALTY_CONFIGURE = "loyalty.configure"
     LOYALTY_REDEEM = "loyalty.redeem"
+    CASH_DRAWER_USE = "cash.drawer.use"
+    CASH_DRAWER_ADJUST = "cash.drawer.adjust"
+    CASH_DRAWER_CLOSE = "cash.drawer.close"
+    CASH_DRAWER_VIEW_EXPECTED = "cash.drawer.view_expected"
+    CASH_DRAWER_APPROVE_VARIANCE = "cash.drawer.approve_variance"
+    CASH_DRAWER_REPORT = "cash.drawer.report"
 
 
 _ALL = frozenset(Permission)
@@ -140,6 +146,12 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.LOYALTY_ADJUST,
             Permission.LOYALTY_CONFIGURE,
             Permission.LOYALTY_REDEEM,
+            Permission.CASH_DRAWER_USE,
+            Permission.CASH_DRAWER_ADJUST,
+            Permission.CASH_DRAWER_CLOSE,
+            Permission.CASH_DRAWER_VIEW_EXPECTED,
+            Permission.CASH_DRAWER_APPROVE_VARIANCE,
+            Permission.CASH_DRAWER_REPORT,
         }
     ),
     MembershipRole.MANAGER: frozenset(
@@ -191,6 +203,12 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.LOYALTY_READ,
             Permission.LOYALTY_ADJUST,
             Permission.LOYALTY_REDEEM,
+            Permission.CASH_DRAWER_USE,
+            Permission.CASH_DRAWER_ADJUST,
+            Permission.CASH_DRAWER_CLOSE,
+            Permission.CASH_DRAWER_VIEW_EXPECTED,
+            Permission.CASH_DRAWER_APPROVE_VARIANCE,
+            Permission.CASH_DRAWER_REPORT,
         }
     ),
     MembershipRole.ACCOUNTANT: frozenset(
@@ -211,6 +229,8 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.PROMOTIONS_READ,
             Permission.CUSTOMERS_READ,
             Permission.LOYALTY_READ,
+            Permission.CASH_DRAWER_VIEW_EXPECTED,
+            Permission.CASH_DRAWER_REPORT,
         }
     ),
     MembershipRole.CASHIER: frozenset(
@@ -226,6 +246,8 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.CUSTOMERS_WRITE,
             Permission.LOYALTY_READ,
             Permission.LOYALTY_REDEEM,
+            Permission.CASH_DRAWER_USE,
+            Permission.CASH_DRAWER_CLOSE,
         }
     ),
     MembershipRole.BARISTA: frozenset(
@@ -239,6 +261,8 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.CUSTOMERS_READ,
             Permission.CUSTOMERS_WRITE,
             Permission.LOYALTY_READ,
+            Permission.CASH_DRAWER_USE,
+            Permission.CASH_DRAWER_CLOSE,
         }
     ),
 }

@@ -116,9 +116,12 @@ def test_openapi_contains_current_contract() -> None:
         schemas["CashAccountRequest"]["properties"]["opening_balance_minor"]["type"]
         == "string"
     )
-    assert schemas["CashMovementRequest"]["properties"]["amount_minor"]["type"] == (
-        "string"
+    finance_cash_movement = next(
+        name
+        for name in schemas
+        if name.endswith("finance__api__schemas__CashMovementRequest")
     )
+    assert schemas[finance_cash_movement]["properties"]["amount_minor"]["type"] == "string"
 
 
 def test_domain_has_no_framework_or_infrastructure_imports() -> None:

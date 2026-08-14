@@ -86,3 +86,13 @@ class NullSalesPricingPort:
 class NullSalesEventPublisher:
     async def publish(self, event: object) -> None:
         pass
+
+
+class CashDrawerOpenPort(Protocol):
+    async def existing_shift_id(
+        self, context: TenantContext, client_open_id: UUID
+    ) -> UUID | None: ...
+
+    async def open_for_shift(
+        self, context: TenantContext, shift, starting_cash_minor: int, client_open_id: UUID
+    ): ...

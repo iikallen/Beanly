@@ -20,10 +20,11 @@ export function parseMenuPriceToMinor(value: string) {
 
 export function priceMinorToInput(value: string) {
   const minor = BigInt(value);
+  const absolute = minor < BigInt(0) ? -minor : minor;
   const hundred = BigInt(100);
-  const whole = minor / hundred;
-  const fraction = minor % hundred;
-  return fraction === BigInt(0) ? String(whole) : `${whole}.${String(fraction).padStart(2, "0")}`;
+  const whole = absolute / hundred;
+  const fraction = absolute % hundred;
+  return `${minor < BigInt(0) ? "-" : ""}${whole}${fraction === BigInt(0) ? "" : `.${String(fraction).padStart(2, "0")}`}`;
 }
 
 export function formatMenuPriceMinor(value: string, currency: string) {

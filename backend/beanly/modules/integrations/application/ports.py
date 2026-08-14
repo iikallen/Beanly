@@ -7,6 +7,7 @@ from beanly.modules.integrations.application.dto import (
     FiscalReceiptResult,
     FiscalRefundCommand,
     FiscalSaleCommand,
+    FiscalShiftCommand,
     NormalizedWebhookEvent,
     OAuthSession,
     ProviderDescriptor,
@@ -45,6 +46,22 @@ class FiscalProvider(Protocol):
     async def fiscalize_refund(
         self,
         command: FiscalRefundCommand,
+        *,
+        credentials: Mapping[str, object],
+        idempotency_key: str,
+    ) -> FiscalReceiptResult: ...
+
+    async def fiscal_shift_x_report(
+        self,
+        command: FiscalShiftCommand,
+        *,
+        credentials: Mapping[str, object],
+        idempotency_key: str,
+    ) -> FiscalReceiptResult: ...
+
+    async def fiscal_shift_z_report(
+        self,
+        command: FiscalShiftCommand,
         *,
         credentials: Mapping[str, object],
         idempotency_key: str,

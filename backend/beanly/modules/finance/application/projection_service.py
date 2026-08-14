@@ -259,6 +259,36 @@ class FinanceProjectionService:
             )
         )
 
+    async def apply_cash_drawer_closed(
+        self, event_id: UUID, organization_id: UUID, drawer_id: UUID
+    ) -> None:
+        source = await self.sources.cash_drawer(organization_id, drawer_id)
+        if source.variance_minor == 0:
+            return
+        now = datetime.now(UTC)
+        await self.repository.add_finance_entry(
+            FinanceEntry(
+                uuid4(),
+                organization_id,
+                source.location_id,
+                FinanceEntryType.OTHER_INCOME
+                if source.variance_minor > 0
+                else FinanceEntryType.OTHER_EXPENSE,
+                _amount(Decimal(source.variance_minor) / 100),
+                source.currency_code,
+                source.closed_at,
+                "Cash drawer over/short",
+                None,
+                "CASH_DRAWER",
+                source.drawer_id,
+                event_id,
+                "CASH_OVER_SHORT",
+                None,
+                None,
+                now,
+            )
+        )
+
     async def apply_inventory_count_posted(
         self, event_id: UUID, organization_id: UUID, inventory_count_id: UUID
     ) -> None:

@@ -24,6 +24,8 @@ from beanly.modules.analytics.infrastructure.handlers import register_analytics_
 from beanly.modules.analytics.infrastructure.source_reader import (
     SqlAlchemyAnalyticsSourceReader,
 )
+from beanly.modules.cash_management.infrastructure.handlers import register_cash_handlers
+from beanly.modules.cash_management.infrastructure.service import CashDrawerService
 from beanly.modules.customers.infrastructure.handlers import register_customer_handlers
 from beanly.modules.customers.infrastructure.service import CustomerProjectionService
 from beanly.modules.finance.application.projection_service import FinanceProjectionService
@@ -83,6 +85,13 @@ async def run_worker(shutdown: ShutdownSignal | None = None) -> None:
             ),
         )
         register_customer_handlers(handlers, CustomerProjectionService(session))
+        register_cash_handlers(
+            handlers,
+            CashDrawerService(
+                session,
+                OrganizationService(SqlAlchemyOrganizationRepository(session)),
+            ),
+        )
         register_integration_handlers(
             handlers,
             SqlAlchemyIntegrationRepository(session),

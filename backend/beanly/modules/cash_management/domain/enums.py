@@ -1,0 +1,25 @@
+from enum import StrEnum
+
+
+class CashDrawerStatus(StrEnum):
+    OPEN = "OPEN"
+    CLOSING = "CLOSING"
+    CLOSED = "CLOSED"
+
+
+class CashMovementKind(StrEnum):
+    OPENING_FLOAT = "OPENING_FLOAT"
+    CASH_PAYMENT = "CASH_PAYMENT"
+    CASH_REFUND = "CASH_REFUND"
+    PAY_IN = "PAY_IN"
+    PAY_OUT = "PAY_OUT"
+
+
+class FiscalShiftStatus(StrEnum):
+    NOT_REQUIRED = "NOT_REQUIRED"
+    PENDING = "PENDING"
+    PROCESSING = "PROCESSING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    UNKNOWN = "UNKNOWN"
+    RECONCILIATION_REQUIRED = "RECONCILIATION_REQUIRED"

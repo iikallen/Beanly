@@ -4,6 +4,7 @@ from uuid import UUID, uuid4
 
 from beanly.core.events.envelope import EventEnvelope
 from beanly.core.events.serializer import serialize_event_payload
+from beanly.modules.cash_management.domain.events import CashDrawerClosed
 from beanly.modules.finance.domain.events import (
     CashMovementPosted,
     CashMovementReversed,
@@ -68,6 +69,7 @@ class EventSpec:
 
 
 EVENT_REGISTRY: dict[type[object], EventSpec] = {
+    CashDrawerClosed: EventSpec("cash.drawer_closed", 1, "cash_drawer", "drawer_id"),
     RefundCompleted: EventSpec("refund.completed", 1, "refund", "refund_id"),
     PosDevicePaired: EventSpec("pos.device_paired", 1, "pos_device", "device_id"),
     PosDeviceRevoked: EventSpec("pos.device_revoked", 1, "pos_device", "device_id"),

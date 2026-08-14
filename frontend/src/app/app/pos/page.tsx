@@ -20,6 +20,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAuth } from "@/components/auth-provider";
 import { ConnectionStatus } from "@/components/pos/connection-status";
+import { CashDrawerControls } from "@/components/pos/cash-drawer";
 import { OfflineReady } from "@/components/pos/offline-ready";
 import { SyncStatus } from "@/components/pos/sync-status";
 import { useWorkspace } from "@/components/workspace-provider";
@@ -27,6 +28,7 @@ import { useOfflinePos } from "@/hooks/use-offline-pos";
 import {
   ApiError,
   api,
+  type CashDrawer,
   type Customer,
   type CustomerLoyalty,
   type MenuProduct,
@@ -45,7 +47,6 @@ import {
 } from "@/lib/api";
 import { formatMenuPriceMinor, parseMenuPriceToMinor, priceMinorToInput } from "@/lib/menu";
 import {
-  closeOfflineSession,
   currentOfflineSession,
   defaultPaymentMethods,
   OfflineApiError,
@@ -93,6 +94,7 @@ export default function PosPage() {
   const [selectedRegisterId, setSelectedRegisterId] = useState("");
   const [selectedWarehouseId, setSelectedWarehouseId] = useState("");
   const [shift, setShift] = useState<RegisterShift | null>(null);
+  const [drawer, setDrawer] = useState<CashDrawer | null>(null);
   const [offlineSession, setOfflineSession] = useState<OfflineSession | null>(null);
   const [menuCatalogId, setMenuCatalogId] = useState("");
   const [currentOrderId, setCurrentOrderId] = useState("");
@@ -115,6 +117,7 @@ export default function PosPage() {
   const [customValue, setCustomValue] = useState("");
   const [customReason, setCustomReason] = useState("");
   const [registerName, setRegisterName] = useState("");
+  const [startingCash, setStartingCash] = useState("0");
   const [configuration, setConfiguration] = useState<ConfigurationTarget | null>(null);
   const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
   const [configurationNote, setConfigurationNote] = useState("");
@@ -142,6 +145,7 @@ export default function PosPage() {
   const [error, setError] = useState("");
   const [clockNow, setClockNow] = useState(0);
   const pendingPayment = useRef<{ id: string; payload: string } | null>(null);
+  const pendingShiftOpen = useRef<{ id: string; payload: string } | null>(null);
   const pendingTerminal = useRef<{ id: string; fingerprint: string } | null>(null);
   const pendingRedemption = useRef<{ id: string; payload: string } | null>(null);
 
@@ -172,7 +176,7 @@ export default function PosPage() {
   const selectedRegister = registers.find((register) => register.id === selectedRegisterId);
   const hasOpenOrders = orders.some((order) => order.status === "OPEN" || order.status === "SYNCED_OPEN");
   const sessionActive = Boolean(offlineSession && offlineSession.status === "ACTIVE" && clockNow + offlineSession.clock_offset_ms < Date.parse(offlineSession.expires_at));
-  const canWriteLocal = sessionActive && offline.isWriter;
+  const canWriteLocal = sessionActive && offline.isWriter && shift?.status === "OPEN" && drawer?.status !== "CLOSING" && drawer?.status !== "CLOSED";
   const terminalBinding = terminalBindings.find((binding) => binding.is_active) ?? null;
   const canMutateCurrent = canCreate && canWriteLocal && !loyaltyReserved;
 
@@ -203,6 +207,7 @@ export default function PosPage() {
         setSelectedRegisterId(cached.register_id);
         setSelectedWarehouseId(cached.warehouse_id);
         setShift(shiftFromSession(cached));
+        setDrawer(null);
       }
       if (!accessToken) {
         if (!cancelled) setLoading(false);
@@ -216,6 +221,7 @@ export default function PosPage() {
       if (!cachedUsable) {
         setPermissions([]);
         setShift(null);
+        setDrawer(null);
       }
       setCurrentOrderId("");
       try {
@@ -342,6 +348,9 @@ export default function PosPage() {
         if (cancelled) return;
         setShift(current);
         if (current) {
+          const currentDrawer = await api.getCurrentCashDrawer(selectedRegisterId, organizationId, accessToken);
+          if (cancelled) return;
+          setDrawer(currentDrawer);
           setSelectedWarehouseId(current.warehouse_id);
           const register = registers.find((item) => item.id === current.register_id);
           const shell: SessionShell = {
@@ -365,6 +374,7 @@ export default function PosPage() {
             setCategoryId(cached.catalog_snapshot.public_payload.categories[0]?.id ?? "");
           }
         } else {
+          setDrawer(null);
           setOfflineSession(null);
           setCurrentOrderId("");
         }
@@ -372,6 +382,7 @@ export default function PosPage() {
         if (cancelled) return;
         if (caught instanceof ApiError && caught.status === 404) {
           setShift(null);
+          setDrawer(null);
           setOfflineSession(null);
           setCurrentOrderId("");
         } else {
@@ -484,13 +495,24 @@ export default function PosPage() {
 
   async function openShift() {
     if (!accessToken || !organizationId || !selectedRegisterId || !selectedWarehouseId) return;
+    const startingCashMinor = parseMenuPriceToMinor(startingCash);
+    if (!startingCashMinor) return;
+    const openPayload = `${selectedRegisterId}|${selectedWarehouseId}|${startingCashMinor}`;
+    if (pendingShiftOpen.current?.payload !== openPayload) pendingShiftOpen.current = { id: crypto.randomUUID(), payload: openPayload };
     await run(async () => {
       const opened = await api.openRegisterShift(
-        { register_id: selectedRegisterId, warehouse_id: selectedWarehouseId },
+        {
+          register_id: selectedRegisterId,
+          warehouse_id: selectedWarehouseId,
+          starting_cash_minor: startingCashMinor,
+          client_open_id: pendingShiftOpen.current!.id,
+        },
         organizationId,
         accessToken,
       );
       setShift(opened);
+      if (opened.drawer_session_id) setDrawer(await api.getCashDrawer(opened.drawer_session_id, organizationId, accessToken));
+      pendingShiftOpen.current = null;
       setOfflineSession(null);
       setCurrentOrderId("");
     });
@@ -526,18 +548,18 @@ export default function PosPage() {
     });
   }
 
-  async function closeShift() {
-    if (!accessToken || !organizationId || !shift || hasOpenOrders || offline.unresolvedCount > 0 || offline.networkStatus !== "ONLINE") return;
-    await run(async () => {
-      if (offlineSession) {
-        await closeOfflineSession(offlineSession.id);
-        await saveSession({ ...offlineSession, status: "CLOSED" });
-      }
-      await api.closeRegisterShift(shift.id, organizationId, accessToken);
-      setShift(null);
-      setOfflineSession(null);
-      setCurrentOrderId("");
-    });
+  async function markCashCloseStarted() {
+    if (offlineSession?.status !== "ACTIVE") return;
+    const closed = { ...offlineSession, status: "CLOSED" as const };
+    await saveSession(closed).catch(() => undefined);
+    setOfflineSession(closed);
+  }
+
+  function finishCashClose() {
+    setShift(null);
+    setDrawer(null);
+    setOfflineSession(null);
+    setCurrentOrderId("");
   }
 
   async function disableOffline() {
@@ -989,8 +1011,12 @@ export default function PosPage() {
               {warehouses.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>)}
             </select>
           </label>
+          <label className="modal-field">
+            <span>Starting cash</span>
+            <input inputMode="decimal" value={startingCash} onChange={(event) => setStartingCash(event.target.value)} />
+          </label>
           {warehouses.length === 0 && <p className="pos-hint">No accessible active warehouse is available for this location.</p>}
-          <button className="primary-button pos-open-shift" disabled={busy || !canManageShift || !selectedRegisterId || !selectedWarehouseId} type="button" onClick={openShift}>
+          <button className="primary-button pos-open-shift" disabled={busy || !canManageShift || !selectedRegisterId || !selectedWarehouseId || !parseMenuPriceToMinor(startingCash)} type="button" onClick={openShift}>
             <Power aria-hidden="true" /> {busy ? "Opening…" : "Open shift"}
           </button>
         </div>
@@ -1009,7 +1035,23 @@ export default function PosPage() {
           {canReadRefunds && <Link className="secondary-button" href="/app/pos/refunds">Order history</Link>}
           <button className="secondary-button" type="button" onClick={() => setShowOrders((current) => !current)}>Orders ({orders.length})</button>
           {offlineSession && canManageDevice && <button className="secondary-button" disabled={busy || !accessToken || hasOpenOrders || offline.unresolvedCount > 0 || offline.networkStatus !== "ONLINE"} type="button" onClick={disableOffline}>Disable offline</button>}
-          <button className="secondary-button" disabled={busy || hasOpenOrders || offline.unresolvedCount > 0 || offline.networkStatus !== "ONLINE" || !accessToken} type="button" onClick={closeShift}>Close shift</button>
+          {accessToken && organizationId && (
+            <CashDrawerControls
+              accessToken={accessToken}
+              organizationId={organizationId}
+              shift={shift}
+              drawer={drawer}
+              currency={currency}
+              permissions={permissions}
+              pendingOperations={offline.unresolvedCount}
+              hasOpenOrders={hasOpenOrders}
+              online={offline.networkStatus === "ONLINE"}
+              busy={busy}
+              onCloseStarted={markCashCloseStarted}
+              onDrawer={setDrawer}
+              onClosed={finishCashClose}
+            />
+          )}
         </div>
       </header>
       <div className="pos-status-row">
@@ -1311,6 +1353,7 @@ function shiftFromSession(session: OfflineSession): RegisterShift {
     location_id: session.location_id,
     register_id: session.register_id,
     warehouse_id: session.warehouse_id,
+    drawer_session_id: null,
     status: "OPEN",
     opened_by_user_id: session.actor_user_id,
     closed_by_user_id: null,

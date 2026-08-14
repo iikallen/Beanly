@@ -1,5 +1,6 @@
-from datetime import date, timedelta
+from datetime import datetime, timedelta
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import func, select
@@ -235,7 +236,7 @@ async def test_customer_tier_and_birthday_promotion_audiences_are_server_authori
         },
     )
     assert tier.status_code == 201, tier.text
-    today = date.today()
+    today = datetime.now(ZoneInfo("Asia/Almaty")).date()
     birthday = today.replace(year=2000).isoformat()
     other_day = (today - timedelta(days=1)).replace(year=2000).isoformat()
     eligible = await client.post(

@@ -10,6 +10,7 @@ from beanly.core.events.serializer import (
     EventSerializationError,
     serialize_event_payload,
 )
+from beanly.modules.cash_management.domain.events import CashDrawerClosed
 from beanly.modules.finance.domain.events import (
     CashMovementPosted,
     CashMovementReversed,
@@ -91,6 +92,7 @@ def _event_contracts() -> tuple[tuple[object, str, str, UUID], ...]:
     device_id = uuid4()
     offline_session_id = uuid4()
     client_order_id = uuid4()
+    drawer_id = uuid4()
     return (
         (
             PosDevicePaired(organization_id, device_id),
@@ -228,6 +230,12 @@ def _event_contracts() -> tuple[tuple[object, str, str, UUID], ...]:
             "refund.completed",
             "refund",
             refund_id,
+        ),
+        (
+            CashDrawerClosed(drawer_id, organization_id),
+            "cash.drawer_closed",
+            "cash_drawer",
+            drawer_id,
         ),
         (
             InventoryTransactionPosted(organization_id, transaction_id),

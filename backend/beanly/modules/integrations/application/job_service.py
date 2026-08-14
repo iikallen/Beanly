@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from beanly.core.events.outbox.writer import DomainEventSink
 from beanly.core.observability import metrics, traced
+from beanly.modules.integrations.application.dto import FiscalShiftCommand
 from beanly.modules.integrations.application.ports import (
     FiscalReceiptProjectionPort,
     IntegrationRepository,
@@ -71,26 +72,32 @@ class IntegrationJobService:
             if job.capability is not IntegrationCapability.FISCAL or job.job_type not in {
                 "FISCALIZE_PAYMENT",
                 "FISCALIZE_REFUND",
+                "FISCAL_SHIFT_X_REPORT",
+                "FISCAL_SHIFT_Z_REPORT",
             }:
                 raise PermanentProviderError("Unsupported integration job", code="UNSUPPORTED_JOB")
-            command = (
-                await self.source.fiscal_sale(job.organization_id, job.source_id)
-                if job.job_type == "FISCALIZE_PAYMENT"
-                else await self.source.fiscal_refund(
+            if job.job_type == "FISCALIZE_PAYMENT":
+                command = await self.source.fiscal_sale(job.organization_id, job.source_id)
+                source_type = "SALE"
+            elif job.job_type == "FISCALIZE_REFUND":
+                command = await self.source.fiscal_refund(
                     job.organization_id, job.source_id, job.connection_id
                 )
-            )
-            source_type = "SALE" if job.job_type == "FISCALIZE_PAYMENT" else "REFUND"
-            if self.receipts:
+                source_type = "REFUND"
+            else:
+                command = FiscalShiftCommand(job.source_id)
+                source_type = "SHIFT"
+            if self.receipts and source_type != "SHIFT":
                 await self.receipts.mark_receipt_processing(
                     job.organization_id, source_type, job.source_id
                 )
             with traced("provider.request", provider_code=provider_code):
-                method = (
-                    adapter.fiscalize_sale
-                    if job.job_type == "FISCALIZE_PAYMENT"
-                    else adapter.fiscalize_refund
-                )
+                method = {
+                    "FISCALIZE_PAYMENT": adapter.fiscalize_sale,
+                    "FISCALIZE_REFUND": adapter.fiscalize_refund,
+                    "FISCAL_SHIFT_X_REPORT": adapter.fiscal_shift_x_report,
+                    "FISCAL_SHIFT_Z_REPORT": adapter.fiscal_shift_z_report,
+                }[job.job_type]
                 result = await method(
                     command, credentials=credentials, idempotency_key=job.idempotency_key
                 )
@@ -141,7 +148,7 @@ class IntegrationJobService:
                     started_at=started_at,
                     duration_ms=max(0, int((time.monotonic() - started) * 1000)),
                 )
-                if self.receipts:
+                if self.receipts and source_type != "SHIFT":
                     await self.receipts.mark_receipt_succeeded(
                         job.organization_id,
                         "SALE" if job.job_type == "FISCALIZE_PAYMENT" else "REFUND",

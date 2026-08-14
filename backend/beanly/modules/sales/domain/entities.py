@@ -38,6 +38,7 @@ class RegisterShift:
     closed_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    drawer_session_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)

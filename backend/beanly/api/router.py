@@ -1,6 +1,8 @@
 from fastapi import APIRouter
 
 from beanly.modules.analytics.api.router import router as analytics_router
+from beanly.modules.cash_management.api.router import fiscal_shift_router
+from beanly.modules.cash_management.api.router import router as cash_router
 from beanly.modules.customers.api.router import (
     loyalty_router,
     promotion_audience_router,
@@ -64,3 +66,5 @@ api_v1_router.include_router(fiscal_router)
 api_v1_router.include_router(finance_router)
 api_v1_router.include_router(dashboard_router)
 api_v1_router.include_router(analytics_router)
+api_v1_router.include_router(cash_router)
+api_v1_router.include_router(fiscal_shift_router)

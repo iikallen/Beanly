@@ -8,11 +8,18 @@ from sqlalchemy import func, select, update
 
 from beanly.core.events.outbox.models import OutboxEventModel
 from beanly.core.money import MAX_NUMERIC_20_6_MINOR
+from beanly.modules.cash_management.infrastructure.service import CashDrawerService
 from beanly.modules.integrations.infrastructure.db.models import IntegrationConnectionModel
 from beanly.modules.inventory.infrastructure.db.models import InventoryTransactionModel
+from beanly.modules.organizations.application.services.organization_service import (
+    OrganizationService,
+)
 from beanly.modules.organizations.infrastructure.db.models import (
     LocationModel,
     OrganizationMembershipModel,
+)
+from beanly.modules.organizations.infrastructure.db.repositories import (
+    SqlAlchemyOrganizationRepository,
 )
 from beanly.modules.payments.application.payment_service import _idempotent, _NormalizedLine
 from beanly.modules.payments.domain.entities import Payment, PaymentLine
@@ -657,10 +664,21 @@ async def test_payment_flow_validation_idempotency_summary_and_sale_posting(
             {"method": "OTHER", "amount_minor": "170000"},
         ],
     }
+    async with sessions() as session:
+        await CashDrawerService(
+            session, OrganizationService(SqlAlchemyOrganizationRepository(session))
+        ).project_payment(organization_id, UUID(payment["id"]))
+        await session.commit()
     closed = await client.post(
-        f"/api/v1/sales/shifts/{shift['id']}/close", headers=headers
+        f"/api/v1/cash/drawers/{shift['drawer_session_id']}/close",
+        headers=headers,
+        json={
+            "client_close_id": str(uuid4()),
+            "actual_cash_minor": "200000",
+        },
     )
     assert closed.status_code == 200, closed.text
+    assert closed.json()["drawer"]["status"] == "CLOSED"
 
     async with sessions() as session:
         assert await session.scalar(select(func.count()).select_from(PaymentModel)) == 1

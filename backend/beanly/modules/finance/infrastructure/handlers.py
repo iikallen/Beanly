@@ -13,6 +13,7 @@ def register_finance_handlers(
     registry.register("inventory.writeoff_posted", 1, _writeoff(service))
     registry.register("inventory.writeoff_reversed", 1, _writeoff_reversal(service))
     registry.register("inventory.count_posted", 1, _count(service))
+    registry.register("cash.drawer_closed", 1, _cash_drawer(service))
 
 
 def _organization(envelope: EventEnvelope) -> UUID:
@@ -75,4 +76,12 @@ def _count(service: FinanceProjectionService):
             _id(envelope, "inventory_count_id"),
         )
 
+    return handler
+
+
+def _cash_drawer(service: FinanceProjectionService):
+    async def handler(envelope: EventEnvelope) -> None:
+        await service.apply_cash_drawer_closed(
+            envelope.id, _organization(envelope), _id(envelope, "drawer_id")
+        )
     return handler

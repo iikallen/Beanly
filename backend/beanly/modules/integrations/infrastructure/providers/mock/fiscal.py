@@ -8,11 +8,13 @@ from beanly.modules.integrations.application.dto import (
     FiscalReceiptResult,
     FiscalRefundCommand,
     FiscalSaleCommand,
+    FiscalShiftCommand,
     NormalizedWebhookEvent,
 )
 from beanly.modules.integrations.domain.exceptions import (
     InvalidWebhookSignature,
     PermanentProviderError,
+    ProviderOutcomeUnknown,
     TemporaryProviderError,
 )
 
@@ -35,6 +37,8 @@ class MockFiscalProvider:
             raise TemporaryProviderError("Mock temporary failure", code="MOCK_TEMPORARY")
         if credentials.get("simulate") == "permanent_failure":
             raise PermanentProviderError("Mock permanent failure", code="MOCK_PERMANENT")
+        if credentials.get("simulate") == "unknown":
+            raise ProviderOutcomeUnknown("Mock outcome unknown", code="PROVIDER_OUTCOME_UNKNOWN")
         suffix = hashlib.sha256(idempotency_key.encode()).hexdigest()[:12]
         return FiscalReceiptResult(
             external_receipt_id=f"mock-receipt-{suffix}",
@@ -55,6 +59,8 @@ class MockFiscalProvider:
             raise TemporaryProviderError("Mock temporary failure", code="MOCK_TEMPORARY")
         if credentials.get("simulate") == "permanent_failure":
             raise PermanentProviderError("Mock permanent failure", code="MOCK_PERMANENT")
+        if credentials.get("simulate") == "unknown":
+            raise ProviderOutcomeUnknown("Mock outcome unknown", code="PROVIDER_OUTCOME_UNKNOWN")
         suffix = hashlib.sha256(idempotency_key.encode()).hexdigest()[:12]
         return FiscalReceiptResult(
             external_receipt_id=f"mock-refund-{suffix}",
@@ -62,6 +68,24 @@ class MockFiscalProvider:
             receipt_url=None,
             provider_request_id=str(uuid5(NAMESPACE_URL, f"beanly:{idempotency_key}")),
         )
+
+    async def fiscal_shift_x_report(
+        self,
+        command: FiscalShiftCommand,
+        *,
+        credentials: Mapping[str, object],
+        idempotency_key: str,
+    ) -> FiscalReceiptResult:
+        return self._shift_result(command, credentials, idempotency_key, "x")
+
+    async def fiscal_shift_z_report(
+        self,
+        command: FiscalShiftCommand,
+        *,
+        credentials: Mapping[str, object],
+        idempotency_key: str,
+    ) -> FiscalReceiptResult:
+        return self._shift_result(command, credentials, idempotency_key, "z")
 
     async def lookup_operation(
         self,
@@ -98,3 +122,25 @@ class MockFiscalProvider:
     def _validate(credentials: Mapping[str, object]) -> None:
         if not credentials.get("api_key"):
             raise PermanentProviderError("API key is required", code="INVALID_CREDENTIALS")
+
+    def _shift_result(
+        self,
+        command: FiscalShiftCommand,
+        credentials: Mapping[str, object],
+        idempotency_key: str,
+        report: str,
+    ) -> FiscalReceiptResult:
+        self._validate(credentials)
+        if credentials.get("simulate") == "temporary_failure":
+            raise TemporaryProviderError("Mock temporary failure", code="MOCK_TEMPORARY")
+        if credentials.get("simulate") == "permanent_failure":
+            raise PermanentProviderError("Mock permanent failure", code="MOCK_PERMANENT")
+        if credentials.get("simulate") == "unknown":
+            raise ProviderOutcomeUnknown("Mock outcome unknown", code="PROVIDER_OUTCOME_UNKNOWN")
+        suffix = hashlib.sha256(idempotency_key.encode()).hexdigest()[:12]
+        return FiscalReceiptResult(
+            external_receipt_id=f"mock-{report}-report-{suffix}",
+            receipt_number=f"{report.upper()}-{str(command.shift_id)[:8]}",
+            receipt_url=None,
+            provider_request_id=str(uuid5(NAMESPACE_URL, f"beanly:{idempotency_key}")),
+        )

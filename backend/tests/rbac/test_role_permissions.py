@@ -68,7 +68,13 @@ def test_role_permission_matrix_matches_current_contract() -> None:
                 Permission.LOYALTY_READ,
                 Permission.LOYALTY_ADJUST,
                 Permission.LOYALTY_CONFIGURE,
-                Permission.LOYALTY_REDEEM,
+                    Permission.LOYALTY_REDEEM,
+                    Permission.CASH_DRAWER_USE,
+                    Permission.CASH_DRAWER_ADJUST,
+                    Permission.CASH_DRAWER_CLOSE,
+                    Permission.CASH_DRAWER_VIEW_EXPECTED,
+                    Permission.CASH_DRAWER_APPROVE_VARIANCE,
+                    Permission.CASH_DRAWER_REPORT,
             }
         ),
         MembershipRole.MANAGER: frozenset(
@@ -119,7 +125,13 @@ def test_role_permission_matrix_matches_current_contract() -> None:
                 Permission.CUSTOMERS_WRITE,
                 Permission.LOYALTY_READ,
                 Permission.LOYALTY_ADJUST,
-                Permission.LOYALTY_REDEEM,
+                    Permission.LOYALTY_REDEEM,
+                    Permission.CASH_DRAWER_USE,
+                    Permission.CASH_DRAWER_ADJUST,
+                    Permission.CASH_DRAWER_CLOSE,
+                    Permission.CASH_DRAWER_VIEW_EXPECTED,
+                    Permission.CASH_DRAWER_APPROVE_VARIANCE,
+                    Permission.CASH_DRAWER_REPORT,
             }
         ),
         MembershipRole.ACCOUNTANT: frozenset(
@@ -139,7 +151,9 @@ def test_role_permission_matrix_matches_current_contract() -> None:
                 Permission.FISCAL_WRITE,
                 Permission.PROMOTIONS_READ,
                 Permission.CUSTOMERS_READ,
-                Permission.LOYALTY_READ,
+                    Permission.LOYALTY_READ,
+                    Permission.CASH_DRAWER_VIEW_EXPECTED,
+                    Permission.CASH_DRAWER_REPORT,
             }
         ),
         MembershipRole.CASHIER: frozenset(
@@ -154,7 +168,9 @@ def test_role_permission_matrix_matches_current_contract() -> None:
                 Permission.CUSTOMERS_READ,
                 Permission.CUSTOMERS_WRITE,
                 Permission.LOYALTY_READ,
-                Permission.LOYALTY_REDEEM,
+                    Permission.LOYALTY_REDEEM,
+                    Permission.CASH_DRAWER_USE,
+                    Permission.CASH_DRAWER_CLOSE,
             }
         ),
         MembershipRole.BARISTA: frozenset(
@@ -167,7 +183,9 @@ def test_role_permission_matrix_matches_current_contract() -> None:
                 Permission.INVENTORY_READ_LIMITED,
                 Permission.CUSTOMERS_READ,
                 Permission.CUSTOMERS_WRITE,
-                Permission.LOYALTY_READ,
+                    Permission.LOYALTY_READ,
+                    Permission.CASH_DRAWER_USE,
+                    Permission.CASH_DRAWER_CLOSE,
             }
         ),
     }

@@ -108,6 +108,11 @@ class FiscalReceiptResult:
 
 
 @dataclass(frozen=True, slots=True)
+class FiscalShiftCommand:
+    shift_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
 class NormalizedWebhookEvent:
     external_event_id: str
     event_type: str

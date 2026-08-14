@@ -10,6 +10,9 @@ from beanly.core.database.base import Base
 from beanly.core.events.outbox import models as outbox_models  # noqa: F401
 from beanly.core.security import audit as security_audit_models  # noqa: F401
 from beanly.modules.analytics.infrastructure.db import models as analytics_models  # noqa: F401
+from beanly.modules.cash_management.infrastructure.db import (
+    models as cash_management_models,  # noqa: F401
+)
 from beanly.modules.customers.infrastructure.db import models as customer_models  # noqa: F401
 from beanly.modules.employees.infrastructure.db import models as employee_models  # noqa: F401
 from beanly.modules.finance.infrastructure.db import models as finance_models  # noqa: F401

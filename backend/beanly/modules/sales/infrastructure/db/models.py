@@ -48,13 +48,13 @@ class PosRegisterModel(Base):
 class RegisterShiftModel(Base):
     __tablename__ = "register_shifts"
     __table_args__ = (
-        CheckConstraint("status IN ('OPEN', 'CLOSED')", name="ck_register_shift_status"),
+        CheckConstraint("status IN ('OPEN', 'CLOSING', 'CLOSED')", name="ck_register_shift_status"),
         Index(
             "uq_register_shifts_open_register",
             "register_id",
             unique=True,
-            postgresql_where=text("status = 'OPEN'"),
-            sqlite_where=text("status = 'OPEN'"),
+            postgresql_where=text("status IN ('OPEN','CLOSING')"),
+            sqlite_where=text("status IN ('OPEN','CLOSING')"),
         ),
     )
 

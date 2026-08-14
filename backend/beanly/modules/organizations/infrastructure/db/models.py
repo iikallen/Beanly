@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -44,6 +45,10 @@ class LocationModel(Base):
             "fiscal_enforcement_mode IN ('DISABLED','TEST','LIVE_REQUIRED')",
             name="ck_location_fiscal_enforcement_mode",
         ),
+        CheckConstraint(
+            "cash_variance_approval_threshold_minor >= 0",
+            name="ck_location_cash_variance_threshold",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
@@ -55,6 +60,9 @@ class LocationModel(Base):
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
     fiscal_enforcement_mode: Mapped[str] = mapped_column(
         String(24), default="DISABLED", server_default=text("'DISABLED'")
+    )
+    cash_variance_approval_threshold_minor: Mapped[int] = mapped_column(
+        BigInteger, default=0, server_default=text("0")
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(

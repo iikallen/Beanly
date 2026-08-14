@@ -3,6 +3,7 @@ from enum import StrEnum
 
 class RegisterShiftStatus(StrEnum):
     OPEN = "OPEN"
+    CLOSING = "CLOSING"
     CLOSED = "CLOSED"
 
 
