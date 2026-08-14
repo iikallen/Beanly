@@ -633,9 +633,7 @@ export default function PosPage() {
     let priced = currentOrder;
     let ready = false;
     await run(async () => {
-      if (offline.networkStatus === "ONLINE" && currentOrder.server_order_id && accessToken) {
-        priced = await applyServerPricing(currentOrder.id, await api.updateSalesOrder(currentOrder.server_order_id, {}, currentOrder.organization_id, accessToken));
-      } else if (offlineSession) {
+      if (!(offline.networkStatus === "ONLINE" && currentOrder.server_order_id && accessToken) && offlineSession) {
         priced = await updateLocalOrder(currentOrder.id, () => undefined, offlineSession.clock_offset_ms);
       }
       await afterLocalWrite(priced);

@@ -8,9 +8,17 @@ export function refundedItemQuantity(refunds: Refund[], orderItemId: string) {
     .reduce((total, line) => total + line.quantity, 0);
 }
 
-export function refundDraftTotal(order: SalesOrder, quantities: Record<string, number>) {
+export function refundDraftTotal(order: SalesOrder, quantities: Record<string, number>, refunds: Refund[] = []) {
   return order.items.reduce(
-    (total, item) => total + BigInt(item.unit_price_minor) * BigInt(quantities[item.id] ?? 0),
+    (total, item) => {
+      const quantity = BigInt(quantities[item.id] ?? 0);
+      const alreadyRefunded = BigInt(refundedItemQuantity(refunds, item.id));
+      const originalQuantity = BigInt(item.quantity);
+      const before = BigInt(item.net_line_total_minor) * alreadyRefunded / originalQuantity;
+      const after = BigInt(item.net_line_total_minor) * (alreadyRefunded + quantity) / originalQuantity;
+      const gross = BigInt(item.line_total_minor) * quantity / originalQuantity;
+      return total + (gross < after - before ? gross : after - before);
+    },
     BigInt(0),
   );
 }

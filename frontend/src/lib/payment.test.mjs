@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { paymentRequest } from "./payment.ts";
+
+test("online payment opens without an empty order update", () => {
+  const source = readFileSync(new URL("../app/app/pos/page.tsx", import.meta.url), "utf8");
+  const openPayment = source.match(/async function openPayment\(\) \{([\s\S]*?)\r?\n  \}\r?\n\r?\n  function closePayment/)?.[1];
+
+  assert.ok(openPayment);
+  assert.doesNotMatch(openPayment, /updateSalesOrder\s*\(/);
+  assert.match(openPayment, /setPaymentOrder\(priced\)/);
+});
 
 test("builds an exact split and computes cash change", () => {
   const result = paymentRequest({
