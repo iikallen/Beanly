@@ -174,6 +174,8 @@
 .pos-payment-success h2 { margin: 10px 0 6px; }
 .pos-payment-success > strong { font-family: Georgia, "Times New Roman", serif; font-size: 34px; }
 .pos-payment-success > p { margin: 7px 0 0; color: var(--muted); }
+.pos-payment-success .pos-production-status { display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; border-radius: 5px; background: #edf5ef; color: var(--primary); font-weight: 800; }
+.pos-payment-success .pos-production-status svg { width: 17px; }
 .pos-payment-success .modal-actions { width: 100%; }
 .pos-payment-check { width: 56px; height: 56px; display: grid; place-items: center; margin-bottom: 15px; border-radius: 50%; background: #e7f3e9; color: var(--primary); font-size: 28px; font-weight: 800; }
 .pos-refunds { min-height: calc(100vh - 82px); padding: 24px; }
@@ -3472,4 +3474,76 @@ button, input, select { font: inherit; }
   .cash-summary div, .cash-summary div:nth-child(odd), .cash-summary div:nth-last-child(-n + 2) { border-right: 0; border-bottom: 1px solid var(--border); }
   .cash-summary div:last-child { border-bottom: 0; }
   .cash-report-header { align-items: stretch; flex-direction: column; }
+}
+
+/* Stage 27 · kitchen display and fulfillment */
+.kitchen-workspace { min-width: 0; min-height: 100vh; background: #f5f6f2; }
+.kitchen-content { padding: 32px clamp(18px, 3vw, 42px) 54px; }
+.kitchen-header, .kitchen-header-actions, .kitchen-tabs, .kitchen-ticket header, .kitchen-ticket header > div, .kitchen-work, .kitchen-setup section > header, .kitchen-reports > header, .kitchen-reports > header > div { display: flex; align-items: center; }
+.kitchen-header { justify-content: space-between; gap: 20px; }
+.kitchen-header h1, .kitchen-header p { margin: 0; }
+.kitchen-header h1 { font-family: Georgia, "Times New Roman", serif; font-size: clamp(36px, 5vw, 54px); font-weight: 400; letter-spacing: -.035em; }
+.kitchen-header > div > span { color: var(--primary); font-size: 11px; font-weight: 850; letter-spacing: .1em; text-transform: uppercase; }
+.kitchen-header-actions { gap: 10px; }
+.kitchen-header-actions select, .kitchen-setup input, .kitchen-setup select, .kitchen-reports input { min-height: 44px; padding: 0 12px; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text); font: inherit; }
+.kitchen-header-actions button { min-height: 44px; }
+.kitchen-header-actions svg, .kitchen-ticket time svg, .kitchen-work button svg { width: 16px; }
+.kitchen-tabs { gap: 5px; margin: 25px 0; border-bottom: 1px solid var(--border); }
+.kitchen-tabs button { padding: 11px 15px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--muted); font-weight: 800; cursor: pointer; }
+.kitchen-tabs button.is-active { border-color: var(--primary); color: var(--primary); }
+.kitchen-board { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); align-items: start; gap: 14px; }
+.kitchen-ticket { overflow: hidden; border: 2px solid #bdd1c1; border-radius: 9px; background: #fff; box-shadow: 0 7px 18px rgba(25, 54, 33, .05); }
+.kitchen-ticket.is-warning { border-color: #dfbd65; }
+.kitchen-ticket.is-late { border-color: #d57169; box-shadow: 0 7px 22px rgba(173, 62, 52, .09); }
+.kitchen-ticket > header { justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.kitchen-ticket header > div { align-items: flex-start; flex-direction: column; gap: 4px; }
+.kitchen-ticket header span { color: var(--muted); font-size: 12px; font-weight: 750; text-transform: uppercase; }
+.kitchen-ticket header time { display: inline-flex; align-items: center; gap: 5px; font-size: 18px; font-weight: 850; font-variant-numeric: tabular-nums; }
+.kitchen-ticket-meta, .kitchen-order-note { margin: 0; padding: 10px 16px 0; color: var(--muted); font-size: 13px; }
+.kitchen-order-note { color: #6b4a08; font-weight: 750; }
+.kitchen-delay { display: inline-block; margin: 10px 16px 0; padding: 4px 7px; border-radius: 4px; background: #fff4d5; color: #76570a; font-size: 10px; font-weight: 850; text-transform: uppercase; }
+.kitchen-ticket ul { margin: 12px 0 0; padding: 0; list-style: none; }
+.kitchen-ticket li { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 13px 16px; border-top: 1px solid var(--border); }
+.kitchen-ticket li > div:first-child { display: grid; gap: 3px; }
+.kitchen-ticket li span, .kitchen-ticket li small { color: var(--muted); font-size: 12px; }
+.kitchen-ticket li em { margin-top: 3px; color: #6b4a08; font-size: 12px; font-style: normal; font-weight: 750; }
+.kitchen-work { flex: 0 0 auto; align-items: flex-end; flex-direction: column; gap: 6px; }
+.kitchen-work button, .kitchen-rule-list button { min-height: 34px; display: inline-flex; align-items: center; gap: 5px; padding: 0 10px; border: 1px solid var(--primary); border-radius: 5px; background: #edf5ef; color: var(--primary); font-weight: 800; cursor: pointer; }
+.kitchen-ticket footer { padding: 12px 16px 16px; }
+.kitchen-ticket footer .primary-button { min-height: 42px; }
+.kitchen-empty, .kitchen-state { min-height: 260px; display: grid; place-content: center; justify-items: center; gap: 8px; grid-column: 1 / -1; color: var(--muted); text-align: center; }
+.kitchen-empty svg, .kitchen-state svg { width: 34px; height: 34px; color: #91ad98; }
+.kitchen-empty strong, .kitchen-state h1 { color: var(--text); font-size: 18px; }
+.kitchen-error { margin: 0 0 18px; padding: 11px 14px; border: 1px solid #e8b9b5; border-radius: 6px; background: #fff4f3; color: var(--danger); }
+.kitchen-setup { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.kitchen-setup section, .kitchen-reports { padding: 22px; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+.kitchen-setup section > header, .kitchen-reports > header { justify-content: space-between; gap: 18px; }
+.kitchen-setup h2, .kitchen-reports h2, .kitchen-reports p { margin: 0; }
+.kitchen-setup header span, .kitchen-reports p { color: var(--muted); font-size: 12px; }
+.kitchen-setup form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-top: 18px; }
+.kitchen-setup form button { min-height: 44px; }
+.kitchen-station-list, .kitchen-rule-list { display: grid; gap: 8px; margin-top: 16px; }
+.kitchen-station-list article, .kitchen-rule-list article { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 6px; }
+.kitchen-station-list span, .kitchen-rule-list span span { color: var(--muted); font-size: 12px; }
+.kitchen-rule-list article > span { display: grid; gap: 3px; }
+.kitchen-rule-list button { min-width: 38px; padding: 0; justify-content: center; border-color: #e6bfbc; background: #fff5f4; color: var(--danger); }
+.kitchen-rule-list svg { width: 15px; }
+.kitchen-reports > header > div { gap: 10px; }
+.kitchen-reports label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; font-weight: 750; }
+
+@media (max-width: 900px) {
+  .kitchen-header, .kitchen-reports > header { align-items: stretch; flex-direction: column; }
+  .kitchen-header-actions { align-items: stretch; }
+  .kitchen-setup { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 560px) {
+  .kitchen-content { padding: 24px 14px 42px; }
+  .kitchen-header-actions, .kitchen-reports > header > div { align-items: stretch; flex-direction: column; }
+  .kitchen-board { grid-template-columns: 1fr; }
+  .kitchen-setup form { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kitchen-ticket { scroll-behavior: auto; }
 }

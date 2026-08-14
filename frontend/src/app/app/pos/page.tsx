@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ChefHat,
   ChevronLeft,
   Clock3,
   CreditCard,
@@ -31,6 +32,7 @@ import {
   type CashDrawer,
   type Customer,
   type CustomerLoyalty,
+  type KitchenTicket,
   type MenuProduct,
   type MenuReadModel,
   type ExternalPaymentAttempt,
@@ -69,6 +71,7 @@ import { buildLocalItem, catalogSelectionIsValid } from "@/lib/offline/catalog";
 import type { OfflineOrder, OfflineOrderItem, OfflineSession } from "@/lib/offline/types";
 import { paymentRequest, type PaymentMode } from "@/lib/payment";
 import { paymentAttemptAction, terminalStatusCopy } from "@/lib/fiscal-live";
+import { kitchenProductionLabel } from "@/lib/kitchen";
 
 type ConfigurationTarget = {
   product: MenuProduct;
@@ -132,6 +135,7 @@ export default function PosPage() {
   const [splitOther, setSplitOther] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
   const [completedPayment, setCompletedPayment] = useState<CompletedLocalPayment | null>(null);
+  const [productionTicket, setProductionTicket] = useState<KitchenTicket | null>(null);
   const [paymentCustomerName, setPaymentCustomerName] = useState<string | null>(null);
   const [cardConfirmed, setCardConfirmed] = useState(false);
   const [paymentBusy, setPaymentBusy] = useState(false);
@@ -304,6 +308,29 @@ export default function PosPage() {
     void loadPromotions();
     return () => { cancelled = true; };
   }, [accessToken, canApplyDiscount, offline.networkStatus, organizationId]);
+
+  useEffect(() => {
+    const serverOrderId = offline.orders.find((order) => order.id === paymentOrder?.id)?.server_order_id ?? paymentOrder?.server_order_id;
+    if (!completedPayment || !accessToken || !organizationId || !locationId || !serverOrderId || offline.networkStatus !== "ONLINE") {
+      queueMicrotask(() => setProductionTicket(null));
+      return;
+    }
+    let cancelled = false;
+    let timer = 0;
+    async function pollKitchen() {
+      try {
+        const stations = await api.listKitchenStations(locationId!, organizationId!, accessToken!);
+        const station = stations.find((item) => item.is_default && item.is_active) ?? stations.find((item) => item.is_active);
+        if (station) {
+          const board = await api.getKitchenBoard(station.id, organizationId!, accessToken!);
+          if (!cancelled) setProductionTicket(board.tickets.find((ticket) => ticket.order_id === serverOrderId) ?? null);
+        }
+      } catch { if (!cancelled) setProductionTicket(null); }
+      if (!cancelled) timer = window.setTimeout(pollKitchen, document.hidden ? 5000 : 1000);
+    }
+    void pollKitchen();
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [accessToken, completedPayment, locationId, offline.networkStatus, offline.orders, organizationId, paymentOrder?.id, paymentOrder?.server_order_id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -736,6 +763,7 @@ export default function PosPage() {
     setPaymentOrder(null);
     setPaymentCustomerName(null);
     setCompletedPayment(null);
+    setProductionTicket(null);
     setPaymentError("");
     pendingPayment.current = null;
   }
@@ -1244,6 +1272,7 @@ export default function PosPage() {
                   <p>Change · {formatMenuPriceMinor(String(completedPayment.lines.reduce((sum, line) => sum + BigInt(line.change_minor), BigInt(0))), completedPayment.currency_code)}</p>
                 )}
                 <p>{completedPayment.origin === "TERMINAL" ? "Provider approved · Fiscal receipt processing" : "Recorded locally · Fiscal receipt pending sync"}</p>
+                <p className="pos-production-status"><ChefHat aria-hidden="true" />{kitchenProductionLabel(productionTicket?.status ?? null)}</p>
                 {paymentCustomerName && <p>{paymentCustomerName} · Loyalty points post after payment sync</p>}
                 <div className="modal-actions">
                   {completedPayment.origin === "TERMINAL" && <Link className="secondary-button" href="/app/fiscal">Fiscal receipt</Link>}

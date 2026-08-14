@@ -4,6 +4,7 @@ import {
   BarChart3,
   Building2,
   ClipboardCheck,
+  ChefHat,
   Coffee,
   Landmark,
   Package,
@@ -26,6 +27,7 @@ import { Brand } from "@/components/auth-shell";
 import { useWorkspace } from "@/components/workspace-provider";
 import { useOnboardingPermissions } from "@/hooks/use-onboarding-permissions";
 import { useCashPermissions } from "@/hooks/use-cash-permissions";
+import { useKitchenPermissions } from "@/hooks/use-kitchen-permissions";
 
 export function AppSidebar({
   active,
@@ -34,7 +36,7 @@ export function AppSidebar({
   settingsCanReadIntegrations,
   settingsCanReadFiscal,
 }: {
-  active: "dashboard" | "analytics" | "pos" | "cash" | "customers" | "promotions" | "fiscal" | "inventory" | "menu" | "onboarding" | "purchasing" | "finance" | "team" | "settings";
+  active: "dashboard" | "analytics" | "pos" | "kitchen" | "cash" | "customers" | "promotions" | "fiscal" | "inventory" | "menu" | "onboarding" | "purchasing" | "finance" | "team" | "settings";
   teamView?: "employees" | "invitations";
   onTeamView?: (view: "employees" | "invitations") => void;
   settingsCanReadIntegrations?: boolean;
@@ -53,6 +55,7 @@ export function AppSidebar({
   const pathname = usePathname();
   const onboardingPermissions = useOnboardingPermissions();
   const cashPermissions = useCashPermissions();
+  const kitchenPermissions = useKitchenPermissions();
 
   if (!currentOrganization || !currentLocation) return null;
 
@@ -127,6 +130,16 @@ export function AppSidebar({
           <Monitor aria-hidden="true" />
           POS
         </button>
+        {!kitchenPermissions.loading && kitchenPermissions.canRead && (
+          <button
+            className={active === "kitchen" ? "app-nav-item is-active" : "app-nav-item"}
+            type="button"
+            onClick={() => router.push("/app/kitchen")}
+          >
+            <ChefHat aria-hidden="true" />
+            Kitchen
+          </button>
+        )}
         <button
           className={active === "customers" ? "app-nav-item is-active" : "app-nav-item"}
           type="button"

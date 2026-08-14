@@ -2082,6 +2082,122 @@ type ApiErrorBody = {
   changed_items?: unknown;
 };
 
+export type KitchenStationRole = "PREP" | "EXPO" | "PREP_EXPO";
+export type KitchenTicketStatus = "QUEUED" | "PREPARING" | "READY" | "COMPLETED" | "CANCELLED";
+export type KitchenWorkStatus = "QUEUED" | "PREPARING" | "READY";
+
+export type KitchenStation = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  name: string;
+  code: string;
+  role: KitchenStationRole;
+  is_default: boolean;
+  is_active: boolean;
+  warning_after_seconds: number;
+  late_after_seconds: number;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type KitchenRoutingRule = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  station_id: string;
+  scope: "CATEGORY" | "VARIANT";
+  category_id: string | null;
+  variant_id: string | null;
+  order_type: SalesOrderType | null;
+  priority: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type KitchenWorkItem = {
+  id: string;
+  ticket_id: string;
+  ticket_item_id: string;
+  station_id: string;
+  status: KitchenWorkStatus;
+  started_at: string | null;
+  ready_at: string | null;
+};
+
+export type KitchenTicketItem = {
+  id: string;
+  order_item_id: string;
+  product_id: string;
+  variant_id: string;
+  product_name: string;
+  variant_name: string;
+  quantity: number;
+  note: string | null;
+  sort_order: number;
+  modifiers: Array<{
+    modifier_group_id: string;
+    modifier_group_name: string;
+    modifier_option_id: string;
+    modifier_option_name: string;
+    sort_order: number;
+  }>;
+  work_items: KitchenWorkItem[];
+};
+
+export type KitchenTicket = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  order_id: string;
+  payment_id: string;
+  shift_id: string;
+  order_number: number;
+  order_type: SalesOrderType;
+  customer_id: string | null;
+  customer_name: string | null;
+  customer_phone: string | null;
+  table_label: string | null;
+  guest_count: number | null;
+  note: string | null;
+  status: KitchenTicketStatus;
+  ordered_at: string;
+  fired_at: string;
+  started_at: string | null;
+  ready_at: string | null;
+  completed_at: string | null;
+  version: number;
+  offline_delayed: boolean;
+  items: KitchenTicketItem[];
+};
+
+export type KitchenBoard = {
+  station: KitchenStation;
+  cursor: number;
+  server_time: string;
+  tickets: KitchenTicket[];
+};
+
+export type KitchenReadiness = {
+  ready: boolean;
+  active_stations: number;
+  default_station: KitchenStation | null;
+  unrouted_variants: string[];
+};
+
+export type KitchenPerformance = {
+  location_id: string;
+  station_id: string;
+  station_name: string;
+  completed_count: number;
+  average_seconds: number;
+  p50_seconds: number;
+  p95_seconds: number;
+  late_percent: number;
+};
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -3913,6 +4029,92 @@ export const api = {
       method: "POST",
       headers: tenantAuthorization(organizationId, accessToken),
     }),
+  listKitchenStations: (locationId: string, organizationId: string, accessToken: string) =>
+    request<KitchenStation[]>(
+      `/api/v1/kitchen/stations?${new URLSearchParams({ location_id: locationId })}`,
+      { headers: tenantAuthorization(organizationId, accessToken) },
+    ),
+  createKitchenStation: (
+    input: { location_id: string; name: string; code: string; role: KitchenStationRole; warning_after_seconds?: number; late_after_seconds?: number; sort_order?: number },
+    organizationId: string,
+    accessToken: string,
+  ) => request<KitchenStation>("/api/v1/kitchen/stations", {
+    method: "POST",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  updateKitchenStation: (stationId: string, input: Partial<Omit<KitchenStation, "id" | "organization_id" | "location_id" | "is_default" | "created_at" | "updated_at">>, organizationId: string, accessToken: string) =>
+    request<KitchenStation>(`/api/v1/kitchen/stations/${stationId}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  listKitchenRouting: (locationId: string, organizationId: string, accessToken: string) =>
+    request<KitchenRoutingRule[]>(
+      `/api/v1/kitchen/routing?${new URLSearchParams({ location_id: locationId })}`,
+      { headers: tenantAuthorization(organizationId, accessToken) },
+    ),
+  createKitchenRouting: (
+    input: { location_id: string; station_id: string; scope: "CATEGORY" | "VARIANT"; category_id?: string | null; variant_id?: string | null; order_type?: SalesOrderType | null; priority?: number },
+    organizationId: string,
+    accessToken: string,
+  ) => request<KitchenRoutingRule>("/api/v1/kitchen/routing", {
+    method: "POST",
+    body: JSON.stringify(input),
+    headers: tenantAuthorization(organizationId, accessToken),
+  }),
+  deleteKitchenRouting: (ruleId: string, organizationId: string, accessToken: string) =>
+    request<void>(`/api/v1/kitchen/routing/${ruleId}`, {
+      method: "DELETE",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  getKitchenBoard: (stationId: string, organizationId: string, accessToken: string, afterVersion?: number) => {
+    const query = afterVersion ? `?after_version=${afterVersion}` : "";
+    return request<KitchenBoard>(`/api/v1/kitchen/stations/${stationId}/board${query}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    });
+  },
+  getKitchenTicket: (ticketId: string, organizationId: string, accessToken: string) =>
+    request<KitchenTicket>(`/api/v1/kitchen/tickets/${ticketId}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  startKitchenWork: (workItemId: string, clientActionId: string, organizationId: string, accessToken: string) =>
+    request<KitchenWorkItem>(`/api/v1/kitchen/work-items/${workItemId}/start`, {
+      method: "POST",
+      body: JSON.stringify({ client_action_id: clientActionId }),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  readyKitchenWork: (workItemId: string, clientActionId: string, organizationId: string, accessToken: string) =>
+    request<KitchenWorkItem>(`/api/v1/kitchen/work-items/${workItemId}/ready`, {
+      method: "POST",
+      body: JSON.stringify({ client_action_id: clientActionId }),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  completeKitchenTicket: (ticketId: string, clientActionId: string, organizationId: string, accessToken: string) =>
+    request<KitchenTicket>(`/api/v1/kitchen/tickets/${ticketId}/complete`, {
+      method: "POST",
+      body: JSON.stringify({ client_action_id: clientActionId }),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  recallKitchenTicket: (ticketId: string, clientActionId: string, organizationId: string, accessToken: string) =>
+    request<KitchenTicket>(`/api/v1/kitchen/tickets/${ticketId}/recall`, {
+      method: "POST",
+      body: JSON.stringify({ client_action_id: clientActionId }),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  getKitchenReadiness: (locationId: string, organizationId: string, accessToken: string) =>
+    request<KitchenReadiness>(
+      `/api/v1/kitchen/readiness?${new URLSearchParams({ location_id: locationId })}`,
+      { headers: tenantAuthorization(organizationId, accessToken) },
+    ),
+  getKitchenPerformance: (
+    filters: { locationId?: string; dateFrom?: string; dateTo?: string },
+    organizationId: string,
+    accessToken: string,
+  ) => request<KitchenPerformance[]>(
+    `/api/v1/kitchen/reports/performance?${operationFilters(filters)}`,
+    { headers: tenantAuthorization(organizationId, accessToken) },
+  ),
 };
 
 function authorization(accessToken: string) {
