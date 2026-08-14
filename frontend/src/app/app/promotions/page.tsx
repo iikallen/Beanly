@@ -8,10 +8,13 @@ import { useWorkspace } from "@/components/workspace-provider";
 import { usePromotionPermissions } from "@/hooks/use-promotion-permissions";
 import {
   api,
+  type Customer,
+  type LoyaltyTier,
   type MenuCategory,
   type MenuProduct,
   type Promotion,
   type PromotionApplicationMode,
+  type PromotionAudience,
   type PromotionDiscountKind,
   type PromotionInput,
   type PromotionPerformance,
@@ -30,8 +33,10 @@ type Draft = Omit<PromotionInput, "amount_minor" | "fixed_price_minor" | "minimu
 };
 
 type BasketLine = { id: string; variant_id: string; quantity: number; modifier_minor: string };
+type AudienceDraft = Omit<PromotionAudience, "promotion_id">;
 
 const EMPTY_TARGET: PromotionTarget = { role: "ELIGIBLE", target_type: "ALL", target_id: null, quantity: 1, sort_order: 0 };
+const EMPTY_AUDIENCE: AudienceDraft = { kind: "ALL", tier_id: null, customer_ids: [] };
 const EMPTY_DRAFT: Draft = {
   name: "", pos_name: "", application_mode: "AUTOMATIC", discount_kind: "PERCENT", scope: "ITEM", percent_rate: "10.0000",
   amount_minor: null, fixed_price_minor: null, priority: 0, stacking_policy: "EXCLUSIVE", include_modifier_price: false,
@@ -57,6 +62,11 @@ export default function PromotionsPage() {
   const [performance, setPerformance] = useState<PromotionPerformance[]>([]);
   const [categories, setCategories] = useState<MenuCategory[]>([]);
   const [products, setProducts] = useState<MenuProduct[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [tiers, setTiers] = useState<LoyaltyTier[]>([]);
+  const [audience, setAudience] = useState<AudienceDraft>(EMPTY_AUDIENCE);
+  const [audienceSearch, setAudienceSearch] = useState("");
+  const [audienceLoading, setAudienceLoading] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [editing, setEditing] = useState(false);
@@ -79,16 +89,20 @@ export default function PromotionsPage() {
       const today = new Date();
       const from = new Date(today);
       from.setUTCDate(from.getUTCDate() - 29);
-      const [promotionRows, performanceRows, categoryRows, productRows] = await Promise.all([
+      const [promotionRows, performanceRows, categoryRows, productRows, customerRows, tierRows] = await Promise.all([
         api.listPromotions(organization.id, accessToken),
         api.getPromotionPerformance(from.toISOString().slice(0, 10), today.toISOString().slice(0, 10), organization.id, accessToken, currentLocationId),
         api.listMenuCategories(organization.id, accessToken),
         api.listMenuProducts(organization.id, accessToken),
+        api.listCustomers(organization.id, accessToken).catch(() => []),
+        api.listLoyaltyTiers(organization.id, accessToken).catch(() => []),
       ]);
       setPromotions(promotionRows);
       setPerformance(performanceRows);
       setCategories(categoryRows);
       setProducts(productRows);
+      setCustomers(customerRows);
+      setTiers(tierRows);
     } catch (caught) { setError(messageOf(caught)); }
     finally { setLoading(false); }
   }, [accessToken, currentLocationId, organization]);
@@ -104,12 +118,29 @@ export default function PromotionsPage() {
 
   function newPromotion(preset?: Partial<Draft>) {
     setSelectedId(null);
+    setAudience(EMPTY_AUDIENCE);
+    setAudienceLoading(false);
+    setAudienceSearch("");
     setDraft({ ...EMPTY_DRAFT, ...preset, location_ids: preset?.location_ids ?? [], schedules: preset?.schedules?.map((row) => ({ ...row })) ?? [], targets: preset?.targets?.map((row, index) => ({ ...row, sort_order: index })) ?? [EMPTY_TARGET] });
     setBasket([]); setPreview(null); setEditing(true); setError(""); setMessage("");
   }
 
   function editPromotion(promotion: Promotion) {
     setSelectedId(promotion.id);
+    setAudience(EMPTY_AUDIENCE);
+    setAudienceLoading(true);
+    if (accessToken && organization) void (async () => {
+      try {
+        const { kind, tier_id, customer_ids } = await api.getPromotionAudience(promotion.id, organization.id, accessToken);
+        setAudience({ kind, tier_id, customer_ids });
+        if (kind === "CUSTOMER") {
+          const selectedCustomers = await Promise.all(customer_ids.slice(0, 50).map((id) => api.getCustomer(id, organization.id, accessToken)));
+          setCustomers((current) => [...selectedCustomers, ...current.filter((customer) => !customer_ids.includes(customer.id))]);
+        }
+      } catch (caught) { setError(messageOf(caught)); }
+      finally { setAudienceLoading(false); }
+    })();
+    else setAudienceLoading(false);
     setDraft({
       name: promotion.name, pos_name: promotion.pos_name, application_mode: promotion.application_mode, discount_kind: promotion.discount_kind,
       scope: promotion.scope, percent_rate: promotion.percent_rate, amount_minor: promotion.amount_minor ? priceMinorToInput(promotion.amount_minor) : null,
@@ -140,6 +171,7 @@ export default function PromotionsPage() {
       const saved = selectedId
         ? await api.updatePromotion(selectedId, payload, organization.id, accessToken)
         : await api.createPromotion(payload, organization.id, accessToken);
+      await api.updatePromotionAudience(saved.id, audience, organization.id, accessToken);
       setSelectedId(saved.id); setMessage(selectedId ? "Promotion updated." : "Draft promotion created.");
       await load(); editPromotion(saved);
     } catch (caught) { setError(messageOf(caught)); }
@@ -185,6 +217,17 @@ export default function PromotionsPage() {
     finally { setBusy(false); }
   }
 
+  async function searchAudienceCustomers() {
+    if (!accessToken || !organization) return;
+    setBusy(true); setError("");
+    try {
+      const matches = await api.listCustomers(organization.id, accessToken, { search: audienceSearch.trim() || undefined });
+      setCustomers((current) => [...current.filter((customer) => audience.customer_ids.includes(customer.id)), ...matches.filter((customer) => !audience.customer_ids.includes(customer.id))]);
+    }
+    catch (caught) { setError(messageOf(caught)); }
+    finally { setBusy(false); }
+  }
+
   if (!permissions.loading && !permissions.canRead) return <div className="menu-state"><strong>Promotions access restricted</strong><span>Your role cannot view promotions.</span></div>;
 
   return (
@@ -202,13 +245,14 @@ export default function PromotionsPage() {
       {!editing && performance.length > 0 && <section className="dashboard-panel"><header><h2>Promotion performance</h2><span>Last 30 days</span></header><div className="dashboard-table-wrap"><table><thead><tr><th>Promotion</th><th>Orders</th><th>Applications</th><th>Items</th><th>Eligible gross</th><th>Discount</th><th>Net</th><th>Refunds</th></tr></thead><tbody>{performance.map((row) => <tr key={row.promotion_id}><th scope="row">{row.promotion_name}</th><td>{row.orders_count}</td><td>{row.applications_count}</td><td>{row.items_count}</td><td>{formatDashboardMoney(row.gross_eligible_amount, currency)}</td><td>−{formatDashboardMoney(row.discount_amount, currency)}</td><td>{formatDashboardMoney(row.net_revenue_amount, currency)}</td><td>−{formatDashboardMoney(row.refund_amount, currency)}</td></tr>)}</tbody></table></div></section>}
 
       {editing && <form className="promotion-builder" onSubmit={save}>
-        <header><div><button className="menu-back-link" type="button" onClick={() => setEditing(false)}>← All promotions</button><h2>{selected ? selected.name : "New promotion"}</h2>{selected && <span className={`menu-status status-${selected.status.toLowerCase()}`}>{selected.status}</span>}</div><div>{selected?.status === "ACTIVE" && <button className="menu-danger-button" disabled={busy} type="button" onClick={() => void changeStatus("archive")}><Archive />Archive</button>}<button className="menu-primary-button" disabled={busy || !permissions.canWrite} type="submit"><Save />{busy ? "Saving…" : "Save draft"}</button></div></header>
+        <header><div><button className="menu-back-link" type="button" onClick={() => setEditing(false)}>← All promotions</button><h2>{selected ? selected.name : "New promotion"}</h2>{selected && <span className={`menu-status status-${selected.status.toLowerCase()}`}>{selected.status}</span>}</div><div>{selected?.status === "ACTIVE" && <button className="menu-danger-button" disabled={busy} type="button" onClick={() => void changeStatus("archive")}><Archive />Archive</button>}<button className="menu-primary-button" disabled={busy || audienceLoading || !permissions.canWrite || (audience.kind === "CUSTOMER" && audience.customer_ids.length === 0)} type="submit"><Save />{busy || audienceLoading ? "Saving…" : "Save draft"}</button></div></header>
 
         <div className="promotion-builder-grid">
           <div className="promotion-form-stack">
             <BuilderSection title="Basics"><div className="promotion-fields two"><Field label="Name"><input required maxLength={150} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field><Field label="POS name"><input required maxLength={80} value={draft.pos_name} onChange={(event) => setDraft({ ...draft, pos_name: event.target.value })} /></Field><Select label="Apply" value={draft.application_mode} values={["AUTOMATIC", "MANUAL", "CODE"]} onChange={(value) => setDraft({ ...draft, application_mode: value as PromotionApplicationMode })} /><Select label="Scope" value={draft.scope} values={["ITEM", "ORDER", "COMBO"]} onChange={(value) => setDraft({ ...draft, scope: value as PromotionScope })} /></div></BuilderSection>
             <BuilderSection title="Discount"><div className="promotion-fields two"><Select label="Type" value={draft.discount_kind} values={["PERCENT", "FIXED_AMOUNT", "FIXED_PRICE", "BOGO"]} onChange={(value) => setDraft({ ...draft, discount_kind: value as PromotionDiscountKind })} />{draft.discount_kind === "PERCENT" && <Field label="Percent"><input required min="0" max="100" step="0.0001" type="number" value={draft.percent_rate ?? ""} onChange={(event) => setDraft({ ...draft, percent_rate: event.target.value })} /></Field>}{draft.discount_kind === "FIXED_AMOUNT" && <MoneyField label="Amount" value={draft.amount_minor} onChange={(value) => setDraft({ ...draft, amount_minor: value })} />}{draft.discount_kind === "FIXED_PRICE" && <MoneyField label="Fixed price" value={draft.fixed_price_minor} onChange={(value) => setDraft({ ...draft, fixed_price_minor: value })} />}<Field label="Priority"><input type="number" value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: Number(event.target.value) })} /></Field><Select label="Stacking" value={draft.stacking_policy} values={["EXCLUSIVE", "STACKABLE"]} onChange={(value) => setDraft({ ...draft, stacking_policy: value as Draft["stacking_policy"] })} /><MoneyField label="Minimum subtotal" optional value={draft.minimum_subtotal_minor} onChange={(value) => setDraft({ ...draft, minimum_subtotal_minor: value })} /><MoneyField label="Maximum discount" optional value={draft.maximum_discount_minor} onChange={(value) => setDraft({ ...draft, maximum_discount_minor: value })} /></div><label className="promotion-check"><input type="checkbox" checked={draft.include_modifier_price} onChange={(event) => setDraft({ ...draft, include_modifier_price: event.target.checked })} />Include modifier price in eligible amount</label><label className="promotion-check"><input type="checkbox" checked={draft.requires_override_permission} onChange={(event) => setDraft({ ...draft, requires_override_permission: event.target.checked })} />Require discount override permission</label></BuilderSection>
             <BuilderSection title="Products"><div className="promotion-targets">{draft.targets.map((target, index) => <div key={index}><Select label="Role" value={target.role} values={["ELIGIBLE", "BUY", "GET", "COMBO_COMPONENT"]} onChange={(value) => updateTarget(index, { role: value as PromotionTarget["role"] })} /><Select label="Target" value={target.target_type} values={["ALL", "CATEGORY", "PRODUCT", "VARIANT"]} onChange={(value) => updateTarget(index, { target_type: value as PromotionTarget["target_type"], target_id: null })} />{target.target_type !== "ALL" && <Field label={target.target_type.toLowerCase()}><select required value={target.target_id ?? ""} onChange={(event) => updateTarget(index, { target_id: event.target.value })}><option value="">Select</option>{targetOptions(target.target_type, categories, products).map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</select></Field>}<Field label="Qty"><input min="1" type="number" value={target.quantity} onChange={(event) => updateTarget(index, { quantity: Number(event.target.value) })} /></Field><button aria-label="Remove target" className="menu-icon-button is-danger" disabled={draft.targets.length === 1} type="button" onClick={() => setDraft({ ...draft, targets: draft.targets.filter((_, row) => row !== index) })}><Trash2 /></button></div>)}</div><button className="menu-secondary-button" type="button" onClick={() => setDraft({ ...draft, targets: [...draft.targets, { ...EMPTY_TARGET, sort_order: draft.targets.length }] })}><Plus />Add target</button></BuilderSection>
+            <BuilderSection title="Customer audience"><Select label="Eligible customers" value={audience.kind} values={["ALL", "CUSTOMER", "TIER", "BIRTHDAY"]} onChange={(value) => setAudience({ kind: value as AudienceDraft["kind"], tier_id: null, customer_ids: [] })} />{audience.kind === "TIER" && <Field label="Tier"><select required value={audience.tier_id ?? ""} onChange={(event) => setAudience({ ...audience, tier_id: event.target.value || null })}><option value="">Select tier</option>{tiers.map((tier) => <option key={tier.id} value={tier.id}>{tier.name}</option>)}</select></Field>}{audience.kind === "CUSTOMER" && <><div className="promotion-code-form"><input aria-label="Search customers" placeholder="Phone or name" value={audienceSearch} onChange={(event) => setAudienceSearch(event.target.value)} /><button className="menu-secondary-button" disabled={busy} type="button" onClick={() => void searchAudienceCustomers()}>Search</button></div><p className="promotion-audience-note">{audience.customer_ids.length} selected</p><div className="promotion-audience-list">{customers.map((customer) => <label key={customer.id}><input type="checkbox" checked={audience.customer_ids.includes(customer.id)} onChange={(event) => setAudience({ ...audience, customer_ids: event.target.checked ? [...audience.customer_ids, customer.id] : audience.customer_ids.filter((id) => id !== customer.id) })} /><span><strong>{customerName(customer)}</strong><small>{customer.phone}</small></span></label>)}{customers.length === 0 && <small>No customers found.</small>}</div></>}{audience.kind === "BIRTHDAY" && <p className="promotion-audience-note">Applied automatically on the customer’s birthday.</p>}</BuilderSection>
             <BuilderSection title="Availability"><div className="promotion-fields two"><Field label="Valid from" optional><input type="datetime-local" value={draft.valid_from ?? ""} onChange={(event) => setDraft({ ...draft, valid_from: event.target.value || null })} /></Field><Field label="Valid to" optional><input type="datetime-local" value={draft.valid_to ?? ""} onChange={(event) => setDraft({ ...draft, valid_to: event.target.value || null })} /></Field></div><label className="promotion-check"><input type="checkbox" checked={draft.all_locations} onChange={(event) => setDraft({ ...draft, all_locations: event.target.checked, location_ids: event.target.checked ? [] : draft.location_ids })} />All locations</label>{!draft.all_locations && <div className="promotion-options">{workspace.locations.map((location) => <label key={location.id}><input type="checkbox" checked={draft.location_ids.includes(location.id)} onChange={(event) => setDraft({ ...draft, location_ids: event.target.checked ? [...draft.location_ids, location.id] : draft.location_ids.filter((id) => id !== location.id) })} />{location.name}</label>)}</div>}<div className="promotion-schedules">{draft.schedules.map((schedule, index) => <div key={index}><Select label="Day" value={String(schedule.weekday)} values={WEEKDAYS.map((_, day) => String(day))} labels={WEEKDAYS} onChange={(value) => updateSchedule(index, { weekday: Number(value) })} /><Field label="Start"><input required type="time" value={schedule.start_local_time} onChange={(event) => updateSchedule(index, { start_local_time: event.target.value })} /></Field><Field label="End"><input required type="time" value={schedule.end_local_time} onChange={(event) => updateSchedule(index, { end_local_time: event.target.value })} /></Field><button aria-label="Remove schedule" className="menu-icon-button is-danger" type="button" onClick={() => setDraft({ ...draft, schedules: draft.schedules.filter((_, row) => row !== index) })}><Trash2 /></button></div>)}</div><button className="menu-secondary-button" type="button" onClick={() => setDraft({ ...draft, schedules: [...draft.schedules, { weekday: 0, start_local_time: "15:00", end_local_time: "17:00" }] })}><Plus />Add time range</button></BuilderSection>
             {selected && draft.application_mode === "CODE" && <BuilderSection title="Promo codes"><div className="promotion-code-form"><input aria-label="Promo code" maxLength={64} placeholder="BEANLY10" value={newCode} onChange={(event) => setNewCode(event.target.value.toUpperCase())} /><button className="menu-secondary-button" disabled={busy || !newCode.trim()} type="button" onClick={() => void addCode()}>Add code</button></div><div className="promotion-code-list">{selected.codes.map((code) => <span key={code.id}>{code.code}<button aria-label={`Remove ${code.code}`} disabled={busy} type="button" onClick={() => void removeCode(code.id)}><X /></button></span>)}</div></BuilderSection>}
           </div>
@@ -232,5 +276,6 @@ function moneyOrNull(value: string | null) { return value?.trim() ? parseMenuPri
 function isoOrNull(value: string | null) { return value ? new Date(value).toISOString() : null; }
 function datetimeLocal(value: string | null) { return value ? new Date(value).toISOString().slice(0, 16) : null; }
 function messageOf(error: unknown) { return error instanceof Error ? error.message : "Something went wrong. Please try again."; }
+function customerName(customer: Customer) { return [customer.first_name, customer.last_name].filter(Boolean).join(" ") || customer.phone; }
 function kindLabel(kind: PromotionDiscountKind, promotion: Promotion) { if (kind === "PERCENT") return `${promotion.percent_rate?.replace(/\.0+$/, "")}%`; if (kind === "FIXED_AMOUNT") return `−${promotion.amount_minor}`; if (kind === "FIXED_PRICE") return `Fixed ${promotion.fixed_price_minor}`; return "BOGO"; }
 function targetOptions(type: PromotionTarget["target_type"], categories: MenuCategory[], products: MenuProduct[]) { if (type === "CATEGORY") return categories.map(({ id, name }) => ({ id, name })); if (type === "PRODUCT") return products.map(({ id, name }) => ({ id, name })); if (type === "VARIANT") return products.flatMap((product) => product.variants.map((variant) => ({ id: variant.id, name: `${product.name} · ${variant.name}` }))); return []; }

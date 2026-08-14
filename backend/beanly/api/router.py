@@ -1,6 +1,14 @@
 from fastapi import APIRouter
 
 from beanly.modules.analytics.api.router import router as analytics_router
+from beanly.modules.customers.api.router import (
+    loyalty_router,
+    promotion_audience_router,
+    sales_loyalty_router,
+)
+from beanly.modules.customers.api.router import (
+    router as customers_router,
+)
 from beanly.modules.dashboard.api.router import router as dashboard_router
 from beanly.modules.employees.api.router import router as employees_router
 from beanly.modules.finance.api.router import router as finance_router
@@ -41,6 +49,10 @@ api_v1_router.include_router(menu_router)
 api_v1_router.include_router(organizations_router)
 api_v1_router.include_router(employees_router)
 api_v1_router.include_router(team_router)
+api_v1_router.include_router(customers_router)
+api_v1_router.include_router(loyalty_router)
+api_v1_router.include_router(sales_loyalty_router)
+api_v1_router.include_router(promotion_audience_router)
 api_v1_router.include_router(purchasing_router)
 api_v1_router.include_router(promotions_router)
 api_v1_router.include_router(order_discounts_router)

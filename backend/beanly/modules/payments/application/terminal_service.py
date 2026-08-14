@@ -87,9 +87,7 @@ class TerminalPaymentService:
     async def list_bindings(
         self, context: TenantContext, register_id: UUID
     ) -> list[TerminalBinding]:
-        values = await self.repository.list_terminal_bindings(
-            context.organization_id, register_id
-        )
+        values = await self.repository.list_terminal_bindings(context.organization_id, register_id)
         for value in values:
             await self.sales.ensure_location_access(context, value.location_id)
         return values
@@ -117,9 +115,7 @@ class TerminalPaymentService:
         if values.get("transport_config") not in (None, {}):
             raise TerminalBindingConflict("Terminal transport configuration is bridge-managed")
         try:
-            result = await self.repository.update_terminal_binding(
-                context, binding_id, **values
-            )
+            result = await self.repository.update_terminal_binding(context, binding_id, **values)
             await self.sales.ensure_location_access(context, result.location_id)
             await self.repository.commit()
             return result
@@ -200,12 +196,8 @@ class TerminalPaymentService:
                 return _idempotent(existing, value, request_hash)
             raise
 
-    async def get_attempt(
-        self, context: TenantContext, attempt_id: UUID
-    ) -> ExternalPaymentAttempt:
-        value = await self.repository.get_external_attempt(
-            context.organization_id, attempt_id
-        )
+    async def get_attempt(self, context: TenantContext, attempt_id: UUID) -> ExternalPaymentAttempt:
+        value = await self.repository.get_external_attempt(context.organization_id, attempt_id)
         if value is None:
             raise ExternalPaymentAttemptNotFound("External payment attempt not found")
         await self.sales.ensure_location_access(context, value.location_id)
@@ -219,9 +211,7 @@ class TerminalPaymentService:
             "Smart POS local bridge and test device are not configured"
         )
 
-    async def reconcile(
-        self, context: TenantContext, attempt_id: UUID
-    ) -> ExternalPaymentAttempt:
+    async def reconcile(self, context: TenantContext, attempt_id: UUID) -> ExternalPaymentAttempt:
         value = await self.get_attempt(context, attempt_id)
         if value.status not in {
             ExternalPaymentAttemptStatus.UNKNOWN,

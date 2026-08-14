@@ -34,6 +34,10 @@ class PaymentAmountMismatch(InvalidPayment):
     code = "PAYMENT_AMOUNT_MISMATCH"
 
 
+class LoyaltyReservationInvalid(PaymentConflict):
+    code = "LOYALTY_RESERVATION_INVALID"
+
+
 class ExternalPaymentAttemptNotFound(PaymentError):
     code = "PAYMENT_ATTEMPT_NOT_FOUND"
 

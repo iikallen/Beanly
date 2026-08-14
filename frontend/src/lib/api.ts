@@ -425,6 +425,9 @@ export type SalesOrder = {
   guest_count: number | null;
   table_label: string | null;
   note: string | null;
+  customer_id: string | null;
+  customer_name_snapshot: string | null;
+  customer_phone_snapshot: string | null;
   subtotal_minor: string;
   discount_total_minor: string;
   total_minor: string;
@@ -555,6 +558,7 @@ export type SalesOrderDiscount = {
   applied_at: string;
   discount_total_minor: string;
   sort_order: number;
+  audience_kind: "CUSTOMER" | "TIER" | "BIRTHDAY" | null;
   allocations: Array<{ order_item_id: string; eligible_amount_minor: string; discount_amount_minor: string; sort_order: number }>;
 };
 
@@ -564,6 +568,98 @@ export type PromotionPreview = {
   total_minor: string;
   item_discount_minor: Record<string, string>;
 };
+
+export type CustomerTier = { id: string; name: string };
+
+export type Customer = {
+  id: string;
+  organization_id: string;
+  phone: string;
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;
+  birth_date: string | null;
+  note: string | null;
+  marketing_consent: boolean;
+  visit_count: number;
+  lifetime_value_minor: string;
+  last_visit_at: string | null;
+  loyalty_points_balance: string;
+  tier: CustomerTier | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CustomerInput = {
+  phone: string;
+  first_name?: string | null;
+  last_name?: string | null;
+  email?: string | null;
+  birth_date?: string | null;
+  note?: string | null;
+  marketing_consent?: boolean;
+};
+
+export type CustomerOrder = {
+  id: string;
+  location_id: string;
+  number: string;
+  status: string;
+  total_minor: string;
+  refunded_minor: string;
+  net_minor: string;
+  paid_at: string | null;
+};
+
+export type LoyaltyLedgerEntry = {
+  id: string;
+  points_delta: string;
+  kind: string;
+  source_type: string;
+  source_id: string;
+  related_source_id: string | null;
+  reason: string | null;
+  occurred_at: string;
+};
+
+export type CustomerLoyalty = {
+  customer_id: string;
+  points_balance: string;
+  available_points: string;
+  lifetime_earned_points: string;
+  point_value_minor: string;
+  earn_rate_bps: number;
+  tier: CustomerTier | null;
+  entries: LoyaltyLedgerEntry[];
+};
+
+export type LoyaltyProgram = {
+  earn_rate_bps: number;
+  point_value_minor: string;
+  birthday_reward_points: string;
+  is_active: boolean;
+};
+
+export type LoyaltyTier = {
+  id: string;
+  organization_id: string;
+  name: string;
+  threshold_lifetime_points: string;
+  earn_multiplier_bps: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type LoyaltyTierInput = Pick<LoyaltyTier, "name" | "threshold_lifetime_points" | "earn_multiplier_bps">;
+
+export type PromotionAudience = {
+  promotion_id: string;
+  kind: "ALL" | "CUSTOMER" | "TIER" | "BIRTHDAY";
+  tier_id: string | null;
+  customer_ids: string[];
+};
+
+export type LoyaltyQuote = { points: string; discount_minor: string; balance_points: string };
 
 export type PaymentMethod = "CASH" | "CARD" | "OTHER";
 
@@ -2508,6 +2604,81 @@ export const api = {
     request<MenuReadModel>(`/api/v1/menu?${new URLSearchParams({ location_id: locationId })}`, {
       headers: tenantAuthorization(organizationId, accessToken),
     }),
+  listCustomers: (
+    organizationId: string,
+    accessToken: string,
+    filters: { search?: string; limit?: number; offset?: number } = {},
+  ) => {
+    const params = new URLSearchParams({
+      limit: String(filters.limit ?? 50),
+      offset: String(filters.offset ?? 0),
+    });
+    if (filters.search) params.set("search", filters.search);
+    return request<Customer[]>(`/api/v1/customers?${params}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    });
+  },
+  getCustomer: (customerId: string, organizationId: string, accessToken: string) =>
+    request<Customer>(`/api/v1/customers/${customerId}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  createCustomer: (input: CustomerInput, organizationId: string, accessToken: string) =>
+    request<Customer>("/api/v1/customers", {
+      method: "POST",
+      body: JSON.stringify(input),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  updateCustomer: (customerId: string, input: Partial<CustomerInput>, organizationId: string, accessToken: string) =>
+    request<Customer>(`/api/v1/customers/${customerId}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  archiveCustomer: (customerId: string, organizationId: string, accessToken: string) =>
+    request<void>(`/api/v1/customers/${customerId}`, {
+      method: "DELETE",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  listCustomerOrders: (customerId: string, organizationId: string, accessToken: string, limit = 50, offset = 0) =>
+    request<CustomerOrder[]>(`/api/v1/customers/${customerId}/orders?${new URLSearchParams({ limit: String(limit), offset: String(offset) })}`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  getCustomerLoyalty: (customerId: string, organizationId: string, accessToken: string) =>
+    request<CustomerLoyalty>(`/api/v1/customers/${customerId}/loyalty`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  adjustCustomerLoyalty: (customerId: string, input: { client_adjustment_id: string; points_delta: string; reason: string }, organizationId: string, accessToken: string) =>
+    request<CustomerLoyalty>(`/api/v1/customers/${customerId}/loyalty/adjustments`, {
+      method: "POST",
+      body: JSON.stringify(input),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  getLoyaltyProgram: (organizationId: string, accessToken: string) =>
+    request<LoyaltyProgram>("/api/v1/loyalty/program", {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  updateLoyaltyProgram: (input: { earn_rate_bps: number; point_value_minor: string; birthday_reward_points: string; is_active: boolean }, organizationId: string, accessToken: string) =>
+    request<LoyaltyProgram>("/api/v1/loyalty/program", {
+      method: "PATCH",
+      body: JSON.stringify(input),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  listLoyaltyTiers: (organizationId: string, accessToken: string) =>
+    request<LoyaltyTier[]>("/api/v1/loyalty/tiers", {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  createLoyaltyTier: (input: LoyaltyTierInput, organizationId: string, accessToken: string) =>
+    request<LoyaltyTier>("/api/v1/loyalty/tiers", {
+      method: "POST",
+      body: JSON.stringify(input),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  updateLoyaltyTier: (tierId: string, input: LoyaltyTierInput, organizationId: string, accessToken: string) =>
+    request<LoyaltyTier>(`/api/v1/loyalty/tiers/${tierId}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
   listPromotions: (organizationId: string, accessToken: string) =>
     request<Promotion[]>("/api/v1/promotions", {
       headers: tenantAuthorization(organizationId, accessToken),
@@ -2574,6 +2745,16 @@ export const api = {
   deletePromotionCode: (promotionId: string, codeId: string, organizationId: string, accessToken: string) =>
     request<Promotion>(`/api/v1/promotions/${promotionId}/codes/${codeId}`, {
       method: "DELETE",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  getPromotionAudience: (promotionId: string, organizationId: string, accessToken: string) =>
+    request<PromotionAudience>(`/api/v1/promotions/${promotionId}/audience`, {
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  updatePromotionAudience: (promotionId: string, input: Omit<PromotionAudience, "promotion_id">, organizationId: string, accessToken: string) =>
+    request<PromotionAudience>(`/api/v1/promotions/${promotionId}/audience`, {
+      method: "PUT",
+      body: JSON.stringify(input),
       headers: tenantAuthorization(organizationId, accessToken),
     }),
   listPosRegisters: (locationId: string, organizationId: string, accessToken: string) =>
@@ -2735,6 +2916,29 @@ export const api = {
     method: "DELETE",
     headers: tenantAuthorization(organizationId, accessToken),
   }),
+  attachSalesOrderCustomer: (orderId: string, customerId: string | null, organizationId: string, accessToken: string) =>
+    request<SalesOrder>(`/api/v1/sales/orders/${orderId}/customer`, {
+      method: "PUT",
+      body: JSON.stringify({ customer_id: customerId }),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  quoteSalesOrderLoyalty: (orderId: string, points: string, organizationId: string, accessToken: string) =>
+    request<LoyaltyQuote>(`/api/v1/sales/orders/${orderId}/loyalty/quote`, {
+      method: "POST",
+      body: JSON.stringify({ points }),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  redeemSalesOrderLoyalty: (orderId: string, points: string, clientRedemptionId: string, organizationId: string, accessToken: string) =>
+    request<SalesOrder>(`/api/v1/sales/orders/${orderId}/loyalty/redeem`, {
+      method: "POST",
+      body: JSON.stringify({ client_redemption_id: clientRedemptionId, points }),
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
+  releaseSalesOrderLoyalty: (orderId: string, organizationId: string, accessToken: string) =>
+    request<SalesOrder>(`/api/v1/sales/orders/${orderId}/loyalty/redemption`, {
+      method: "DELETE",
+      headers: tenantAuthorization(organizationId, accessToken),
+    }),
   applyManualDiscount: (orderId: string, promotionId: string, clientDiscountId: string, organizationId: string, accessToken: string) =>
     request<SalesOrder>(`/api/v1/sales/orders/${orderId}/discounts/manual`, {
       method: "POST",

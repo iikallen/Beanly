@@ -166,9 +166,7 @@ async def close_shift(
     return ShiftResponse.model_validate(value)
 
 
-@router.post(
-    "/orders", response_model=OrderResponse, status_code=status.HTTP_201_CREATED
-)
+@router.post("/orders", response_model=OrderResponse, status_code=status.HTTP_201_CREATED)
 async def create_order(
     payload: OrderCreateRequest,
     context: SalesCreateDep,

@@ -72,9 +72,14 @@ class SalesEventPublisher(Protocol):
 class SalesPricingPort(Protocol):
     async def reprice(self, organization_id: UUID, order_id: UUID) -> None: ...
 
+    async def ensure_mutable(self, organization_id: UUID, order_id: UUID) -> None: ...
+
 
 class NullSalesPricingPort:
     async def reprice(self, organization_id: UUID, order_id: UUID) -> None:
+        pass
+
+    async def ensure_mutable(self, organization_id: UUID, order_id: UUID) -> None:
         pass
 
 

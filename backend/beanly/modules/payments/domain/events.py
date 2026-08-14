@@ -9,4 +9,3 @@ class PaymentCompleted:
     organization_id: UUID
     location_id: UUID
     amount_minor: int
-

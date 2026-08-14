@@ -96,9 +96,7 @@ def to_payment(model: PaymentModel) -> Payment:
         _utc(model.updated_at),
         tuple(
             to_line(line)
-            for line in sorted(
-                model.__dict__.get("lines", ()), key=lambda value: value.sort_order
-            )
+            for line in sorted(model.__dict__.get("lines", ()), key=lambda value: value.sort_order)
         ),
         model.offline_session_id,
     )

@@ -63,6 +63,12 @@ def test_role_permission_matrix_matches_current_contract() -> None:
                 Permission.PROMOTIONS_WRITE,
                 Permission.DISCOUNTS_APPLY,
                 Permission.DISCOUNTS_OVERRIDE,
+                Permission.CUSTOMERS_READ,
+                Permission.CUSTOMERS_WRITE,
+                Permission.LOYALTY_READ,
+                Permission.LOYALTY_ADJUST,
+                Permission.LOYALTY_CONFIGURE,
+                Permission.LOYALTY_REDEEM,
             }
         ),
         MembershipRole.MANAGER: frozenset(
@@ -109,6 +115,11 @@ def test_role_permission_matrix_matches_current_contract() -> None:
                 Permission.PROMOTIONS_READ,
                 Permission.DISCOUNTS_APPLY,
                 Permission.DISCOUNTS_OVERRIDE,
+                Permission.CUSTOMERS_READ,
+                Permission.CUSTOMERS_WRITE,
+                Permission.LOYALTY_READ,
+                Permission.LOYALTY_ADJUST,
+                Permission.LOYALTY_REDEEM,
             }
         ),
         MembershipRole.ACCOUNTANT: frozenset(
@@ -127,6 +138,8 @@ def test_role_permission_matrix_matches_current_contract() -> None:
                 Permission.FISCAL_READ,
                 Permission.FISCAL_WRITE,
                 Permission.PROMOTIONS_READ,
+                Permission.CUSTOMERS_READ,
+                Permission.LOYALTY_READ,
             }
         ),
         MembershipRole.CASHIER: frozenset(
@@ -138,6 +151,10 @@ def test_role_permission_matrix_matches_current_contract() -> None:
                 Permission.SALES_SHIFT_MANAGE,
                 Permission.PAYMENTS_CREATE,
                 Permission.DISCOUNTS_APPLY,
+                Permission.CUSTOMERS_READ,
+                Permission.CUSTOMERS_WRITE,
+                Permission.LOYALTY_READ,
+                Permission.LOYALTY_REDEEM,
             }
         ),
         MembershipRole.BARISTA: frozenset(
@@ -148,6 +165,9 @@ def test_role_permission_matrix_matches_current_contract() -> None:
                 Permission.SALES_READ_OWN,
                 Permission.SALES_SHIFT_MANAGE,
                 Permission.INVENTORY_READ_LIMITED,
+                Permission.CUSTOMERS_READ,
+                Permission.CUSTOMERS_WRITE,
+                Permission.LOYALTY_READ,
             }
         ),
     }

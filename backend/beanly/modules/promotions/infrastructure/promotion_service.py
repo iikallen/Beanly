@@ -211,9 +211,7 @@ class PromotionService:
                 replace(current, status=status, updated_at=datetime.now(UTC))
             )
             action = (
-                "PROMOTION_ACTIVATED"
-                if status == PromotionStatus.ACTIVE
-                else "PROMOTION_ARCHIVED"
+                "PROMOTION_ACTIVATED" if status == PromotionStatus.ACTIVE else "PROMOTION_ARCHIVED"
             )
             await self._audit(context, action, saved.id)
             await self.session.commit()

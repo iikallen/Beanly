@@ -3284,3 +3284,117 @@ button, input, select { font: inherit; }
   .setup-choice-icon { width: 42px; height: 42px; }
   .setup-choice > svg { display: none; }
 }
+
+/* Stage 25 · online-only customers and loyalty */
+.customer-tabs { display: flex; gap: 6px; margin: 26px 0; border-bottom: 1px solid var(--border); }
+.customer-tabs button { display: inline-flex; align-items: center; gap: 7px; min-height: 44px; padding: 0 15px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font-weight: 750; cursor: pointer; }
+.customer-tabs button.is-active { border-bottom-color: var(--primary); color: var(--primary); }
+.customer-tabs svg { width: 17px; }
+.customer-search { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 10px; max-width: 680px; margin: 28px 0 18px; padding: 7px 7px 7px 13px; border: 1px solid var(--border); border-radius: 7px; background: #fff; }
+.customer-search svg { width: 18px; color: var(--muted); }
+.customer-search input { min-width: 0; height: 39px; border: 0; outline: 0; color: var(--text); font: inherit; }
+.customer-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 7px; background: #fff; }
+.customer-table-wrap table { width: 100%; min-width: 720px; border-collapse: collapse; }
+.customer-table-wrap th, .customer-table-wrap td { padding: 14px 18px; border-bottom: 1px solid var(--border); text-align: left; }
+.customer-table-wrap thead th { color: var(--muted); font-size: 12px; }
+.customer-table-wrap tbody tr:last-child > * { border-bottom: 0; }
+.customer-table-wrap tbody tr:hover { background: #fafcfb; }
+.customer-table-wrap tbody th { font-weight: 750; }
+.customer-table-wrap tbody th small { display: block; margin-top: 4px; color: var(--muted); font-weight: 500; }
+.customer-open { padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-weight: 750; text-align: left; cursor: pointer; }
+.customer-open:hover { color: var(--primary); }
+.customer-table-wrap .is-positive { color: var(--primary); font-weight: 800; }
+.customer-table-wrap .is-negative { color: var(--danger); font-weight: 800; }
+.customer-profile { display: grid; gap: 20px; }
+.customer-profile > header { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 14px; }
+.customer-profile > header .menu-back-link { grid-column: 1 / -1; justify-self: start; }
+.customer-profile > header > div { display: flex; align-items: center; gap: 13px; }
+.customer-profile > header > .customer-profile-actions { gap: 8px; }
+.customer-profile h2, .loyalty-settings h2 { margin: 0; font-family: Georgia, "Times New Roman", serif; font-size: 28px; font-weight: 400; }
+.customer-profile header p { margin: 5px 0 0; color: var(--muted); }
+.customer-avatar { width: 44px; height: 44px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; background: #e7f0e9; color: var(--primary); font-weight: 850; text-transform: uppercase; }
+.customer-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.customer-metrics article { display: grid; gap: 8px; padding: 18px; border: 1px solid var(--border); border-radius: 7px; background: #fff; }
+.customer-metrics span, .customer-card dt { color: var(--muted); font-size: 12px; }
+.customer-metrics strong { font-size: 20px; }
+.customer-profile-grid, .loyalty-settings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.customer-card { min-width: 0; padding: 22px; border: 1px solid var(--border); border-radius: 7px; background: #fff; }
+.customer-card > h3 { margin: 0 0 18px; font-size: 18px; }
+.customer-card dl { display: grid; gap: 0; margin: 0; }
+.customer-card dl > div { display: flex; justify-content: space-between; gap: 16px; padding: 11px 0; border-bottom: 1px solid var(--border); }
+.customer-card dl > div:last-child { border-bottom: 0; }
+.customer-card dd { display: flex; align-items: center; gap: 6px; margin: 0; text-align: right; }
+.customer-card dd svg { width: 15px; color: var(--primary); }
+.customer-wide { grid-column: 1 / -1; padding: 0; overflow: hidden; }
+.customer-wide > h3 { margin: 0; padding: 18px 22px; border-bottom: 1px solid var(--border); }
+.customer-wide .customer-table-wrap { border: 0; border-radius: 0; }
+.customer-empty { margin: 0; padding: 26px; color: var(--muted); text-align: center; }
+.customer-adjust { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto; gap: 8px; margin-top: 16px; }
+.customer-adjust input, .loyalty-form input, .loyalty-tier-form input { min-width: 0; height: 42px; padding: 0 10px; border: 1px solid var(--border); border-radius: 5px; color: var(--text); font: inherit; }
+.customer-modal { width: min(100%, 680px); }
+.customer-modal > h2 { margin: 0 0 22px; }
+.customer-modal-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; }
+.customer-modal textarea { min-height: 90px; padding: 10px; resize: vertical; border: 1px solid var(--border); border-radius: 5px; font: inherit; }
+.customer-note { grid-column: 1 / -1; }
+.loyalty-settings > .customer-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.loyalty-settings > .customer-card > header h2 { margin-bottom: 5px; }
+.loyalty-settings > .customer-card > header p { margin: 0; color: var(--muted); font-size: 13px; }
+.loyalty-form { display: grid; gap: 15px; margin-top: 20px; }
+.loyalty-form > label:not(.promotion-check) { display: grid; grid-template-columns: 150px 1fr; align-items: center; gap: 12px; }
+.loyalty-form > label > span { font-size: 13px; font-weight: 750; }
+.loyalty-form > label > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.loyalty-form small { color: var(--muted); }
+.loyalty-tier-list { display: grid; gap: 8px; margin-top: 18px; }
+.loyalty-tier-list button { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 13px; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text); text-align: left; cursor: pointer; }
+.loyalty-tier-list button:not(:disabled):hover { border-color: var(--primary); }
+.loyalty-tier-list button span, .loyalty-tier-list button small { color: var(--muted); }
+.loyalty-tier-list button small { grid-column: 1 / -1; }
+.loyalty-tier-form { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.promotion-audience-list { max-height: 210px; display: grid; gap: 7px; margin-top: 12px; overflow-y: auto; }
+.promotion-audience-list label { display: flex; align-items: center; gap: 9px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 5px; }
+.promotion-audience-list input { width: 17px; height: 17px; accent-color: var(--primary); }
+.promotion-audience-list span { display: grid; gap: 2px; }
+.promotion-audience-list small, .promotion-audience-note { color: var(--muted); }
+.pos-customer-button { min-height: 48px; display: flex; align-items: center; gap: 10px; margin: 12px 20px 0; padding: 7px 11px; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text); text-align: left; cursor: pointer; }
+.pos-customer-button > svg { width: 19px; color: var(--primary); }
+.pos-customer-button > span { display: grid; gap: 2px; }
+.pos-customer-button small { color: var(--muted); }
+.pos-customer-promotion { margin: 8px 20px 0; color: var(--primary); font-size: 11px; font-weight: 800; }
+.pos-discount-lines span small { color: var(--primary); font-size: 10px; font-weight: 750; }
+.pos-customer-modal { width: min(100%, 600px); max-height: min(90vh, 820px); overflow-y: auto; }
+.pos-customer-modal > h2 { margin: 7px 0 20px; }
+.pos-customer-modal section { padding: 16px 0; border-top: 1px solid var(--border); }
+.pos-customer-modal h3 { margin: 0 0 11px; font-size: 14px; }
+.pos-customer-summary { display: flex; align-items: center; gap: 10px; }
+.pos-customer-summary > div { min-width: 0; display: grid; gap: 3px; }
+.pos-customer-summary small { color: var(--muted); }
+.pos-customer-summary > button { margin-left: auto; }
+.pos-loyalty > div:first-child { display: grid; grid-template-columns: 1fr auto; gap: 3px 12px; }
+.pos-loyalty > div:first-child strong { font-size: 22px; }
+.pos-loyalty > div:first-child small { grid-column: 1 / -1; color: var(--muted); }
+.pos-loyalty-quote, .pos-customer-search form, .pos-customer-create > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-top: 12px; }
+.pos-loyalty-quote input, .pos-customer-search input, .pos-customer-create input { min-width: 0; height: 42px; padding: 0 10px; border: 1px solid var(--border); border-radius: 5px; color: var(--text); font: inherit; }
+.pos-loyalty-preview, .pos-loyalty-reserved { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; padding: 11px; border-radius: 6px; background: #f2f7f3; }
+.pos-loyalty-preview strong { color: var(--primary); }
+.pos-customer-search form button svg, .pos-customer-create button svg { width: 15px; }
+.pos-customer-search > div { display: grid; gap: 7px; margin-top: 10px; }
+.pos-customer-search > div > button { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px; border: 1px solid var(--border); border-radius: 5px; background: #fff; color: var(--text); text-align: left; cursor: pointer; }
+.pos-customer-search > div > button > span:first-child { display: grid; gap: 3px; }
+.pos-customer-search small, .pos-customer-search > div > button > span:last-child { color: var(--muted); font-size: 12px; }
+.pos-customer-create > div { grid-template-columns: 1fr 1fr auto; }
+
+@media (max-width: 820px) {
+  .customer-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .customer-profile-grid, .loyalty-settings { grid-template-columns: 1fr; }
+  .customer-wide { grid-column: 1; }
+  .loyalty-tier-form { grid-template-columns: 1fr 1fr; }
+}
+
+@media (max-width: 560px) {
+  .customer-profile > header { grid-template-columns: 1fr; }
+  .customer-profile-actions, .customer-profile-actions .menu-secondary-button { width: 100%; }
+  .customer-metrics, .customer-modal-grid { grid-template-columns: 1fr; }
+  .customer-note { grid-column: 1; }
+  .customer-adjust, .loyalty-tier-form, .pos-customer-create > div { grid-template-columns: 1fr; }
+  .loyalty-form > label:not(.promotion-check) { grid-template-columns: 1fr; }
+}

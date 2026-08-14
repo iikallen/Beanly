@@ -1,12 +1,19 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from beanly.core.observability import metrics
 from beanly.core.security.audit import SecurityAuditRecorder
+from beanly.modules.customers.infrastructure.db.models import (
+    CustomerModel,
+    LoyaltyAccountModel,
+    PromotionAudienceCustomerModel,
+    PromotionAudienceModel,
+)
 from beanly.modules.menu.infrastructure.db.models import ProductModel
 from beanly.modules.organizations.application.services.organization_service import (
     OrganizationService,
@@ -30,6 +37,7 @@ from beanly.modules.promotions.domain.enums import (
 from beanly.modules.promotions.domain.exceptions import (
     DiscountIdempotencyConflict,
     PromotionCodeUnavailable,
+    PromotionConflict,
     PromotionNotFound,
 )
 from beanly.modules.promotions.infrastructure.db.models import (
@@ -128,6 +136,73 @@ async def reprice_order(
         for value in await repo.list(organization_id)
         if value.status == PromotionStatus.ACTIVE
     )
+    evaluation_time = occurred_at or datetime.now(UTC)
+    audience_kind_by_id: dict[UUID, str] = {}
+    if promotion_snapshot is None and promotions:
+        promotion_ids = tuple(value.id for value in promotions)
+        audiences = {
+            value.promotion_id: value
+            for value in await session.scalars(
+                select(PromotionAudienceModel).where(
+                    PromotionAudienceModel.organization_id == organization_id,
+                    PromotionAudienceModel.promotion_id.in_(promotion_ids),
+                )
+            )
+        }
+        customer_targets = (
+            set(
+                await session.scalars(
+                    select(PromotionAudienceCustomerModel.promotion_id).where(
+                        PromotionAudienceCustomerModel.promotion_id.in_(promotion_ids),
+                        PromotionAudienceCustomerModel.customer_id == order.customer_id,
+                    )
+                )
+            )
+            if order.customer_id
+            else set()
+        )
+        customer = (
+            await session.scalar(
+                select(CustomerModel).where(
+                    CustomerModel.organization_id == organization_id,
+                    CustomerModel.id == order.customer_id,
+                    CustomerModel.deleted_at.is_(None),
+                )
+            )
+            if order.customer_id
+            else None
+        )
+        account = (
+            await session.scalar(
+                select(LoyaltyAccountModel).where(
+                    LoyaltyAccountModel.organization_id == organization_id,
+                    LoyaltyAccountModel.customer_id == order.customer_id,
+                )
+            )
+            if customer
+            else None
+        )
+        local_date = evaluation_time.astimezone(ZoneInfo(location_timezone)).date()
+
+        def eligible(value) -> bool:
+            audience = audiences.get(value.id)
+            if audience is None or audience.kind == "ALL":
+                return True
+            if customer is None:
+                return False
+            audience_kind_by_id[value.id] = audience.kind
+            if audience.kind == "CUSTOMER":
+                return value.id in customer_targets
+            if audience.kind == "TIER":
+                return account is not None and account.tier_id == audience.tier_id
+            return bool(
+                audience.kind == "BIRTHDAY"
+                and customer.birth_date
+                and (customer.birth_date.month, customer.birth_date.day)
+                == (local_date.month, local_date.day)
+            )
+
+        promotions = tuple(value for value in promotions if eligible(value))
     by_id = {value.id: value for value in promotions}
     selected = tuple(
         SelectedPromotion(
@@ -160,7 +235,7 @@ async def reprice_order(
         and value.client_discount_id
         and value.applied_by_user_id
     )
-    now = occurred_at or datetime.now(UTC)
+    now = evaluation_time
     result = price_order(
         tuple(
             PricingItem(
@@ -203,6 +278,7 @@ async def reprice_order(
             discount_total_minor=value.discount_total_minor,
             promotion_config_hash=value.promotion_config_hash,
             sort_order=value.sort_order,
+            audience_kind=audience_kind_by_id.get(value.promotion_id),
         )
         model.allocations = [
             SalesOrderDiscountAllocationModel(
@@ -280,9 +356,7 @@ class OrderDiscountService:
         )
         return await self._finish(context.organization_id, order_id)
 
-    async def code(
-        self, context: TenantContext, order_id: UUID, client_id: UUID, code: str
-    ):
+    async def code(self, context: TenantContext, order_id: UUID, client_id: UUID, code: str):
         metrics.promo_code_attempts_total.add(1)
         normalized = "".join(code.upper().split())
         order = await self._ensure_order_access(context, order_id)
@@ -337,9 +411,7 @@ class OrderDiscountService:
             context.user_id,
             code=normalized,
         )
-        await self._audit(
-            context.organization_id, context.user_id, order_id, "PROMO_CODE_APPLIED"
-        )
+        await self._audit(context.organization_id, context.user_id, order_id, "PROMO_CODE_APPLIED")
         return await self._finish(context.organization_id, order_id)
 
     async def custom(
@@ -389,6 +461,15 @@ class OrderDiscountService:
 
     async def remove(self, context: TenantContext, order_id: UUID, discount_id: UUID):
         await self._ensure_order_access(context, order_id)
+        protected = await self.session.scalar(
+            select(SalesOrderDiscountModel.id).where(
+                SalesOrderDiscountModel.id == discount_id,
+                SalesOrderDiscountModel.order_id == order_id,
+                SalesOrderDiscountModel.reason == "LOYALTY_REDEMPTION",
+            )
+        )
+        if protected is not None:
+            raise PromotionConflict("Use the loyalty redemption release endpoint")
         result = await self.session.execute(
             delete(SalesOrderDiscountModel).where(
                 SalesOrderDiscountModel.id == discount_id,
@@ -407,9 +488,7 @@ class OrderDiscountService:
         )
         return await self._finish(context.organization_id, order_id)
 
-    async def _ensure_order_access(
-        self, context: TenantContext, order_id: UUID
-    ) -> SalesOrderModel:
+    async def _ensure_order_access(self, context: TenantContext, order_id: UUID) -> SalesOrderModel:
         order = await self.session.scalar(
             select(SalesOrderModel).where(
                 SalesOrderModel.id == order_id,
@@ -424,6 +503,16 @@ class OrderDiscountService:
             raise PromotionNotFound("Order not found") from exc
         if order.status != OrderStatus.OPEN.value:
             raise PromotionCodeUnavailable("Order is immutable")
+        from beanly.modules.customers.infrastructure.db.models import LoyaltyRedemptionModel
+
+        if await self.session.scalar(
+            select(LoyaltyRedemptionModel.id).where(
+                LoyaltyRedemptionModel.organization_id == context.organization_id,
+                LoyaltyRedemptionModel.order_id == order_id,
+                LoyaltyRedemptionModel.status == "RESERVED",
+            )
+        ):
+            raise PromotionConflict("Release loyalty redemption before changing discounts")
         return order
 
     @staticmethod

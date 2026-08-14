@@ -19,4 +19,3 @@ class ExternalPaymentAttemptStatus(StrEnum):
     DECLINED = "DECLINED"
     CANCELLED = "CANCELLED"
     UNKNOWN = "UNKNOWN"
-

@@ -210,6 +210,7 @@ class OrderDiscountResponse(BaseModel):
     discount_total_minor: str
     sort_order: int
     allocations: list[dict[str, object]]
+    audience_kind: str | None
 
     @classmethod
     def from_entity(cls, value: OrderDiscount) -> "OrderDiscountResponse":
@@ -242,6 +243,7 @@ class OrderDiscountResponse(BaseModel):
                 }
                 for item in value.allocations
             ],
+            audience_kind=value.audience_kind,
         )
 
 
@@ -251,6 +253,9 @@ class OrderResponse(BaseModel):
     location_id: UUID
     shift_id: UUID
     warehouse_id: UUID
+    customer_id: UUID | None
+    customer_name_snapshot: str | None
+    customer_phone_snapshot: str | None
     number: str
     client_order_id: UUID
     version: int
@@ -288,6 +293,9 @@ class OrderResponse(BaseModel):
             location_id=value.location_id,
             shift_id=value.shift_id,
             warehouse_id=value.warehouse_id,
+            customer_id=value.customer_id,
+            customer_name_snapshot=value.customer_name_snapshot,
+            customer_phone_snapshot=value.customer_phone_snapshot,
             number=str(value.number),
             client_order_id=value.client_order_id,
             version=value.version,

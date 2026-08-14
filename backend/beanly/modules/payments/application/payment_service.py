@@ -220,6 +220,13 @@ class PaymentService:
         )
         with traced("payment.persist", payment_id=str(payment.id)):
             saved = await self.repository.add(payment)
+            await self.sales.stage_loyalty_payment(
+                saved.id,
+                saved.organization_id,
+                order.id,
+                saved.amount_minor,
+                completed_at,
+            )
             await self.sales.mark_order_paid(
                 order.id,
                 context.user_id,

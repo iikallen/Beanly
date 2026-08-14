@@ -195,6 +195,10 @@ class SalesOrderDiscountModel(Base):
         CheckConstraint("scope IN ('ORDER','ITEM','COMBO')", name="ck_order_discount_scope"),
         CheckConstraint("discount_total_minor >= 0", name="ck_order_discount_total"),
         CheckConstraint("sort_order >= 0", name="ck_order_discount_sort"),
+        CheckConstraint(
+            "audience_kind IS NULL OR audience_kind IN ('CUSTOMER','TIER','BIRTHDAY')",
+            name="ck_order_discount_audience",
+        ),
         Index("ix_sales_order_discounts_order", "order_id", "sort_order"),
         Index("ix_sales_order_discounts_promotion", "promotion_id"),
     )
@@ -219,6 +223,7 @@ class SalesOrderDiscountModel(Base):
     discount_total_minor: Mapped[int] = mapped_column(BigInteger)
     promotion_config_hash: Mapped[str] = mapped_column(String(64))
     sort_order: Mapped[int]
+    audience_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
     allocations: Mapped[list["SalesOrderDiscountAllocationModel"]] = relationship(
         cascade="all, delete-orphan"
     )

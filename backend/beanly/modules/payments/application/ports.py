@@ -65,6 +65,15 @@ class SalesSettlementPort(Protocol):
         cogs_status: SaleCostStatus,
     ) -> None: ...
 
+    async def stage_loyalty_payment(
+        self,
+        payment_id: UUID,
+        organization_id: UUID,
+        order_id: UUID,
+        amount_minor: int,
+        paid_at: datetime,
+    ) -> None: ...
+
     async def ensure_location_access(self, context: TenantContext, location_id: UUID) -> None: ...
 
     async def accessible_location_ids(self, context: TenantContext) -> tuple[UUID, ...]: ...

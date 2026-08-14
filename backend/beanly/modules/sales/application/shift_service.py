@@ -56,9 +56,7 @@ class ShiftService:
         await self.organizations.ensure_location_access(context, register.location_id)
         if not register.is_active:
             raise InvalidSalesOperation("Inactive register cannot open a shift")
-        warehouse = await self.inventory.get_warehouse(
-            context.organization_id, warehouse_id
-        )
+        warehouse = await self.inventory.get_warehouse(context.organization_id, warehouse_id)
         if warehouse is None:
             raise SalesNotFound("Warehouse not found")
         if warehouse.location_id != register.location_id:
@@ -80,26 +78,18 @@ class ShiftService:
             now,
             now,
         )
-        return await self._write(
-            self.repository.add_shift(value), (RegisterShiftOpened(value.id),)
-        )
+        return await self._write(self.repository.add_shift(value), (RegisterShiftOpened(value.id),))
 
-    async def current(
-        self, context: TenantContext, register_id: UUID
-    ) -> RegisterShift | None:
+    async def current(self, context: TenantContext, register_id: UUID) -> RegisterShift | None:
         register = await self.repository.get_register(context.organization_id, register_id)
         if register is None:
             raise SalesNotFound("Register not found")
         await self.organizations.ensure_location_access(context, register.location_id)
         return await self.repository.get_current_shift(context.organization_id, register_id)
 
-    async def close(
-        self, context: TenantContext, shift_id: UUID
-    ) -> RegisterShift:
+    async def close(self, context: TenantContext, shift_id: UUID) -> RegisterShift:
         try:
-            value = await self.repository.get_shift(
-                context.organization_id, shift_id, lock=True
-            )
+            value = await self.repository.get_shift(context.organization_id, shift_id, lock=True)
             if value is None:
                 raise SalesNotFound("Shift not found")
             await self.organizations.ensure_location_access(context, value.location_id)

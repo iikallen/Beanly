@@ -86,9 +86,7 @@ async def custom(
 async def remove(
     order_id: UUID, discount_id: UUID, context: DiscountApplyDep, service: OrderDiscountServiceDep
 ):
-    return await _run(
-        service, context, order_id, service.remove(context, order_id, discount_id)
-    )
+    return await _run(service, context, order_id, service.remove(context, order_id, discount_id))
 
 
 async def _run(service, context, order_id, operation):

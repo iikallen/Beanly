@@ -40,9 +40,7 @@ class SalesOrderReferenceValidator:
 
 
 class InventorySaleGateway:
-    def __init__(
-        self, inventory: InventoryService, session: AsyncSession | None = None
-    ) -> None:
+    def __init__(self, inventory: InventoryService, session: AsyncSession | None = None) -> None:
         self.inventory = inventory
         self.session = session
 
@@ -57,15 +55,11 @@ class InventorySaleGateway:
         occurred_at: datetime | None = None,
     ) -> StagedSaleResult:
         if not lines:
-            return StagedSaleResult(
-                None, Decimal(0), SaleCostStatus.COMPLETE, (), ()
-            )
+            return StagedSaleResult(None, Decimal(0), SaleCostStatus.COMPLETE, (), ())
         if any(line.quantity <= 0 for line in lines):
             raise InvalidInventoryOperation("Sale quantities must be positive")
         item_ids = tuple(line.inventory_item_id for line in lines)
-        existing_costs = await self.inventory.current_costs(
-            context, warehouse_id, item_ids
-        )
+        existing_costs = await self.inventory.current_costs(context, warehouse_id, item_ids)
         missing = tuple(sorted(set(item_ids) - existing_costs.keys(), key=str))
         staged = await self.inventory.create_and_post_staged(
             context,
@@ -132,8 +126,7 @@ class InventorySaleGateway:
             select(InventoryTransactionModel.id)
             .join(
                 InventoryTransactionLineModel,
-                InventoryTransactionLineModel.transaction_id
-                == InventoryTransactionModel.id,
+                InventoryTransactionLineModel.transaction_id == InventoryTransactionModel.id,
             )
             .where(
                 InventoryTransactionLineModel.inventory_item_id.in_(item_ids),

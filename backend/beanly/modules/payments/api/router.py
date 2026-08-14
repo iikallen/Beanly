@@ -38,6 +38,7 @@ from beanly.modules.payments.domain.exceptions import (
     ExternalPaymentAttemptNotFound,
     ExternalTerminalUnavailable,
     InvalidPayment,
+    LoyaltyReservationInvalid,
     OrderAlreadyPaid,
     OrderNotPayable,
     OrderShiftClosed,
@@ -212,9 +213,7 @@ async def get_order_payment(
     return PaymentResponse.from_entity(value)
 
 
-@router.get(
-    "/shifts/{shift_id}/summary", response_model=ShiftPaymentSummaryResponse
-)
+@router.get("/shifts/{shift_id}/summary", response_model=ShiftPaymentSummaryResponse)
 async def get_shift_summary(
     shift_id: UUID,
     context: PaymentReadDep,
@@ -269,9 +268,7 @@ def _http_error(exc: Exception) -> HTTPException:
         "code": getattr(exc, "code", "PAYMENT_ERROR"),
         "message": str(exc) or "Payment operation failed",
     }
-    if isinstance(
-        exc, (PaymentNotFound, ExternalPaymentAttemptNotFound, TerminalBindingNotFound)
-    ):
+    if isinstance(exc, (PaymentNotFound, ExternalPaymentAttemptNotFound, TerminalBindingNotFound)):
         return HTTPException(status.HTTP_404_NOT_FOUND, detail)
     if isinstance(exc, ExternalTerminalUnavailable):
         return HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail)
@@ -287,6 +284,7 @@ def _http_error(exc: Exception) -> HTTPException:
         (
             PaymentConflict,
             PaymentIdempotencyConflict,
+            LoyaltyReservationInvalid,
             OrderAlreadyPaid,
             OrderNotPayable,
             OrderShiftClosed,

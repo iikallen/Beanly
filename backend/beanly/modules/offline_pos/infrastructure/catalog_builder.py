@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from beanly.modules.customers.infrastructure.db.models import PromotionAudienceModel
 from beanly.modules.fiscal.infrastructure.db.models import (
     FiscalTaxProfileModel,
     FiscalVariantProfileModel,
@@ -103,10 +104,18 @@ class CatalogSnapshotBuilder:
             (
                 await self.session.execute(
                     select(PromotionModel)
+                    .outerjoin(
+                        PromotionAudienceModel,
+                        PromotionAudienceModel.promotion_id == PromotionModel.id,
+                    )
                     .where(
                         PromotionModel.organization_id == organization_id,
                         PromotionModel.status == "ACTIVE",
                         PromotionModel.application_mode.in_(["AUTOMATIC", "MANUAL"]),
+                        (
+                            PromotionAudienceModel.promotion_id.is_(None)
+                            | (PromotionAudienceModel.kind == "ALL")
+                        ),
                     )
                     .order_by(
                         PromotionModel.priority.desc(),

@@ -32,7 +32,7 @@ export function AppSidebar({
   settingsCanReadIntegrations,
   settingsCanReadFiscal,
 }: {
-  active: "dashboard" | "analytics" | "pos" | "promotions" | "fiscal" | "inventory" | "menu" | "onboarding" | "purchasing" | "finance" | "team" | "settings";
+  active: "dashboard" | "analytics" | "pos" | "customers" | "promotions" | "fiscal" | "inventory" | "menu" | "onboarding" | "purchasing" | "finance" | "team" | "settings";
   teamView?: "employees" | "invitations";
   onTeamView?: (view: "employees" | "invitations") => void;
   settingsCanReadIntegrations?: boolean;
@@ -123,6 +123,14 @@ export function AppSidebar({
         >
           <Monitor aria-hidden="true" />
           POS
+        </button>
+        <button
+          className={active === "customers" ? "app-nav-item is-active" : "app-nav-item"}
+          type="button"
+          onClick={() => router.push("/app/customers")}
+        >
+          <Users aria-hidden="true" />
+          Customers
         </button>
         <button
           className={active === "promotions" ? "app-nav-item is-active" : "app-nav-item"}

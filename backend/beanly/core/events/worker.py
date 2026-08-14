@@ -24,6 +24,8 @@ from beanly.modules.analytics.infrastructure.handlers import register_analytics_
 from beanly.modules.analytics.infrastructure.source_reader import (
     SqlAlchemyAnalyticsSourceReader,
 )
+from beanly.modules.customers.infrastructure.handlers import register_customer_handlers
+from beanly.modules.customers.infrastructure.service import CustomerProjectionService
 from beanly.modules.finance.application.projection_service import FinanceProjectionService
 from beanly.modules.finance.infrastructure.db.repositories import (
     SqlAlchemyFinanceRepository,
@@ -35,6 +37,7 @@ from beanly.modules.finance.infrastructure.source_reader import (
 from beanly.modules.fiscal.infrastructure.live_repository import (
     SqlAlchemyFiscalLiveRepository,
 )
+from beanly.modules.identity.infrastructure.db import models as _identity_models  # noqa: F401
 from beanly.modules.integrations.infrastructure.db.repositories import (
     SqlAlchemyIntegrationRepository,
 )
@@ -79,6 +82,7 @@ async def run_worker(shutdown: ShutdownSignal | None = None) -> None:
                 SqlAlchemyAnalyticsSourceReader(session),
             ),
         )
+        register_customer_handlers(handlers, CustomerProjectionService(session))
         register_integration_handlers(
             handlers,
             SqlAlchemyIntegrationRepository(session),

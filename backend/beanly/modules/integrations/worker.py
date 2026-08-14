@@ -16,6 +16,7 @@ from beanly.core.observability import (
     shutdown_telemetry,
 )
 from beanly.core.runtime import ShutdownSignal
+from beanly.modules.customers.infrastructure.db import models as _customer_models  # noqa: F401
 from beanly.modules.fiscal.infrastructure.live_repository import (
     SqlAlchemyFiscalLiveRepository,
 )

@@ -185,10 +185,14 @@ def to_order(model: SalesOrderModel) -> SalesOrder:
                         value.allocations, key=lambda item: (item.sort_order, item.id)
                     )
                 ),
+                value.audience_kind,
             )
             for value in sorted(
                 model.__dict__.get("discounts", ()),
                 key=lambda item: (item.sort_order, item.id),
             )
         ),
+        model.customer_id,
+        model.customer_name_snapshot,
+        model.customer_phone_snapshot,
     )

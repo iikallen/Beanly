@@ -52,7 +52,7 @@ export function priceOfflineOrder(
         source: promotion.application_mode === "AUTOMATIC" ? "AUTOMATIC" : "MANUAL", promotion_name: promotion.name,
         discount_kind: promotion.kind, scope: promotion.scope, percent_rate: promotion.percent_rate,
         configured_amount_minor: promotion.amount_minor ?? promotion.fixed_price_minor, promo_code_snapshot: null, reason: null,
-        applied_by_user_id: null, applied_at: occurredAt.toISOString(), discount_total_minor: String(discount), sort_order: applied.length,
+        applied_by_user_id: null, applied_at: occurredAt.toISOString(), discount_total_minor: String(discount), sort_order: applied.length, audience_kind: null,
         allocations: [...itemAllocations].filter(([, value]) => value > BigInt(0)).map(([order_item_id, value], index) => ({ order_item_id, eligible_amount_minor: String(itemWeights.get(order_item_id) ?? BigInt(0)), discount_amount_minor: String(value), sort_order: index })),
       });
     }

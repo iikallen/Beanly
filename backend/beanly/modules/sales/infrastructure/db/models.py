@@ -119,6 +119,11 @@ class SalesOrderModel(Base):
     location_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("locations.id"), index=True)
     shift_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("register_shifts.id"), index=True)
     warehouse_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("warehouses.id"))
+    customer_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("customers.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    customer_name_snapshot: Mapped[str | None] = mapped_column(String(201), nullable=True)
+    customer_phone_snapshot: Mapped[str | None] = mapped_column(String(32), nullable=True)
     number: Mapped[int] = mapped_column(BigInteger)
     client_order_id: Mapped[UUID] = mapped_column(Uuid)
     version: Mapped[int] = mapped_column(default=1)

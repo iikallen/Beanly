@@ -83,9 +83,10 @@ class PromotionWrite(BaseModel):
             if self.scope != PromotionScope.ITEM or not {TargetRole.BUY, TargetRole.GET} <= roles:
                 raise ValueError("BOGO requires ITEM scope with BUY and GET targets")
         elif self.scope == PromotionScope.COMBO:
-            if self.discount_kind != DiscountKind.FIXED_PRICE or sum(
-                value.role == TargetRole.COMBO_COMPONENT for value in self.targets
-            ) < 2:
+            if (
+                self.discount_kind != DiscountKind.FIXED_PRICE
+                or sum(value.role == TargetRole.COMBO_COMPONENT for value in self.targets) < 2
+            ):
                 raise ValueError("COMBO requires FIXED_PRICE and at least two components")
         elif self.scope == PromotionScope.ITEM and TargetRole.ELIGIBLE not in roles:
             raise ValueError("ITEM promotion requires an ELIGIBLE target")

@@ -359,6 +359,7 @@ class OrderService:
         await self._assert_access(context, order)
         if order.status != OrderStatus.OPEN:
             raise OrderImmutable("Only OPEN orders can be changed")
+        await self.pricing.ensure_mutable(context.organization_id, order.id)
         shift = await self.repository.get_shift(context.organization_id, order.shift_id)
         if shift is None or shift.status != RegisterShiftStatus.OPEN:
             raise InvalidSalesOperation("Order shift is not OPEN")

@@ -14,6 +14,7 @@ from beanly.modules.payments.application.ports import (
 )
 from beanly.modules.payments.domain.exceptions import (
     InvalidPayment,
+    LoyaltyReservationInvalid,
     OrderAlreadyPaid,
     PaymentNotFound,
 )
@@ -108,6 +109,27 @@ class SalesSettlementGateway:
             )
         except OrderImmutable as exc:
             raise OrderAlreadyPaid("Order is already paid") from exc
+
+    async def stage_loyalty_payment(
+        self,
+        payment_id: UUID,
+        organization_id: UUID,
+        order_id: UUID,
+        amount_minor: int,
+        paid_at: datetime,
+    ) -> None:
+        from beanly.modules.customers.infrastructure.service import CustomerProjectionService
+
+        try:
+            await CustomerProjectionService(self.repository.session).apply_payment(
+                payment_id, organization_id, order_id, amount_minor, paid_at
+            )
+        except Exception as exc:
+            from beanly.modules.customers.domain.exceptions import CustomerError
+
+            if isinstance(exc, CustomerError):
+                raise LoyaltyReservationInvalid(str(exc)) from exc
+            raise
 
     async def ensure_location_access(self, context: TenantContext, location_id: UUID) -> None:
         await self.organizations.ensure_location_access(context, location_id)

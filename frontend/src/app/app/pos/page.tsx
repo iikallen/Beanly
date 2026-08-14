@@ -12,6 +12,7 @@ import {
   ShoppingBag,
   Tags,
   Trash2,
+  UserRound,
   X,
 } from "lucide-react";
 import Link from "next/link";
@@ -26,6 +27,8 @@ import { useOfflinePos } from "@/hooks/use-offline-pos";
 import {
   ApiError,
   api,
+  type Customer,
+  type CustomerLoyalty,
   type MenuProduct,
   type MenuReadModel,
   type ExternalPaymentAttempt,
@@ -34,6 +37,7 @@ import {
   type PosRegister,
   type PosWarehouseChoice,
   type Promotion,
+  type LoyaltyQuote,
   type ProductVariant,
   type RegisterShift,
   type SalesOrderType,
@@ -96,6 +100,15 @@ export default function PosPage() {
   const [search, setSearch] = useState("");
   const [showOrders, setShowOrders] = useState(false);
   const [showDiscounts, setShowDiscounts] = useState(false);
+  const [showCustomers, setShowCustomers] = useState(false);
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [customerResults, setCustomerResults] = useState<Customer[]>([]);
+  const [attachedCustomer, setAttachedCustomer] = useState<Customer | null>(null);
+  const [customerLoyalty, setCustomerLoyalty] = useState<CustomerLoyalty | null>(null);
+  const [loyaltyPoints, setLoyaltyPoints] = useState("");
+  const [loyaltyQuote, setLoyaltyQuote] = useState<LoyaltyQuote | null>(null);
+  const [newCustomerPhone, setNewCustomerPhone] = useState("");
+  const [newCustomerName, setNewCustomerName] = useState("");
   const [promotions, setPromotions] = useState<Promotion[]>([]);
   const [promoCode, setPromoCode] = useState("");
   const [customType, setCustomType] = useState<"PERCENT" | "FIXED_AMOUNT">("PERCENT");
@@ -116,6 +129,7 @@ export default function PosPage() {
   const [splitOther, setSplitOther] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
   const [completedPayment, setCompletedPayment] = useState<CompletedLocalPayment | null>(null);
+  const [paymentCustomerName, setPaymentCustomerName] = useState<string | null>(null);
   const [cardConfirmed, setCardConfirmed] = useState(false);
   const [paymentBusy, setPaymentBusy] = useState(false);
   const [paymentError, setPaymentError] = useState("");
@@ -129,6 +143,7 @@ export default function PosPage() {
   const [clockNow, setClockNow] = useState(0);
   const pendingPayment = useRef<{ id: string; payload: string } | null>(null);
   const pendingTerminal = useRef<{ id: string; fingerprint: string } | null>(null);
+  const pendingRedemption = useRef<{ id: string; payload: string } | null>(null);
 
   const offline = useOfflinePos(offlineSession);
 
@@ -144,16 +159,22 @@ export default function PosPage() {
   const canReadRefunds = permissions.includes("sales.read") && permissions.includes("payments.read");
   const canApplyDiscount = permissions.includes("discounts.apply");
   const canOverrideDiscount = permissions.includes("discounts.override");
+  const canReadCustomers = permissions.includes("customers.read");
+  const canWriteCustomers = permissions.includes("customers.write");
+  const canReadLoyalty = permissions.includes("loyalty.read");
+  const canRedeemLoyalty = permissions.includes("loyalty.redeem");
   const orders = offline.orders.filter((order) => !order.status.startsWith("SYNCED_CANCELLED") && !order.status.startsWith("SYNCED_PAID"));
   const selectedOrder = orders.find((order) => order.id === currentOrderId)
     ?? orders.find((order) => order.status === "OPEN" || order.status === "SYNCED_OPEN")
     ?? null;
   const currentOrder = selectedOrder && (selectedOrder.status === "OPEN" || selectedOrder.status === "SYNCED_OPEN") ? selectedOrder : null;
+  const loyaltyReserved = Boolean(currentOrder?.discounts.some(isLoyaltyDiscount));
   const selectedRegister = registers.find((register) => register.id === selectedRegisterId);
   const hasOpenOrders = orders.some((order) => order.status === "OPEN" || order.status === "SYNCED_OPEN");
   const sessionActive = Boolean(offlineSession && offlineSession.status === "ACTIVE" && clockNow + offlineSession.clock_offset_ms < Date.parse(offlineSession.expires_at));
   const canWriteLocal = sessionActive && offline.isWriter;
   const terminalBinding = terminalBindings.find((binding) => binding.is_active) ?? null;
+  const canMutateCurrent = canCreate && canWriteLocal && !loyaltyReserved;
 
   useEffect(() => {
     const tick = () => setClockNow(Date.now());
@@ -277,6 +298,34 @@ export default function PosPage() {
     void loadPromotions();
     return () => { cancelled = true; };
   }, [accessToken, canApplyDiscount, offline.networkStatus, organizationId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    function clearCustomerState() {
+      setAttachedCustomer(null); setCustomerLoyalty(null); setCustomerResults([]); setCustomerSearch("");
+      setLoyaltyPoints(""); setLoyaltyQuote(null); setNewCustomerPhone(""); setNewCustomerName(""); setShowCustomers(false);
+      pendingRedemption.current = null;
+    }
+    async function loadCustomer() {
+      if (!accessToken || !organizationId || !currentOrder?.server_order_id || offline.networkStatus !== "ONLINE" || !canReadCustomers) {
+        if (!cancelled) clearCustomerState();
+        return;
+      }
+      clearCustomerState();
+      try {
+        const order = await api.getSalesOrder(currentOrder.server_order_id, organizationId, accessToken);
+        if (cancelled) return;
+        if (!order.customer_id) { setAttachedCustomer(null); setCustomerLoyalty(null); return; }
+        const [customer, balance] = await Promise.all([
+          api.getCustomer(order.customer_id, organizationId, accessToken),
+          canReadLoyalty ? api.getCustomerLoyalty(order.customer_id, organizationId, accessToken) : Promise.resolve(null),
+        ]);
+        if (!cancelled) { setAttachedCustomer(customer); setCustomerLoyalty(balance); }
+      } catch { if (!cancelled) { setAttachedCustomer(null); setCustomerLoyalty(null); } }
+    }
+    void loadCustomer();
+    return () => { cancelled = true; };
+  }, [accessToken, canReadCustomers, canReadLoyalty, currentOrder?.server_order_id, offline.networkStatus, organizationId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -463,7 +512,7 @@ export default function PosPage() {
       try {
         session = await startOfflineSession(shift.id, organizationId, accessToken, shell);
       } catch (caught) {
-        if (!canManageDevice || !(caught instanceof OfflineApiError) || caught.status !== 401) throw caught;
+        if (!canManageDevice || !(caught instanceof OfflineApiError) || ![401, 404].includes(caught.status)) throw caught;
         await pairDevice(selectedRegister.id, `${selectedRegister.name} POS`, organizationId, accessToken);
         session = await startOfflineSession(shift.id, organizationId, accessToken, shell);
       }
@@ -530,7 +579,7 @@ export default function PosPage() {
   }
 
   function chooseProduct(product: MenuProduct) {
-    if (!currentOrder || menuCatalogId !== currentOrder.catalog_snapshot_id || !canCreate || !canWriteLocal || product.is_available === false || product.is_visible === false) return;
+    if (!currentOrder || menuCatalogId !== currentOrder.catalog_snapshot_id || !canMutateCurrent || product.is_available === false || product.is_visible === false) return;
     const variants = product.variants.filter((variant) => variant.status === "ACTIVE");
     const variant = variants.find((item) => item.is_default) ?? variants[0];
     if (variant) openConfiguration(product, variant);
@@ -565,7 +614,7 @@ export default function PosPage() {
   }
 
   async function saveConfiguration() {
-    if (!currentOrder || !configuration || !offlineSession || !canWriteLocal) return;
+    if (!currentOrder || !configuration || !offlineSession || !canMutateCurrent) return;
     await run(async () => {
       if (!catalogSelectionIsValid(configuration.product, configuration.variant, selectedOptionIds)) {
         throw new Error("This product configuration is no longer available in the cached catalog");
@@ -590,7 +639,7 @@ export default function PosPage() {
   }
 
   async function updateQuantity(item: OfflineOrderItem, quantity: number) {
-    if (!currentOrder || !offlineSession || !canWriteLocal || quantity < 1) return;
+    if (!currentOrder || !offlineSession || !canMutateCurrent || quantity < 1) return;
     await run(async () => afterLocalWrite(await updateLocalOrder(currentOrder.id, (order) => {
       const target = order.items.find((candidate) => candidate.id === item.id);
       if (target) target.quantity = quantity;
@@ -598,14 +647,14 @@ export default function PosPage() {
   }
 
   async function removeItem(itemId: string) {
-    if (!currentOrder || !offlineSession || !canWriteLocal) return;
+    if (!currentOrder || !offlineSession || !canMutateCurrent) return;
     await run(async () => afterLocalWrite(await updateLocalOrder(currentOrder.id, (order) => {
       order.items = order.items.filter((item) => item.id !== itemId);
     }, offlineSession.clock_offset_ms)));
   }
 
   async function cancelOrder() {
-    if (!currentOrder || !offlineSession || !canWriteLocal) return;
+    if (!currentOrder || !offlineSession || !canWriteLocal || loyaltyReserved) return;
     const reason = cancelReason.trim();
     if (!reason) return;
     await run(async () => {
@@ -641,6 +690,7 @@ export default function PosPage() {
     });
     if (!ready) return;
     setPaymentOrder(priced);
+    setPaymentCustomerName(attachedCustomer ? posCustomerName(attachedCustomer) : null);
     setPaymentMode(null);
     setPaymentCashReceived(priceMinorToInput(priced.total_minor));
     setSplitCash("");
@@ -662,6 +712,7 @@ export default function PosPage() {
   function closePayment() {
     if (paymentBusy) return;
     setPaymentOrder(null);
+    setPaymentCustomerName(null);
     setCompletedPayment(null);
     setPaymentError("");
     pendingPayment.current = null;
@@ -678,11 +729,76 @@ export default function PosPage() {
   }
 
   async function applyDiscount(action: () => Promise<import("@/lib/api").SalesOrder>) {
-    if (!currentOrder?.server_order_id || offline.networkStatus !== "ONLINE") return;
+    if (!currentOrder?.server_order_id || offline.networkStatus !== "ONLINE" || loyaltyReserved) return;
     await run(async () => {
       const priced = await action();
       await afterLocalWrite(await applyServerPricing(currentOrder.id, priced));
       setPromoCode(""); setCustomValue(""); setCustomReason("");
+    });
+  }
+
+  async function searchCustomers() {
+    if (!accessToken || !organizationId || offline.networkStatus !== "ONLINE" || !canReadCustomers) return;
+    await run(async () => setCustomerResults(await api.listCustomers(organizationId, accessToken, { search: customerSearch.trim() || undefined, limit: 20 })));
+  }
+
+  async function attachCustomer(customer: Customer) {
+    if (!accessToken || !organizationId || !currentOrder?.server_order_id || offline.networkStatus !== "ONLINE" || !canWriteCustomers) return;
+    await run(async () => {
+      const priced = await api.attachSalesOrderCustomer(currentOrder.server_order_id!, customer.id, organizationId, accessToken);
+      await afterLocalWrite(await applyServerPricing(currentOrder.id, priced));
+      setAttachedCustomer(customer);
+      setCustomerLoyalty(canReadLoyalty ? await api.getCustomerLoyalty(customer.id, organizationId, accessToken) : null);
+      setLoyaltyQuote(null); setLoyaltyPoints(""); setShowCustomers(false);
+    });
+  }
+
+  async function createAndAttachCustomer() {
+    if (!accessToken || !organizationId || !canWriteCustomers || !newCustomerPhone.trim()) return;
+    await run(async () => {
+      const [first_name, ...rest] = newCustomerName.trim().split(/\s+/).filter(Boolean);
+      const customer = await api.createCustomer({ phone: newCustomerPhone.trim(), first_name: first_name || null, last_name: rest.join(" ") || null }, organizationId, accessToken);
+      if (!currentOrder?.server_order_id) return;
+      const priced = await api.attachSalesOrderCustomer(currentOrder.server_order_id, customer.id, organizationId, accessToken);
+      await afterLocalWrite(await applyServerPricing(currentOrder.id, priced));
+      setAttachedCustomer(customer);
+      setCustomerLoyalty(canReadLoyalty ? await api.getCustomerLoyalty(customer.id, organizationId, accessToken) : null);
+      setShowCustomers(false);
+      setNewCustomerPhone(""); setNewCustomerName("");
+    });
+  }
+
+  async function detachCustomer() {
+    if (!accessToken || !organizationId || !currentOrder?.server_order_id || loyaltyReserved || !canWriteCustomers) return;
+    await run(async () => {
+      const priced = await api.attachSalesOrderCustomer(currentOrder.server_order_id!, null, organizationId, accessToken);
+      await afterLocalWrite(await applyServerPricing(currentOrder.id, priced));
+      setAttachedCustomer(null); setCustomerLoyalty(null); setLoyaltyQuote(null); setLoyaltyPoints("");
+    });
+  }
+
+  async function quoteLoyalty() {
+    if (!accessToken || !organizationId || !currentOrder?.server_order_id || !/^\d+$/.test(loyaltyPoints) || BigInt(loyaltyPoints) <= BigInt(0)) return;
+    await run(async () => setLoyaltyQuote(await api.quoteSalesOrderLoyalty(currentOrder.server_order_id!, loyaltyPoints, organizationId, accessToken)));
+  }
+
+  async function redeemLoyalty() {
+    if (!accessToken || !organizationId || !currentOrder?.server_order_id || !loyaltyQuote) return;
+    const payload = `${currentOrder.server_order_id}:${loyaltyQuote.points}`;
+    if (!pendingRedemption.current || pendingRedemption.current.payload !== payload) pendingRedemption.current = { id: crypto.randomUUID(), payload };
+    await run(async () => {
+      const priced = await api.redeemSalesOrderLoyalty(currentOrder.server_order_id!, loyaltyQuote.points, pendingRedemption.current!.id, organizationId, accessToken);
+      await afterLocalWrite(await applyServerPricing(currentOrder.id, priced));
+      setLoyaltyQuote(null); setLoyaltyPoints(""); pendingRedemption.current = null;
+    });
+  }
+
+  async function releaseLoyalty() {
+    if (!accessToken || !organizationId || !currentOrder?.server_order_id) return;
+    await run(async () => {
+      const priced = await api.releaseSalesOrderLoyalty(currentOrder.server_order_id!, organizationId, accessToken);
+      await afterLocalWrite(await applyServerPricing(currentOrder.id, priced));
+      setLoyaltyQuote(null); setLoyaltyPoints(""); pendingRedemption.current = null;
     });
   }
 
@@ -699,6 +815,7 @@ export default function PosPage() {
 
   async function removeDiscount(discount: NonNullable<OfflineOrder["discounts"]>[number]) {
     if (!currentOrder) return;
+    if (isLoyaltyDiscount(discount)) return releaseLoyalty();
     if (offline.networkStatus === "ONLINE" && currentOrder.server_order_id) return applyDiscount(() => api.removeSalesOrderDiscount(currentOrder.server_order_id!, discount.id, currentOrder.organization_id, accessToken!));
     if (!offlineSession || discount.source !== "MANUAL" || !discount.promotion_id) return;
     await run(async () => afterLocalWrite(await updateLocalOrder(currentOrder.id, (order) => {
@@ -946,7 +1063,7 @@ export default function PosPage() {
                 const activeVariants = product.variants.filter((variant) => variant.status === "ACTIVE");
                 const from = activeVariants.reduce<string | null>((lowest, variant) => lowest === null || BigInt(variant.effective_price_minor) < BigInt(lowest) ? variant.effective_price_minor : lowest, null);
                 return (
-                  <button disabled={busy || !canCreate || !canWriteLocal || menuCatalogId !== currentOrder.catalog_snapshot_id || !activeVariants.length || product.is_available === false || product.is_visible === false} key={product.id} type="button" onClick={() => chooseProduct(product)}>
+                  <button disabled={busy || !canMutateCurrent || menuCatalogId !== currentOrder.catalog_snapshot_id || !activeVariants.length || product.is_available === false || product.is_visible === false} key={product.id} type="button" onClick={() => chooseProduct(product)}>
                     <span className="pos-product-icon" aria-hidden="true">{product.name.charAt(0)}</span>
                     <strong>{product.name}</strong>
                     <small>{activeVariants.length > 1 ? `${activeVariants.length} variants · ` : ""}{from ? formatMenuPriceMinor(from, currency) : "Unavailable"}</small>
@@ -963,7 +1080,7 @@ export default function PosPage() {
             <>
               <div className="pos-receipt-heading">
                 <div><span>Current order</span><h2>{displayOrderNumber(currentOrder)}</h2></div>
-                <select aria-label="Order type" disabled={busy || !canCreate || !canWriteLocal} value={currentOrder.order_type} onChange={(event) => run(async () => { if (!offlineSession) return; await afterLocalWrite(await updateLocalOrder(currentOrder.id, (order) => { order.order_type = event.target.value as SalesOrderType; }, offlineSession.clock_offset_ms)); })}>
+                <select aria-label="Order type" disabled={busy || !canMutateCurrent} value={currentOrder.order_type} onChange={(event) => run(async () => { if (!offlineSession) return; await afterLocalWrite(await updateLocalOrder(currentOrder.id, (order) => { order.order_type = event.target.value as SalesOrderType; }, offlineSession.clock_offset_ms)); })}>
                   <option value="DINE_IN">Dine-in</option><option value="TAKEAWAY">Takeaway</option><option value="DELIVERY">Delivery</option>
                 </select>
               </div>
@@ -977,20 +1094,22 @@ export default function PosPage() {
                     {item.modifiers.length > 0 && <p>{item.modifiers.map((modifier) => modifier.modifier_option_name).join(" · ")}</p>}
                     {item.note && <p>{item.note}</p>}
                     <div className="pos-line-actions">
-                      <span className="pos-quantity"><button aria-label={`Decrease ${item.product_name}`} disabled={busy || !canCreate || !canWriteLocal || item.quantity <= 1} type="button" onClick={() => updateQuantity(item, item.quantity - 1)}><Minus /></button><b>{item.quantity}</b><button aria-label={`Increase ${item.product_name}`} disabled={busy || !canCreate || !canWriteLocal} type="button" onClick={() => updateQuantity(item, item.quantity + 1)}><Plus /></button></span>
-                      <button disabled={busy || !canCreate || !canWriteLocal} type="button" onClick={() => editItemConfiguration(item)}>Customize</button>
-                      <button className="danger-link" aria-label={`Remove ${item.product_name}`} disabled={busy || !canCreate || !canWriteLocal} type="button" onClick={() => removeItem(item.id)}><Trash2 /></button>
+                      <span className="pos-quantity"><button aria-label={`Decrease ${item.product_name}`} disabled={busy || !canMutateCurrent || item.quantity <= 1} type="button" onClick={() => updateQuantity(item, item.quantity - 1)}><Minus /></button><b>{item.quantity}</b><button aria-label={`Increase ${item.product_name}`} disabled={busy || !canMutateCurrent} type="button" onClick={() => updateQuantity(item, item.quantity + 1)}><Plus /></button></span>
+                      <button disabled={busy || !canMutateCurrent} type="button" onClick={() => editItemConfiguration(item)}>Customize</button>
+                      <button className="danger-link" aria-label={`Remove ${item.product_name}`} disabled={busy || !canMutateCurrent} type="button" onClick={() => removeItem(item.id)}><Trash2 /></button>
                     </div>
                   </article>
                 ))}
                 {currentOrder.items.length === 0 && <div className="pos-receipt-empty"><ShoppingBag aria-hidden="true" /><p>Add a product to start this order.</p></div>}
               </div>
-              {(currentOrder.discounts ?? []).length > 0 && <div className="pos-discount-lines">{currentOrder.discounts.map((discount) => <div key={discount.id}><span>{discount.source === "AUTOMATIC" && "⚡ "}{discount.promotion_name}</span><strong>−{formatMenuPriceMinor(discount.discount_total_minor, currentOrder.currency_code)}</strong>{discount.source !== "AUTOMATIC" && canApplyDiscount && <button aria-label={`Remove ${discount.promotion_name}`} disabled={busy || (offline.networkStatus !== "ONLINE" && discount.source !== "MANUAL")} type="button" onClick={() => void removeDiscount(discount)}><X /></button>}</div>)}</div>}
-              <button className="pos-discounts-button" disabled={!canApplyDiscount || !canWriteLocal} type="button" onClick={() => setShowDiscounts(true)}><Tags />Discounts{BigInt(currentOrder.discount_total_minor ?? "0") > BigInt(0) && <span>Save {formatMenuPriceMinor(currentOrder.discount_total_minor, currentOrder.currency_code)}</span>}</button>
+              <button className="pos-customer-button" disabled={busy || !canReadCustomers || (!attachedCustomer && !canWriteCustomers) || offline.networkStatus !== "ONLINE" || !currentOrder.server_order_id} type="button" onClick={() => { setCustomerSearch(""); setCustomerResults([]); setShowCustomers(true); }}><UserRound /><span>{attachedCustomer ? <><strong>{posCustomerName(attachedCustomer)}</strong><small>{attachedCustomer.tier?.name ?? "Member"}{customerLoyalty ? ` · ${formatPoints(customerLoyalty.available_points)} points` : ""}</small></> : <><strong>Add customer</strong><small>{offline.networkStatus === "ONLINE" ? "Search by phone or name" : "Online only"}</small></>}</span></button>
+              {attachedCustomer && (currentOrder.discounts ?? []).some((discount) => discount.audience_kind) && <p className="pos-customer-promotion">✓ Customer offer applied</p>}
+              {(currentOrder.discounts ?? []).length > 0 && <div className="pos-discount-lines">{currentOrder.discounts.map((discount) => <div key={discount.id}><span>{discount.source === "AUTOMATIC" && "⚡ "}{discount.promotion_name}{discount.audience_kind && <small>{audienceLabel(discount.audience_kind)}</small>}</span><strong>−{formatMenuPriceMinor(discount.discount_total_minor, currentOrder.currency_code)}</strong>{discount.source !== "AUTOMATIC" && (isLoyaltyDiscount(discount) ? canRedeemLoyalty : canApplyDiscount) && <button aria-label={`Remove ${discount.promotion_name}`} disabled={busy || (offline.networkStatus !== "ONLINE" && discount.source !== "MANUAL")} type="button" onClick={() => void removeDiscount(discount)}><X /></button>}</div>)}</div>}
+              <button className="pos-discounts-button" disabled={!canApplyDiscount || !canWriteLocal || loyaltyReserved} type="button" onClick={() => setShowDiscounts(true)}><Tags />Discounts{BigInt(currentOrder.discount_total_minor ?? "0") > BigInt(0) && <span>Save {formatMenuPriceMinor(currentOrder.discount_total_minor, currentOrder.currency_code)}</span>}</button>
               {BigInt(currentOrder.discount_total_minor ?? "0") > BigInt(0) && <div className="pos-receipt-subtotal"><span>Subtotal</span><strong>{formatMenuPriceMinor(currentOrder.subtotal_minor, currentOrder.currency_code)}</strong></div>}
               <div className="pos-receipt-total"><span>Total</span><strong>{formatMenuPriceMinor(currentOrder.total_minor, currentOrder.currency_code)}</strong></div>
               <button className="primary-button pos-pay-button" disabled={busy || !canPay || !canWriteLocal || currentOrder.items.length === 0} type="button" onClick={openPayment}>Pay · {formatMenuPriceMinor(currentOrder.total_minor, currentOrder.currency_code)}</button>
-              {canCancel && <button className="pos-cancel-order" disabled={busy || !canWriteLocal} type="button" onClick={openCancelDialog}>Cancel order</button>}
+              {canCancel && <button className="pos-cancel-order" disabled={busy || !canWriteLocal || loyaltyReserved} type="button" onClick={openCancelDialog}>Cancel order</button>}
             </>
           ) : (
             <div className="pos-receipt-empty"><ShoppingBag aria-hidden="true" /><h2>No order selected</h2></div>
@@ -1010,6 +1129,19 @@ export default function PosPage() {
               {canOverrideDiscount && <section className="pos-discount-group"><h3>Manager · Custom discount</h3>{offline.networkStatus !== "ONLINE" || !currentOrder.server_order_id ? <small>Custom discounts require an online, synced order.</small> : <div className="pos-custom-discount"><select value={customType} onChange={(event) => setCustomType(event.target.value as typeof customType)}><option value="PERCENT">Percent</option><option value="FIXED_AMOUNT">Fixed amount</option></select><input min="0" step={customType === "PERCENT" ? "0.0001" : "0.01"} type="number" placeholder={customType === "PERCENT" ? "15" : "500"} value={customValue} onChange={(event) => setCustomValue(event.target.value)} /><input maxLength={1000} placeholder="Reason (required)" value={customReason} onChange={(event) => setCustomReason(event.target.value)} /><button className="secondary-button" disabled={busy || !customValue || !customReason.trim()} type="button" onClick={() => void applyDiscount(() => api.applyCustomDiscount(currentOrder.server_order_id!, { client_discount_id: crypto.randomUUID(), type: customType, ...(customType === "PERCENT" ? { percent: customValue } : { amount_minor: parseMenuPriceToMinor(customValue)! }), reason: customReason.trim() }, currentOrder.organization_id, accessToken!))}>Apply custom</button></div>}</section>}
             </>
             {error && <p className="form-message error" role="alert">{error}</p>}
+          </div>
+        </div>
+      )}
+
+      {showCustomers && currentOrder && (
+        <div className="modal-backdrop" role="presentation">
+          <div className="modal-card pos-customer-modal" role="dialog" aria-modal="true" aria-labelledby="pos-customer-title">
+            <button className="modal-close" type="button" aria-label="Close customers" onClick={() => setShowCustomers(false)}><X /></button>
+            <span className="pos-eyebrow">Current order</span><h2 id="pos-customer-title">Customer &amp; loyalty</h2>
+            {attachedCustomer && <section className="pos-customer-summary"><span className="customer-avatar">{posCustomerName(attachedCustomer).charAt(0)}</span><div><strong>{posCustomerName(attachedCustomer)}</strong><small>{attachedCustomer.phone}{attachedCustomer.tier ? ` · ${attachedCustomer.tier.name}` : ""}</small></div>{canWriteCustomers && <button className="text-button" disabled={busy || loyaltyReserved} type="button" onClick={() => void detachCustomer()}>Detach</button>}</section>}
+            {attachedCustomer && customerLoyalty && <section className="pos-loyalty"><div><span>Available points</span><strong>{formatPoints(customerLoyalty.available_points)}</strong><small>{formatMenuPriceMinor(customerLoyalty.point_value_minor, currentOrder.currency_code)} each · earned after payment</small></div>{loyaltyReserved ? <div className="pos-loyalty-reserved"><span>Points reserved for this order</span><button className="menu-secondary-button" disabled={busy} type="button" onClick={() => void releaseLoyalty()}>Release points</button></div> : canRedeemLoyalty && <><div className="pos-loyalty-quote"><input aria-label="Points to redeem" inputMode="numeric" placeholder="Points to redeem" value={loyaltyPoints} onChange={(event) => { setLoyaltyPoints(event.target.value); setLoyaltyQuote(null); }} /><button className="menu-secondary-button" disabled={busy || !/^\d+$/.test(loyaltyPoints) || BigInt(loyaltyPoints || "0") <= BigInt(0)} type="button" onClick={() => void quoteLoyalty()}>Quote</button></div>{loyaltyQuote && <div className="pos-loyalty-preview"><span>{formatPoints(loyaltyQuote.points)} points</span><strong>−{formatMenuPriceMinor(loyaltyQuote.discount_minor, currentOrder.currency_code)}</strong><button className="menu-primary-button" disabled={busy} type="button" onClick={() => void redeemLoyalty()}>Apply points</button></div>}</>}</section>}
+            {!loyaltyReserved && canWriteCustomers && <section className="pos-customer-search"><h3>{attachedCustomer ? "Change customer" : "Find customer"}</h3><form onSubmit={(event) => { event.preventDefault(); void searchCustomers(); }}><input autoFocus={!attachedCustomer} aria-label="Customer phone or name" placeholder="Phone or name" value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} /><button className="menu-secondary-button" disabled={busy} type="submit"><Search />Search</button></form><div>{customerResults.map((customer) => <button key={customer.id} type="button" onClick={() => void attachCustomer(customer)}><span><strong>{posCustomerName(customer)}</strong><small>{customer.phone}</small></span><span>{customer.tier?.name ?? ""}{customer.loyalty_points_balance !== "0" ? ` · ${formatPoints(customer.loyalty_points_balance)} points` : ""}</span></button>)}</div></section>}
+            {!attachedCustomer && canWriteCustomers && <section className="pos-customer-create"><h3>Quick create</h3><div><input aria-label="New customer phone" required type="tel" placeholder="Phone" value={newCustomerPhone} onChange={(event) => setNewCustomerPhone(event.target.value)} /><input aria-label="New customer name" placeholder="Name (optional)" value={newCustomerName} onChange={(event) => setNewCustomerName(event.target.value)} /><button className="menu-secondary-button" disabled={busy || !newCustomerPhone.trim()} type="button" onClick={() => void createAndAttachCustomer()}><Plus />Create &amp; attach</button></div></section>}
           </div>
         </div>
       )}
@@ -1070,6 +1202,7 @@ export default function PosPage() {
                   <p>Change · {formatMenuPriceMinor(String(completedPayment.lines.reduce((sum, line) => sum + BigInt(line.change_minor), BigInt(0))), completedPayment.currency_code)}</p>
                 )}
                 <p>{completedPayment.origin === "TERMINAL" ? "Provider approved · Fiscal receipt processing" : "Recorded locally · Fiscal receipt pending sync"}</p>
+                {paymentCustomerName && <p>{paymentCustomerName} · Loyalty points post after payment sync</p>}
                 <div className="modal-actions">
                   {completedPayment.origin === "TERMINAL" && <Link className="secondary-button" href="/app/fiscal">Fiscal receipt</Link>}
                   <button className="secondary-button" type="button" onClick={closePayment}>Done</button>
@@ -1200,6 +1333,24 @@ function paymentInputMinor(value: string) {
 
 function formatTime(value: string) {
   return new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+}
+
+function posCustomerName(customer: Customer) {
+  return [customer.first_name, customer.last_name].filter(Boolean).join(" ") || customer.phone;
+}
+
+function formatPoints(value: string) {
+  return new Intl.NumberFormat("en").format(BigInt(value));
+}
+
+function isLoyaltyDiscount(discount: { promotion_name: string; reason: string | null }) {
+  return discount.promotion_name === "Loyalty redemption" && discount.reason?.startsWith("LOYALTY_REDEMPTION");
+}
+
+function audienceLabel(kind: "CUSTOMER" | "TIER" | "BIRTHDAY") {
+  if (kind === "BIRTHDAY") return " · Birthday offer";
+  if (kind === "TIER") return " · Tier offer";
+  return " · Customer offer";
 }
 
 function messageOf(error: unknown) {

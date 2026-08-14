@@ -28,9 +28,7 @@ from beanly.modules.sales.domain.exceptions import (
 
 
 class MenuSalesGateway:
-    def __init__(
-        self, repository: MenuRepository, customization: CustomizationService
-    ) -> None:
+    def __init__(self, repository: MenuRepository, customization: CustomizationService) -> None:
         self.repository = repository
         self.customization = customization
 
@@ -47,9 +45,7 @@ class MenuSalesGateway:
             variant = await self.repository.get_variant(context.organization_id, variant_id)
             if variant is None:
                 raise SalesNotFound("Variant not found")
-            product = await self.repository.get_product(
-                context.organization_id, variant.product_id
-            )
+            product = await self.repository.get_product(context.organization_id, variant.product_id)
             if product is None:
                 raise SalesNotFound("Product not found")
             location = await self.repository.get_product_location(

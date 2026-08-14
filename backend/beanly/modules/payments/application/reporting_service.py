@@ -55,12 +55,9 @@ class PaymentsReportingService:
         location_ids: tuple[UUID, ...],
         buckets: tuple[tuple[datetime, datetime], ...],
     ) -> tuple[PaymentTrendRow, ...]:
-        rows = await self.repository.dashboard_trend(
-            organization_id, location_ids, buckets
-        )
+        rows = await self.repository.dashboard_trend(organization_id, location_ids, buckets)
         return tuple(
-            PaymentTrendRow(Decimal(amount_minor) / MINOR, orders)
-            for amount_minor, orders in rows
+            PaymentTrendRow(Decimal(amount_minor) / MINOR, orders) for amount_minor, orders in rows
         )
 
     async def location_sales_summary(
@@ -89,6 +86,5 @@ class PaymentsReportingService:
             organization_id, location_ids, date_from, date_to
         )
         return tuple(
-            PaymentMix(method, Decimal(amount_minor) / MINOR)
-            for method, amount_minor in rows
+            PaymentMix(method, Decimal(amount_minor) / MINOR) for method, amount_minor in rows
         )

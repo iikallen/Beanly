@@ -250,18 +250,14 @@ class SqlAlchemySalesRepository:
             return tuple((0, 0, 0) for _ in buckets)
         columns = []
         for date_from, date_to in buckets:
-            condition = (SalesOrderModel.paid_at >= date_from) & (
-                SalesOrderModel.paid_at < date_to
-            )
+            condition = (SalesOrderModel.paid_at >= date_from) & (SalesOrderModel.paid_at < date_to)
             columns.extend(
                 (
                     func.coalesce(
                         func.sum(case((condition, SalesOrderModel.subtotal_minor), else_=0)), 0
                     ),
                     func.coalesce(
-                        func.sum(
-                            case((condition, SalesOrderModel.discount_total_minor), else_=0)
-                        ),
+                        func.sum(case((condition, SalesOrderModel.discount_total_minor), else_=0)),
                         0,
                     ),
                     func.coalesce(func.sum(case((condition, 1), else_=0)), 0),
@@ -596,6 +592,9 @@ def _order_values(value: SalesOrder) -> dict[str, object]:
         "location_id": value.location_id,
         "shift_id": value.shift_id,
         "warehouse_id": value.warehouse_id,
+        "customer_id": value.customer_id,
+        "customer_name_snapshot": value.customer_name_snapshot,
+        "customer_phone_snapshot": value.customer_phone_snapshot,
         "number": value.number,
         "client_order_id": value.client_order_id,
         "version": value.version,

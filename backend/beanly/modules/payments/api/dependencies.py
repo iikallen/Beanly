@@ -75,9 +75,7 @@ def terminal_payment_service(session: SessionDep) -> TerminalPaymentService:
     )
 
 
-TerminalPaymentServiceDep = Annotated[
-    TerminalPaymentService, Depends(terminal_payment_service)
-]
+TerminalPaymentServiceDep = Annotated[TerminalPaymentService, Depends(terminal_payment_service)]
 
 
 def _permission(*required: Permission):

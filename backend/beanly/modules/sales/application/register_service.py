@@ -34,9 +34,7 @@ class RegisterService:
         self.organizations = organizations
         self.publisher = publisher or NullSalesEventPublisher()
 
-    async def create(
-        self, context: TenantContext, location_id: UUID, name: str
-    ) -> PosRegister:
+    async def create(self, context: TenantContext, location_id: UUID, name: str) -> PosRegister:
         await self.organizations.ensure_location_access(context, location_id)
         now = datetime.now(UTC)
         value = PosRegister(
@@ -53,9 +51,7 @@ class RegisterService:
             self.repository.add_register(value), (PosRegisterCreated(value.id),)
         )
 
-    async def list(
-        self, context: TenantContext, location_id: UUID | None
-    ) -> list[PosRegister]:
+    async def list(self, context: TenantContext, location_id: UUID | None) -> list[PosRegister]:
         if location_id is not None:
             await self.organizations.ensure_location_access(context, location_id)
             return await self.repository.list_registers(context.organization_id, location_id)
@@ -66,9 +62,7 @@ class RegisterService:
         values = await self.repository.list_registers(context.organization_id, None)
         return [value for value in values if value.location_id in allowed]
 
-    async def update(
-        self, context: TenantContext, register_id: UUID, name: str
-    ) -> PosRegister:
+    async def update(self, context: TenantContext, register_id: UUID, name: str) -> PosRegister:
         value = await self._register(context, register_id)
         if not value.is_active:
             raise InvalidSalesOperation("Inactive registers cannot be updated")
@@ -78,9 +72,7 @@ class RegisterService:
             )
         )
 
-    async def deactivate(
-        self, context: TenantContext, register_id: UUID
-    ) -> PosRegister:
+    async def deactivate(self, context: TenantContext, register_id: UUID) -> PosRegister:
         value = await self._register(context, register_id)
         if not value.is_active:
             raise InvalidSalesOperation("Register is already inactive")
@@ -92,9 +84,7 @@ class RegisterService:
             )
         )
 
-    async def _register(
-        self, context: TenantContext, register_id: UUID
-    ) -> PosRegister:
+    async def _register(self, context: TenantContext, register_id: UUID) -> PosRegister:
         value = await self.repository.get_register(context.organization_id, register_id)
         if value is None:
             raise SalesNotFound("Register not found")

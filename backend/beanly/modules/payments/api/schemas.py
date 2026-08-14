@@ -17,9 +17,7 @@ from beanly.modules.payments.domain.enums import ExternalPaymentMethod, PaymentM
 class PaymentLineRequest(BaseModel):
     method: PaymentMethod
     amount_minor: Annotated[int, Field(ge=0, le=MAX_NUMERIC_20_6_MINOR)]
-    cash_received_minor: Annotated[
-        int | None, Field(ge=0, le=MAX_BIGINT)
-    ] = None
+    cash_received_minor: Annotated[int | None, Field(ge=0, le=MAX_BIGINT)] = None
     reference: Annotated[str | None, Field(max_length=200)] = None
 
 

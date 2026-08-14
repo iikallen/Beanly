@@ -112,6 +112,7 @@ class OrderDiscount:
     discount_total_minor: int
     sort_order: int
     allocations: tuple[OrderDiscountAllocation, ...] = ()
+    audience_kind: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,3 +153,6 @@ class SalesOrder:
     pricing_revision: int = 1
     priced_at: datetime | None = None
     discounts: tuple[OrderDiscount, ...] = ()
+    customer_id: UUID | None = None
+    customer_name_snapshot: str | None = None
+    customer_phone_snapshot: str | None = None
