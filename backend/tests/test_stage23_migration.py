@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -214,7 +215,9 @@ async def test_stage23_migration_up_down_reup_preserves_stage22_surface() -> Non
 
         await asyncio.to_thread(command.upgrade, config, "head")
         await asyncio.to_thread(command.check, config)
-        assert (await _snapshot(database_url))["revision"] == "0023_onboarding_imports"
+        assert (await _snapshot(database_url))["revision"] == (
+            ScriptDirectory.from_config(config).get_current_head()
+        )
     finally:
         async with admin_engine.connect() as connection:
             await connection.exec_driver_sql(

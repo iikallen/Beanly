@@ -746,7 +746,7 @@ async def test_postgres_finance_projection_idempotency_noops_and_backfill_rerun(
                 "REVENUE",
                 Decimal("6700.000000"),
                 None,
-                "REVENUE",
+                "REVENUE_GROSS",
                 None,
             ) in finance_rows
             assert (

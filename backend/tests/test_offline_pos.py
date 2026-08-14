@@ -8,6 +8,7 @@ import pytest
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select, text
 from sqlalchemy.engine import make_url
@@ -1024,7 +1025,7 @@ async def test_postgres_offline_migration_maps_estimated_on_downgrade_and_reupgr
     await asyncio.to_thread(command.check, config)
     async with sessions() as database:
         assert await database.scalar(text("SELECT version_num FROM alembic_version")) == (
-            "0023_onboarding_imports"
+            ScriptDirectory.from_config(config).get_current_head()
         )
         assert await database.scalar(text("SELECT to_regclass('public.pos_devices')")) == (
             "pos_devices"

@@ -9,6 +9,7 @@ import pytest
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import func, inspect, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
@@ -3427,7 +3428,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
             "alembic_version",
             *APPLICATION_TABLES,
         } <= upgraded["tables"]
-        assert upgraded["revision"] == "0023_onboarding_imports"
+        assert upgraded["revision"] == ScriptDirectory.from_config(config).get_current_head()
         assert INVENTORY_OPERATION_TABLES <= upgraded["tables"]
         assert {
             "inventory_writeoff_number_seq",
@@ -4266,7 +4267,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
         await asyncio.to_thread(command.upgrade, config, "head")
         reupgraded = await database_snapshot(test_url)
         assert APPLICATION_TABLES <= reupgraded["tables"]
-        assert reupgraded["revision"] == "0023_onboarding_imports"
+        assert reupgraded["revision"] == ScriptDirectory.from_config(config).get_current_head()
         assert await membership_state(test_url, legacy_membership_id) == ("ACTIVE", "ALL")
     finally:
         await admin_engine.dispose()
