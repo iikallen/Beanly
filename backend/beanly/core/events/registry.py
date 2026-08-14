@@ -35,6 +35,14 @@ from beanly.modules.inventory.domain.events import (
     StockAdjusted,
     StockWentNegative,
 )
+from beanly.modules.kitchen.domain.events import (
+    KitchenTicketCompleted,
+    KitchenTicketCreated,
+    KitchenTicketReady,
+    KitchenTicketRecalled,
+    KitchenWorkReady,
+    KitchenWorkStarted,
+)
 from beanly.modules.offline_pos.domain.events import (
     OfflineOrderSynced,
     OfflineSessionClosed,
@@ -69,6 +77,24 @@ class EventSpec:
 
 
 EVENT_REGISTRY: dict[type[object], EventSpec] = {
+    KitchenTicketCreated: EventSpec(
+        "kitchen.ticket_created", 1, "kitchen_ticket", "ticket_id"
+    ),
+    KitchenWorkStarted: EventSpec(
+        "kitchen.work_started", 1, "kitchen_work_item", "work_item_id"
+    ),
+    KitchenWorkReady: EventSpec(
+        "kitchen.work_ready", 1, "kitchen_work_item", "work_item_id"
+    ),
+    KitchenTicketReady: EventSpec(
+        "kitchen.ticket_ready", 1, "kitchen_ticket", "ticket_id"
+    ),
+    KitchenTicketCompleted: EventSpec(
+        "kitchen.ticket_completed", 1, "kitchen_ticket", "ticket_id"
+    ),
+    KitchenTicketRecalled: EventSpec(
+        "kitchen.ticket_recalled", 1, "kitchen_ticket", "ticket_id"
+    ),
     CashDrawerClosed: EventSpec("cash.drawer_closed", 1, "cash_drawer", "drawer_id"),
     RefundCompleted: EventSpec("refund.completed", 1, "refund", "refund_id"),
     PosDevicePaired: EventSpec("pos.device_paired", 1, "pos_device", "device_id"),

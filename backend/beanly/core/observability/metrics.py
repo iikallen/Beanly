@@ -83,6 +83,17 @@ class BeanlyMetrics:
         self.cash_refunds_minor = meter.create_counter("cash.refunds_minor.total")
         self.cash_pay_in_minor = meter.create_counter("cash.pay_in_minor.total")
         self.cash_pay_out_minor = meter.create_counter("cash.pay_out_minor.total")
+        self.kitchen_tickets = meter.create_counter("kitchen.tickets.total")
+        self.kitchen_tickets_ready = meter.create_counter("kitchen.tickets.ready.total")
+        self.kitchen_tickets_completed = meter.create_counter(
+            "kitchen.tickets.completed.total"
+        )
+        self.kitchen_queue_seconds = meter.create_histogram("kitchen.queue_seconds", unit="s")
+        self.kitchen_prep_seconds = meter.create_histogram("kitchen.prep_seconds", unit="s")
+        self.kitchen_ready_to_pickup_seconds = meter.create_histogram(
+            "kitchen.ready_to_pickup_seconds", unit="s"
+        )
+        self.kitchen_late_tickets = meter.create_counter("kitchen.late_tickets.total")
         self._lock = Lock()
         self._queue_values: dict[str, float] = {
             "outbox_pending": 0,

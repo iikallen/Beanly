@@ -22,6 +22,7 @@ from beanly.modules.integrations.api.webhook_router import (
     router as integration_webhook_router,
 )
 from beanly.modules.inventory.api.router import router as inventory_router
+from beanly.modules.kitchen.api.router import router as kitchen_router
 from beanly.modules.menu.api.router import router as menu_router
 from beanly.modules.offline_pos.api.router import router as offline_pos_router
 from beanly.modules.onboarding.api.router import router as onboarding_router
@@ -68,3 +69,4 @@ api_v1_router.include_router(dashboard_router)
 api_v1_router.include_router(analytics_router)
 api_v1_router.include_router(cash_router)
 api_v1_router.include_router(fiscal_shift_router)
+api_v1_router.include_router(kitchen_router)

@@ -46,6 +46,8 @@ from beanly.modules.integrations.infrastructure.db.repositories import (
 from beanly.modules.integrations.infrastructure.handlers import (
     register_integration_handlers,
 )
+from beanly.modules.kitchen.infrastructure.handlers import register_kitchen_handlers
+from beanly.modules.kitchen.infrastructure.service import KitchenService
 from beanly.modules.onboarding.application.onboarding_service import OnboardingService
 from beanly.modules.onboarding.infrastructure.db.repositories import (
     SqlAlchemyOnboardingRepository,
@@ -88,6 +90,13 @@ async def run_worker(shutdown: ShutdownSignal | None = None) -> None:
         register_cash_handlers(
             handlers,
             CashDrawerService(
+                session,
+                OrganizationService(SqlAlchemyOrganizationRepository(session)),
+            ),
+        )
+        register_kitchen_handlers(
+            handlers,
+            KitchenService(
                 session,
                 OrganizationService(SqlAlchemyOrganizationRepository(session)),
             ),

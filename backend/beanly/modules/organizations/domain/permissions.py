@@ -76,6 +76,11 @@ class Permission(StrEnum):
     CASH_DRAWER_VIEW_EXPECTED = "cash.drawer.view_expected"
     CASH_DRAWER_APPROVE_VARIANCE = "cash.drawer.approve_variance"
     CASH_DRAWER_REPORT = "cash.drawer.report"
+    KITCHEN_READ = "kitchen.read"
+    KITCHEN_WORK = "kitchen.work"
+    KITCHEN_EXPO = "kitchen.expo"
+    KITCHEN_MANAGE = "kitchen.manage"
+    KITCHEN_REPORT = "kitchen.report"
 
 
 _ALL = frozenset(Permission)
@@ -152,6 +157,11 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.CASH_DRAWER_VIEW_EXPECTED,
             Permission.CASH_DRAWER_APPROVE_VARIANCE,
             Permission.CASH_DRAWER_REPORT,
+            Permission.KITCHEN_READ,
+            Permission.KITCHEN_WORK,
+            Permission.KITCHEN_EXPO,
+            Permission.KITCHEN_MANAGE,
+            Permission.KITCHEN_REPORT,
         }
     ),
     MembershipRole.MANAGER: frozenset(
@@ -209,6 +219,11 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.CASH_DRAWER_VIEW_EXPECTED,
             Permission.CASH_DRAWER_APPROVE_VARIANCE,
             Permission.CASH_DRAWER_REPORT,
+            Permission.KITCHEN_READ,
+            Permission.KITCHEN_WORK,
+            Permission.KITCHEN_EXPO,
+            Permission.KITCHEN_MANAGE,
+            Permission.KITCHEN_REPORT,
         }
     ),
     MembershipRole.ACCOUNTANT: frozenset(
@@ -231,6 +246,7 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.LOYALTY_READ,
             Permission.CASH_DRAWER_VIEW_EXPECTED,
             Permission.CASH_DRAWER_REPORT,
+            Permission.KITCHEN_REPORT,
         }
     ),
     MembershipRole.CASHIER: frozenset(
@@ -248,6 +264,7 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.LOYALTY_REDEEM,
             Permission.CASH_DRAWER_USE,
             Permission.CASH_DRAWER_CLOSE,
+            Permission.KITCHEN_READ,
         }
     ),
     MembershipRole.BARISTA: frozenset(
@@ -263,6 +280,8 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.LOYALTY_READ,
             Permission.CASH_DRAWER_USE,
             Permission.CASH_DRAWER_CLOSE,
+            Permission.KITCHEN_READ,
+            Permission.KITCHEN_WORK,
         }
     ),
 }
