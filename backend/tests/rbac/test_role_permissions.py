@@ -75,6 +75,11 @@ def test_role_permission_matrix_matches_current_contract() -> None:
                     Permission.CASH_DRAWER_VIEW_EXPECTED,
                     Permission.CASH_DRAWER_APPROVE_VARIANCE,
                     Permission.CASH_DRAWER_REPORT,
+                    Permission.KITCHEN_READ,
+                    Permission.KITCHEN_WORK,
+                    Permission.KITCHEN_EXPO,
+                    Permission.KITCHEN_MANAGE,
+                    Permission.KITCHEN_REPORT,
             }
         ),
         MembershipRole.MANAGER: frozenset(
@@ -132,6 +137,11 @@ def test_role_permission_matrix_matches_current_contract() -> None:
                     Permission.CASH_DRAWER_VIEW_EXPECTED,
                     Permission.CASH_DRAWER_APPROVE_VARIANCE,
                     Permission.CASH_DRAWER_REPORT,
+                    Permission.KITCHEN_READ,
+                    Permission.KITCHEN_WORK,
+                    Permission.KITCHEN_EXPO,
+                    Permission.KITCHEN_MANAGE,
+                    Permission.KITCHEN_REPORT,
             }
         ),
         MembershipRole.ACCOUNTANT: frozenset(
@@ -154,6 +164,7 @@ def test_role_permission_matrix_matches_current_contract() -> None:
                     Permission.LOYALTY_READ,
                     Permission.CASH_DRAWER_VIEW_EXPECTED,
                     Permission.CASH_DRAWER_REPORT,
+                    Permission.KITCHEN_REPORT,
             }
         ),
         MembershipRole.CASHIER: frozenset(
@@ -171,6 +182,7 @@ def test_role_permission_matrix_matches_current_contract() -> None:
                     Permission.LOYALTY_REDEEM,
                     Permission.CASH_DRAWER_USE,
                     Permission.CASH_DRAWER_CLOSE,
+                    Permission.KITCHEN_READ,
             }
         ),
         MembershipRole.BARISTA: frozenset(
@@ -186,6 +198,8 @@ def test_role_permission_matrix_matches_current_contract() -> None:
                     Permission.LOYALTY_READ,
                     Permission.CASH_DRAWER_USE,
                     Permission.CASH_DRAWER_CLOSE,
+                    Permission.KITCHEN_READ,
+                    Permission.KITCHEN_WORK,
             }
         ),
     }

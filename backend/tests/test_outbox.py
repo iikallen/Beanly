@@ -41,6 +41,14 @@ from beanly.modules.inventory.domain.events import (
     StockAdjusted,
     StockWentNegative,
 )
+from beanly.modules.kitchen.domain.events import (
+    KitchenTicketCompleted,
+    KitchenTicketCreated,
+    KitchenTicketReady,
+    KitchenTicketRecalled,
+    KitchenWorkReady,
+    KitchenWorkStarted,
+)
 from beanly.modules.offline_pos.domain.events import (
     OfflineOrderSynced,
     OfflineSessionClosed,
@@ -93,7 +101,46 @@ def _event_contracts() -> tuple[tuple[object, str, str, UUID], ...]:
     offline_session_id = uuid4()
     client_order_id = uuid4()
     drawer_id = uuid4()
+    ticket_id = uuid4()
+    work_item_id = uuid4()
+    station_id = uuid4()
     return (
+        (
+            KitchenTicketCreated(organization_id, ticket_id, order_id, payment_id),
+            "kitchen.ticket_created",
+            "kitchen_ticket",
+            ticket_id,
+        ),
+        (
+            KitchenWorkStarted(organization_id, ticket_id, work_item_id, station_id),
+            "kitchen.work_started",
+            "kitchen_work_item",
+            work_item_id,
+        ),
+        (
+            KitchenWorkReady(organization_id, ticket_id, work_item_id, station_id),
+            "kitchen.work_ready",
+            "kitchen_work_item",
+            work_item_id,
+        ),
+        (
+            KitchenTicketReady(organization_id, ticket_id, order_id),
+            "kitchen.ticket_ready",
+            "kitchen_ticket",
+            ticket_id,
+        ),
+        (
+            KitchenTicketCompleted(organization_id, ticket_id, order_id),
+            "kitchen.ticket_completed",
+            "kitchen_ticket",
+            ticket_id,
+        ),
+        (
+            KitchenTicketRecalled(organization_id, ticket_id, order_id),
+            "kitchen.ticket_recalled",
+            "kitchen_ticket",
+            ticket_id,
+        ),
         (
             PosDevicePaired(organization_id, device_id),
             "pos.device_paired",
