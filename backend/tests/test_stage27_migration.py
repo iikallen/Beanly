@@ -6,7 +6,6 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
-from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -168,7 +167,6 @@ async def test_stage27_migration_stage26_down_reup_default_and_check() -> None:
         assert await _snapshot(database_url) == before
         await asyncio.to_thread(command.upgrade, config, "0027_kitchen_fulfillment")
         assert await _snapshot(database_url) == upgraded
-        assert ScriptDirectory.from_config(config).get_current_head() == "0027_kitchen_fulfillment"
         await asyncio.to_thread(command.upgrade, config, "head")
         await asyncio.to_thread(command.check, config)
     finally:

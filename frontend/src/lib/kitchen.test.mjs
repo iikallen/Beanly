@@ -18,3 +18,13 @@ test("aging is based on fired time and uses half-open warning thresholds", () =>
   assert.equal(kitchenAging(fired, Date.parse("2026-08-15T10:10:00Z"), 300, 600).level, "late");
   assert.equal(kitchenProductionLabel("PREPARING"), "Paid · Preparing");
 });
+
+test("KDS ticket card renders authoritative source, fulfillment, and due time to minute precision", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const page = await readFile(new URL("../app/app/kitchen/page.tsx", import.meta.url), "utf8");
+  assert.match(page, /ticket\.order_source/);
+  assert.match(page, /ticket\.fulfillment_type/);
+  assert.match(page, /ticket\.promised_at/);
+  assert.match(page, /ticket\.guest_instructions/);
+  assert.match(page, /hour: "2-digit", minute: "2-digit"/);
+});

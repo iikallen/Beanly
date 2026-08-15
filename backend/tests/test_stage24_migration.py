@@ -143,9 +143,10 @@ async def test_stage24_migration_up_down_reup_is_exact_and_reversible() -> None:
         for table, columns in EXTENDED_COLUMNS.items():
             assert not columns & downgraded["columns"][table]
 
+        await asyncio.to_thread(command.upgrade, config, "0024_promotions_pricing")
+        assert (await _snapshot(database_url))["revision"] == "0024_promotions_pricing"
         await asyncio.to_thread(command.upgrade, config, "head")
         await asyncio.to_thread(command.check, config)
-        assert (await _snapshot(database_url))["revision"] == "0024_promotions_pricing"
     finally:
         async with admin_engine.connect() as connection:
             await connection.exec_driver_sql(

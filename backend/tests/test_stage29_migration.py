@@ -134,8 +134,9 @@ async def test_stage29_migration_is_direct_from_stage27_and_reversible() -> None
         await engine.dispose()
         await asyncio.to_thread(command.downgrade, config, "0027_kitchen_fulfillment")
         assert await _snapshot(database_url) == before
-        await asyncio.to_thread(command.upgrade, config, "head")
+        await asyncio.to_thread(command.upgrade, config, "0029_online_ordering")
         assert await _snapshot(database_url) == upgraded
+        await asyncio.to_thread(command.upgrade, config, "head")
         await asyncio.to_thread(command.check, config)
     finally:
         async with admin.connect() as connection:

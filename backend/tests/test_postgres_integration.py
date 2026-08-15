@@ -3517,6 +3517,7 @@ async def test_postgres_migration_from_zero_and_rollback() -> None:
                 "is_active",
                 "is_primary",
                 "fiscal_enforcement_mode",
+                "cash_variance_approval_threshold_minor",
                 "created_at",
             "updated_at",
         }

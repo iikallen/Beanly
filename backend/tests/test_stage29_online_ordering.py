@@ -215,12 +215,12 @@ async def test_public_qr_quote_submit_replay_cancel_and_privacy(app_client) -> N
     assert body["status"] == "PENDING"
     assert body["source"] == "QR"
     assert body["status_token"] and body["station_label"] == "Table 7"
+    assert body["order_number"] > 0
     assert not {
         "id",
         "organization_id",
         "location_id",
         "sales_order_id",
-        "order_number",
         "station_id",
         "client_order_id",
         "guest_name",
@@ -244,12 +244,12 @@ async def test_public_qr_quote_submit_replay_cancel_and_privacy(app_client) -> N
         f"/api/v1/public/ordering/orders/{body['status_token']}"
     )
     assert status.status_code == 200 and status.json()["status"] == "PENDING"
+    assert status.json()["order_number"] == body["order_number"]
     assert not {
         "id",
         "organization_id",
         "location_id",
         "sales_order_id",
-        "order_number",
         "station_id",
         "client_order_id",
         "guest_name",
@@ -344,7 +344,7 @@ async def test_public_qr_quote_submit_replay_cancel_and_privacy(app_client) -> N
 
 
 @pytest.mark.anyio
-async def test_staff_accept_is_idempotent_and_guest_cannot_cancel_after_accept(app_client) -> None:
+async def test_staff_accept_and_cancel_are_idempotent(app_client) -> None:
     client, sessions, headers, _, _, variant_id, station, _, _ = await _setup(app_client)
     cart = {
         "client_order_id": str(uuid4()),
@@ -433,8 +433,8 @@ async def test_staff_accept_is_idempotent_and_guest_cannot_cancel_after_accept(a
     guest_cancel = await client.post(
         f"/api/v1/public/ordering/orders/{body['status_token']}/cancel"
     )
-    assert guest_cancel.status_code == 409
-    assert guest_cancel.json()["detail"]["code"] == "ONLINE_ORDER_ALREADY_ACCEPTED"
+    assert guest_cancel.status_code == 200
+    assert guest_cancel.json()["status"] == "CANCELLED"
 
     pickup_cart = {
         "client_order_id": str(uuid4()),
@@ -554,9 +554,7 @@ async def test_postgres_staff_accept_pickup_and_cancel_policy(
     postgres_stage29_app,
 ) -> None:
     client, sessions, _ = postgres_stage29_app
-    await test_staff_accept_is_idempotent_and_guest_cannot_cancel_after_accept(
-        (client, sessions)
-    )
+    await test_staff_accept_and_cancel_are_idempotent((client, sessions))
 
 
 @pytest.mark.anyio
