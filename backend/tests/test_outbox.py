@@ -78,6 +78,18 @@ from beanly.modules.purchasing.domain.events import (
     SupplierReturnReversed,
 )
 from beanly.modules.refunds.domain.events import RefundCompleted
+from beanly.modules.reservations.domain.events import (
+    DiningVisitClosed,
+    DiningVisitOpened,
+    ReservationCancelled,
+    ReservationCompleted,
+    ReservationCreated,
+    ReservationNoShow,
+    ReservationSeated,
+    WaitlistCancelled,
+    WaitlistCreated,
+    WaitlistSeated,
+)
 
 
 def _event_contracts() -> tuple[tuple[object, str, str, UUID], ...]:
@@ -111,7 +123,70 @@ def _event_contracts() -> tuple[tuple[object, str, str, UUID], ...]:
     work_item_id = uuid4()
     station_id = uuid4()
     online_order_id = uuid4()
+    reservation_id = uuid4()
+    waitlist_entry_id = uuid4()
+    visit_id = uuid4()
     return (
+        (
+            ReservationCreated(reservation_id, organization_id, location_id),
+            "reservation.created",
+            "reservation",
+            reservation_id,
+        ),
+        (
+            ReservationCancelled(reservation_id, organization_id, location_id),
+            "reservation.cancelled",
+            "reservation",
+            reservation_id,
+        ),
+        (
+            ReservationSeated(reservation_id, organization_id, location_id, visit_id),
+            "reservation.seated",
+            "reservation",
+            reservation_id,
+        ),
+        (
+            ReservationNoShow(reservation_id, organization_id, location_id),
+            "reservation.no_show",
+            "reservation",
+            reservation_id,
+        ),
+        (
+            ReservationCompleted(reservation_id, organization_id, location_id, visit_id),
+            "reservation.completed",
+            "reservation",
+            reservation_id,
+        ),
+        (
+            WaitlistCreated(waitlist_entry_id, organization_id, location_id),
+            "waitlist.created",
+            "waitlist_entry",
+            waitlist_entry_id,
+        ),
+        (
+            WaitlistCancelled(waitlist_entry_id, organization_id, location_id),
+            "waitlist.cancelled",
+            "waitlist_entry",
+            waitlist_entry_id,
+        ),
+        (
+            WaitlistSeated(waitlist_entry_id, organization_id, location_id, visit_id),
+            "waitlist.seated",
+            "waitlist_entry",
+            waitlist_entry_id,
+        ),
+        (
+            DiningVisitOpened(visit_id, organization_id, location_id),
+            "dining_visit.opened",
+            "dining_visit",
+            visit_id,
+        ),
+        (
+            DiningVisitClosed(visit_id, organization_id, location_id),
+            "dining_visit.closed",
+            "dining_visit",
+            visit_id,
+        ),
         (
             OnlineOrderSubmitted(organization_id, online_order_id, order_id),
             "online.order_submitted",

@@ -83,6 +83,9 @@ def test_role_permission_matrix_matches_current_contract() -> None:
                     Permission.ONLINE_ORDERS_READ,
                     Permission.ONLINE_ORDERS_MANAGE,
                     Permission.ONLINE_ORDERING_MANAGE,
+                    Permission.FOH_READ,
+                    Permission.FOH_MANAGE,
+                    Permission.FOH_CONFIGURE,
             }
         ),
         MembershipRole.MANAGER: frozenset(
@@ -148,6 +151,9 @@ def test_role_permission_matrix_matches_current_contract() -> None:
                     Permission.ONLINE_ORDERS_READ,
                     Permission.ONLINE_ORDERS_MANAGE,
                     Permission.ONLINE_ORDERING_MANAGE,
+                    Permission.FOH_READ,
+                    Permission.FOH_MANAGE,
+                    Permission.FOH_CONFIGURE,
             }
         ),
         MembershipRole.ACCOUNTANT: frozenset(
@@ -191,6 +197,8 @@ def test_role_permission_matrix_matches_current_contract() -> None:
                     Permission.KITCHEN_READ,
                     Permission.ONLINE_ORDERS_READ,
                     Permission.ONLINE_ORDERS_MANAGE,
+                    Permission.FOH_READ,
+                    Permission.FOH_MANAGE,
             }
         ),
         MembershipRole.BARISTA: frozenset(
@@ -209,6 +217,7 @@ def test_role_permission_matrix_matches_current_contract() -> None:
                     Permission.KITCHEN_READ,
                     Permission.KITCHEN_WORK,
                     Permission.ONLINE_ORDERS_READ,
+                    Permission.FOH_READ,
             }
         ),
     }

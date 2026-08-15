@@ -182,7 +182,7 @@ async def test_stage30_migration_is_single_head_direct_and_reversible() -> None:
             await connection.exec_driver_sql(f'CREATE DATABASE "{database_name}"')
         config = _config(database_url)
         scripts = ScriptDirectory.from_config(config)
-        assert scripts.get_heads() == ["0030_online_fulfillment"]
+        assert scripts.get_heads() == [scripts.get_current_head()]
         assert scripts.get_revision("0030_online_fulfillment").down_revision == (
             "0029_online_ordering"
         )
@@ -281,12 +281,12 @@ async def test_stage30_migration_is_single_head_direct_and_reversible() -> None:
         finally:
             await engine.dispose()
 
-        await asyncio.to_thread(command.check, config)
         await asyncio.to_thread(command.downgrade, config, "0029_online_ordering")
         assert await _snapshot(database_url) == before
         assert await _legacy_order(database_url, ids) == legacy_before
-        await asyncio.to_thread(command.upgrade, config, "head")
+        await asyncio.to_thread(command.upgrade, config, "0030_online_fulfillment")
         assert await _snapshot(database_url) == upgraded
+        await asyncio.to_thread(command.upgrade, config, "head")
         await asyncio.to_thread(command.check, config)
     finally:
         async with admin.connect() as connection:
