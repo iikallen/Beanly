@@ -72,53 +72,10 @@ class OrderService:
             await self._assert_access(context, existing)
             return existing
         try:
-            shift = await self.repository.get_shift(
-                context.organization_id, value.shift_id, lock=True
-            )
-            if shift is None:
-                raise SalesNotFound("Shift not found")
-            await self.organizations.ensure_location_access(context, shift.location_id)
-            if shift.status != RegisterShiftStatus.OPEN:
-                raise InvalidSalesOperation("Orders require an OPEN shift")
-            existing = await self.repository.get_order_by_client_id(
-                context.organization_id, value.client_order_id
-            )
-            if existing is not None:
-                await self._assert_access(context, existing)
-                await self.repository.commit()
-                return existing
-            organization = await self.organizations.get_organization(
-                GetOrganizationQuery(context.user_id, context.organization_id)
-            )
-            now = datetime.now(UTC)
-            order = SalesOrder(
-                uuid4(),
-                context.organization_id,
-                shift.location_id,
-                shift.id,
-                shift.warehouse_id,
-                await self.repository.next_order_number(),
-                value.client_order_id,
-                value.order_type,
-                OrderStatus.OPEN,
-                organization.currency_code,
-                _guest_count(value.guest_count),
-                _optional(value.table_label, 100),
-                _optional(value.note, 4000),
-                0,
-                0,
-                context.user_id,
-                None,
-                None,
-                None,
-                None,
-                None,
-                now,
-                now,
-            )
-            saved = await self.repository.add_order(order)
+            saved, created = await self._create_staged(context, value)
             await self.repository.commit()
-            await self._publish((OrderCreated(order.id),))
+            if created:
+                await self._publish((OrderCreated(saved.id),))
             return saved
         except SalesConflict:
             await self.repository.rollback()
@@ -132,6 +89,63 @@ class OrderService:
         except Exception:
             await self.repository.rollback()
             raise
+
+    async def create_staged(self, context: TenantContext, value: CreateOrderInput) -> SalesOrder:
+        """Create an order inside the caller's transaction without committing it."""
+        result, _ = await self._create_staged(context, value)
+        return result
+
+    async def _create_staged(
+        self, context: TenantContext, value: CreateOrderInput
+    ) -> tuple[SalesOrder, bool]:
+        existing = await self.repository.get_order_by_client_id(
+            context.organization_id, value.client_order_id
+        )
+        if existing is not None:
+            await self._assert_access(context, existing)
+            return existing, False
+        shift = await self.repository.get_shift(context.organization_id, value.shift_id, lock=True)
+        if shift is None:
+            raise SalesNotFound("Shift not found")
+        await self.organizations.ensure_location_access(context, shift.location_id)
+        if shift.status != RegisterShiftStatus.OPEN:
+            raise InvalidSalesOperation("Orders require an OPEN shift")
+        existing = await self.repository.get_order_by_client_id(
+            context.organization_id, value.client_order_id
+        )
+        if existing is not None:
+            await self._assert_access(context, existing)
+            return existing, False
+        organization = await self.organizations.get_organization(
+            GetOrganizationQuery(context.user_id, context.organization_id)
+        )
+        now = datetime.now(UTC)
+        order = SalesOrder(
+            uuid4(),
+            context.organization_id,
+            shift.location_id,
+            shift.id,
+            shift.warehouse_id,
+            await self.repository.next_order_number(),
+            value.client_order_id,
+            value.order_type,
+            OrderStatus.OPEN,
+            organization.currency_code,
+            _guest_count(value.guest_count),
+            _optional(value.table_label, 100),
+            _optional(value.note, 4000),
+            0,
+            0,
+            context.user_id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            now,
+            now,
+        )
+        return await self.repository.add_order(order), True
 
     async def list(
         self,

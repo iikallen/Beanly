@@ -2218,6 +2218,181 @@ export class ApiError extends Error {
   }
 }
 
+export type ReservationStatus = "BOOKED" | "SEATED" | "COMPLETED" | "CANCELLED" | "NO_SHOW";
+export type ReservationSource = "GUEST" | "STAFF" | "POS";
+export type WaitlistStatus = "WAITING" | "SEATED" | "CANCELLED";
+export type DiningTableState = "AVAILABLE" | "RESERVED" | "OCCUPIED" | "UNAVAILABLE";
+
+export type ReservationSchedule = {
+  weekday: number;
+  opens_at_local: string;
+  closes_at_local: string;
+};
+
+export type ReservationSettingsInput = {
+  location_id: string;
+  public_slug: string;
+  reservations_enabled: boolean;
+  default_duration_minutes: number;
+  cleanup_buffer_minutes: number;
+  minimum_lead_minutes: number;
+  maximum_advance_days: number;
+  guest_cancellation_cutoff_minutes: number;
+  maximum_party_size: number;
+  slot_interval_minutes: number;
+  schedules: ReservationSchedule[];
+};
+
+export type ReservationSettings = ReservationSettingsInput & {
+  id: string;
+  organization_id: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PublicReservationLocation = {
+  slug: string;
+  organization_name: string;
+  location_name: string;
+  timezone: string;
+  reservations_enabled: boolean;
+  minimum_lead_minutes: number;
+  maximum_advance_days: number;
+  maximum_party_size: number;
+  slot_interval_minutes: number;
+};
+
+export type ReservationAvailability = {
+  timezone: string;
+  date: string;
+  party_size: number;
+  slots: Array<{ start_at: string; end_at: string }>;
+};
+
+export type PublicReservation = {
+  organization_name: string;
+  location_name: string;
+  timezone: string;
+  status: ReservationStatus;
+  guest_name: string;
+  guest_phone: string | null;
+  guest_email: string | null;
+  party_size: number;
+  start_at: string;
+  end_at: string;
+  guest_notes: string | null;
+  can_cancel: boolean;
+  cancelled_at: string | null;
+  seated_at: string | null;
+  completed_at: string | null;
+  no_show_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PublicReservationCreated = PublicReservation & { guest_access_token: string };
+
+export type DiningSection = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  name: string;
+  sort_order: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DiningTable = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  section_id: string;
+  name: string;
+  capacity: number;
+  sort_order: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Reservation = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  dining_table_id: string;
+  table_name: string;
+  status: ReservationStatus;
+  source: ReservationSource;
+  guest_name: string;
+  guest_phone: string | null;
+  guest_email: string | null;
+  party_size: number;
+  start_at: string;
+  end_at: string;
+  guest_notes: string | null;
+  internal_notes: string | null;
+  cancelled_at: string | null;
+  seated_at: string | null;
+  completed_at: string | null;
+  no_show_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WaitlistEntry = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  guest_name: string;
+  guest_phone: string | null;
+  guest_email: string | null;
+  party_size: number;
+  quoted_wait_minutes: number | null;
+  status: WaitlistStatus;
+  guest_notes: string | null;
+  cancelled_at: string | null;
+  seated_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DiningVisit = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  dining_table_id: string;
+  reservation_id: string | null;
+  waitlist_entry_id: string | null;
+  sales_order_id: string | null;
+  sales_order_status: string | null;
+  party_size: number;
+  opened_at: string;
+  closed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DiningFloor = {
+  location_id: string;
+  timezone: string;
+  sections: Array<{
+    id: string;
+    name: string;
+    sort_order: number;
+    tables: Array<{
+      id: string;
+      name: string;
+      capacity: number;
+      sort_order: number;
+      is_active: boolean;
+      state: DiningTableState;
+      reservation: Reservation | null;
+      visit: DiningVisit | null;
+    }>;
+  }>;
+};
+
 export type OnlineOrderStatus = "PENDING" | "AWAITING_PAYMENT" | "PAID" | "PREPARING" | "READY" | "COMPLETED" | "REJECTED" | "CANCELLED";
 export type OnlineOrderSource = "ONLINE" | "QR";
 export type OnlineOrderingStationKind = "TABLE" | "COUNTER" | "PICKUP_SPOT";
@@ -4314,6 +4489,85 @@ export const api = {
       method: "POST",
       headers: tenantAuthorization(organizationId, accessToken),
     }),
+  getPublicReservations: (slug: string) => request<PublicReservationLocation>(
+    `/api/v1/public/reservations/${encodeURIComponent(slug)}`,
+  ),
+  getPublicReservationAvailability: (slug: string, date: string, partySize: number) => request<ReservationAvailability>(
+    `/api/v1/public/reservations/${encodeURIComponent(slug)}/availability?${new URLSearchParams({ date, party_size: String(partySize) })}`,
+  ),
+  createPublicReservation: (slug: string, input: { client_reservation_id: string; start_at: string; party_size: number; guest_name: string; guest_phone?: string; guest_email?: string; guest_notes?: string }) => request<PublicReservationCreated>(
+    `/api/v1/public/reservations/${encodeURIComponent(slug)}`,
+    { method: "POST", body: JSON.stringify(input) },
+  ),
+  getPublicReservation: (guestAccessToken: string) => request<PublicReservation>(
+    `/api/v1/public/reservations/status/${encodeURIComponent(guestAccessToken)}`,
+  ),
+  cancelPublicReservation: (guestAccessToken: string) => request<PublicReservation>(
+    `/api/v1/public/reservations/status/${encodeURIComponent(guestAccessToken)}/cancel`, { method: "POST" },
+  ),
+  getReservationSettings: (locationId: string, organizationId: string, accessToken: string) => request<ReservationSettings>(
+    `/api/v1/reservation-settings/${locationId}`, { headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  saveReservationSettings: (input: ReservationSettingsInput, organizationId: string, accessToken: string) => request<ReservationSettings>(
+    "/api/v1/reservation-settings", { method: "PUT", body: JSON.stringify(input), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  listDiningSections: (locationId: string, organizationId: string, accessToken: string) => request<DiningSection[]>(
+    `/api/v1/dining-sections?location_id=${encodeURIComponent(locationId)}`, { headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  createDiningSection: (input: { location_id: string; name: string; sort_order?: number }, organizationId: string, accessToken: string) => request<DiningSection>(
+    "/api/v1/dining-sections", { method: "POST", body: JSON.stringify(input), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  updateDiningSection: (id: string, input: Partial<Pick<DiningSection, "name" | "sort_order" | "is_active">>, organizationId: string, accessToken: string) => request<DiningSection>(
+    `/api/v1/dining-sections/${id}`, { method: "PATCH", body: JSON.stringify(input), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  listDiningTables: (locationId: string, organizationId: string, accessToken: string) => request<DiningTable[]>(
+    `/api/v1/dining-tables?location_id=${encodeURIComponent(locationId)}`, { headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  createDiningTable: (input: { location_id: string; section_id: string; name: string; capacity: number; sort_order?: number }, organizationId: string, accessToken: string) => request<DiningTable>(
+    "/api/v1/dining-tables", { method: "POST", body: JSON.stringify(input), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  updateDiningTable: (id: string, input: Partial<Pick<DiningTable, "section_id" | "name" | "capacity" | "sort_order" | "is_active">>, organizationId: string, accessToken: string) => request<DiningTable>(
+    `/api/v1/dining-tables/${id}`, { method: "PATCH", body: JSON.stringify(input), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  listReservations: (locationId: string, organizationId: string, accessToken: string) => request<Reservation[]>(
+    `/api/v1/reservations?location_id=${encodeURIComponent(locationId)}`, { headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  createReservation: (input: { client_reservation_id: string; location_id: string; start_at: string; party_size: number; guest_name: string; dining_table_id?: string; guest_phone?: string; guest_email?: string; guest_notes?: string; internal_notes?: string }, organizationId: string, accessToken: string) => request<Reservation>(
+    "/api/v1/reservations", { method: "POST", body: JSON.stringify(input), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  cancelReservation: (id: string, clientActionId: string, reason: string, organizationId: string, accessToken: string) => request<Reservation>(
+    `/api/v1/reservations/${id}/cancel`, { method: "POST", body: JSON.stringify({ client_action_id: clientActionId, reason }), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  noShowReservation: (id: string, clientActionId: string, reason: string, organizationId: string, accessToken: string) => request<Reservation>(
+    `/api/v1/reservations/${id}/no-show`, { method: "POST", body: JSON.stringify({ client_action_id: clientActionId, reason }), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  seatReservation: (id: string, clientActionId: string, diningTableId: string | undefined, organizationId: string, accessToken: string) => request<DiningVisit>(
+    `/api/v1/reservations/${id}/seat`, { method: "POST", body: JSON.stringify({ client_action_id: clientActionId, dining_table_id: diningTableId }), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  listWaitlist: (locationId: string, organizationId: string, accessToken: string) => request<WaitlistEntry[]>(
+    `/api/v1/waitlist?location_id=${encodeURIComponent(locationId)}`, { headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  createWaitlistEntry: (input: { client_entry_id: string; location_id: string; guest_name: string; party_size: number; guest_phone?: string; guest_email?: string; quoted_wait_minutes?: number; guest_notes?: string }, organizationId: string, accessToken: string) => request<WaitlistEntry>(
+    "/api/v1/waitlist", { method: "POST", body: JSON.stringify(input), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  cancelWaitlistEntry: (id: string, clientActionId: string, reason: string, organizationId: string, accessToken: string) => request<WaitlistEntry>(
+    `/api/v1/waitlist/${id}/cancel`, { method: "POST", body: JSON.stringify({ client_action_id: clientActionId, reason }), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  seatWaitlistEntry: (id: string, clientActionId: string, diningTableId: string | undefined, organizationId: string, accessToken: string) => request<DiningVisit>(
+    `/api/v1/waitlist/${id}/seat`, { method: "POST", body: JSON.stringify({ client_action_id: clientActionId, dining_table_id: diningTableId }), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  getDiningFloor: (locationId: string, organizationId: string, accessToken: string) => request<DiningFloor>(
+    `/api/v1/dining-floor?location_id=${encodeURIComponent(locationId)}`, { headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  seatWalkIn: (input: { client_action_id: string; location_id: string; dining_table_id: string; party_size: number }, organizationId: string, accessToken: string) => request<DiningVisit>(
+    "/api/v1/dining-visits", { method: "POST", body: JSON.stringify(input), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  openDiningVisitCheck: (id: string, clientOrderId: string, shiftId: string, organizationId: string, accessToken: string) => request<DiningVisit>(
+    `/api/v1/dining-visits/${id}/open-check`, { method: "POST", body: JSON.stringify({ client_order_id: clientOrderId, shift_id: shiftId }), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  closeDiningVisit: (id: string, clientActionId: string, organizationId: string, accessToken: string) => request<DiningVisit>(
+    `/api/v1/dining-visits/${id}/close`, { method: "POST", body: JSON.stringify({ client_action_id: clientActionId }), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
   listKitchenStations: (locationId: string, organizationId: string, accessToken: string) =>
     request<KitchenStation[]>(
       `/api/v1/kitchen/stations?${new URLSearchParams({ location_id: locationId })}`,

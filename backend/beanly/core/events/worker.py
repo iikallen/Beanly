@@ -64,6 +64,9 @@ from beanly.modules.organizations.application.services.organization_service impo
 from beanly.modules.organizations.infrastructure.db.repositories import (
     SqlAlchemyOrganizationRepository,
 )
+from beanly.modules.reservations.infrastructure.handlers import register_reservation_handlers
+from beanly.modules.reservations.infrastructure.service import ReservationService
+from beanly.modules.sales.api.dependencies import order_service
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +114,15 @@ async def run_worker(shutdown: ShutdownSignal | None = None) -> None:
                 session,
                 OrganizationService(SqlAlchemyOrganizationRepository(session)),
                 settings,
+            ),
+        )
+        register_reservation_handlers(
+            handlers,
+            ReservationService(
+                session,
+                OrganizationService(SqlAlchemyOrganizationRepository(session)),
+                settings,
+                order_service(session),
             ),
         )
         register_integration_handlers(

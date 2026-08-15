@@ -40,6 +40,8 @@ from beanly.modules.refunds.api.router import (
 from beanly.modules.refunds.api.router import (
     router as refunds_router,
 )
+from beanly.modules.reservations.api.router import public_router as reservation_public_router
+from beanly.modules.reservations.api.router import router as reservations_router
 from beanly.modules.sales.api.router import router as sales_router
 
 api_v1_router = APIRouter(prefix="/api/v1")
@@ -51,6 +53,8 @@ api_v1_router.include_router(inventory_router)
 api_v1_router.include_router(offline_pos_router)
 api_v1_router.include_router(online_public_router)
 api_v1_router.include_router(online_ordering_router)
+api_v1_router.include_router(reservation_public_router)
+api_v1_router.include_router(reservations_router)
 api_v1_router.include_router(onboarding_router)
 api_v1_router.include_router(menu_router)
 api_v1_router.include_router(organizations_router)

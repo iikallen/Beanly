@@ -29,6 +29,7 @@ import { Brand } from "@/components/auth-shell";
 import { useWorkspace } from "@/components/workspace-provider";
 import { useOnboardingPermissions } from "@/hooks/use-onboarding-permissions";
 import { useCashPermissions } from "@/hooks/use-cash-permissions";
+import { useFrontOfHousePermissions } from "@/hooks/use-front-of-house-permissions";
 import { useKitchenPermissions } from "@/hooks/use-kitchen-permissions";
 import { useOnlineOrderingPermissions } from "@/hooks/use-online-ordering-permissions";
 import { api } from "@/lib/api";
@@ -59,6 +60,7 @@ export function AppSidebar({
   const pathname = usePathname();
   const onboardingPermissions = useOnboardingPermissions();
   const cashPermissions = useCashPermissions();
+  const frontOfHousePermissions = useFrontOfHousePermissions();
   const kitchenPermissions = useKitchenPermissions();
   const onlinePermissions = useOnlineOrderingPermissions();
   const [pendingOnlineOrders, setPendingOnlineOrders] = useState(0);
@@ -156,6 +158,12 @@ export function AppSidebar({
           <Monitor aria-hidden="true" />
           POS
         </button>
+        {active === "pos" && !frontOfHousePermissions.loading && frontOfHousePermissions.canRead && (
+          <div className="app-subnav" aria-label="POS navigation">
+            <Link className={pathname === "/app/pos" ? "is-active" : ""} href="/app/pos">Register</Link>
+            <Link className={pathname.startsWith("/app/pos/front-of-house") ? "is-active" : ""} href="/app/pos/front-of-house">Front of house</Link>
+          </div>
+        )}
         {!onlinePermissions.loading && onlinePermissions.canRead && (
           <button
             className={active === "online-orders" ? "app-nav-item is-active" : "app-nav-item"}
