@@ -84,6 +84,9 @@ class Permission(StrEnum):
     ONLINE_ORDERS_READ = "online_orders.read"
     ONLINE_ORDERS_MANAGE = "online_orders.manage"
     ONLINE_ORDERING_MANAGE = "online_ordering.manage"
+    FOH_READ = "foh.read"
+    FOH_MANAGE = "foh.manage"
+    FOH_CONFIGURE = "foh.configure"
 
 
 _ALL = frozenset(Permission)
@@ -168,6 +171,9 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.ONLINE_ORDERS_READ,
             Permission.ONLINE_ORDERS_MANAGE,
             Permission.ONLINE_ORDERING_MANAGE,
+            Permission.FOH_READ,
+            Permission.FOH_MANAGE,
+            Permission.FOH_CONFIGURE,
         }
     ),
     MembershipRole.MANAGER: frozenset(
@@ -233,6 +239,9 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.ONLINE_ORDERS_READ,
             Permission.ONLINE_ORDERS_MANAGE,
             Permission.ONLINE_ORDERING_MANAGE,
+            Permission.FOH_READ,
+            Permission.FOH_MANAGE,
+            Permission.FOH_CONFIGURE,
         }
     ),
     MembershipRole.ACCOUNTANT: frozenset(
@@ -276,6 +285,8 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.KITCHEN_READ,
             Permission.ONLINE_ORDERS_READ,
             Permission.ONLINE_ORDERS_MANAGE,
+            Permission.FOH_READ,
+            Permission.FOH_MANAGE,
         }
     ),
     MembershipRole.BARISTA: frozenset(
@@ -294,6 +305,7 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.KITCHEN_READ,
             Permission.KITCHEN_WORK,
             Permission.ONLINE_ORDERS_READ,
+            Permission.FOH_READ,
         }
     ),
 }

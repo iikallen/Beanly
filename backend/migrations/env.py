@@ -38,6 +38,7 @@ from beanly.modules.purchasing.infrastructure.db import (
     models as purchasing_models,  # noqa: F401
 )
 from beanly.modules.refunds.infrastructure.db import models as refund_models  # noqa: F401
+from beanly.modules.reservations.infrastructure.db import models as reservation_models  # noqa: F401
 from beanly.modules.sales.infrastructure.db import models as sales_models  # noqa: F401
 
 config = context.config

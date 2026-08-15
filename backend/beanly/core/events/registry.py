@@ -72,6 +72,18 @@ from beanly.modules.purchasing.domain.events import (
     SupplierReturnReversed,
 )
 from beanly.modules.refunds.domain.events import RefundCompleted
+from beanly.modules.reservations.domain.events import (
+    DiningVisitClosed,
+    DiningVisitOpened,
+    ReservationCancelled,
+    ReservationCompleted,
+    ReservationCreated,
+    ReservationNoShow,
+    ReservationSeated,
+    WaitlistCancelled,
+    WaitlistCreated,
+    WaitlistSeated,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +95,16 @@ class EventSpec:
 
 
 EVENT_REGISTRY: dict[type[object], EventSpec] = {
+    ReservationCreated: EventSpec("reservation.created", 1, "reservation", "reservation_id"),
+    ReservationCancelled: EventSpec("reservation.cancelled", 1, "reservation", "reservation_id"),
+    ReservationSeated: EventSpec("reservation.seated", 1, "reservation", "reservation_id"),
+    ReservationNoShow: EventSpec("reservation.no_show", 1, "reservation", "reservation_id"),
+    ReservationCompleted: EventSpec("reservation.completed", 1, "reservation", "reservation_id"),
+    WaitlistCreated: EventSpec("waitlist.created", 1, "waitlist_entry", "waitlist_entry_id"),
+    WaitlistCancelled: EventSpec("waitlist.cancelled", 1, "waitlist_entry", "waitlist_entry_id"),
+    WaitlistSeated: EventSpec("waitlist.seated", 1, "waitlist_entry", "waitlist_entry_id"),
+    DiningVisitOpened: EventSpec("dining_visit.opened", 1, "dining_visit", "visit_id"),
+    DiningVisitClosed: EventSpec("dining_visit.closed", 1, "dining_visit", "visit_id"),
     OnlineOrderSubmitted: EventSpec(
         "online.order_submitted", 1, "online_order", "online_order_id"
     ),
