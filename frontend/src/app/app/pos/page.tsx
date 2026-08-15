@@ -62,6 +62,7 @@ import { readCatalog, readCurrentSession, saveSession } from "@/lib/offline/db";
 import {
   cancelLocalOrder,
   createLocalOrder,
+  importServerOrder,
   markExternalPaymentApproved,
   applyServerPricing,
   payLocalOrder,
@@ -152,6 +153,7 @@ export default function PosPage() {
   const pendingShiftOpen = useRef<{ id: string; payload: string } | null>(null);
   const pendingTerminal = useRef<{ id: string; fingerprint: string } | null>(null);
   const pendingRedemption = useRef<{ id: string; payload: string } | null>(null);
+  const importedOnlineOrder = useRef("");
 
   const offline = useOfflinePos(offlineSession);
 
@@ -190,6 +192,21 @@ export default function PosPage() {
     const interval = window.setInterval(tick, 30_000);
     return () => window.clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (!accessToken || !organizationId || !offlineSession || offline.networkStatus !== "ONLINE") return;
+    const orderId = new URLSearchParams(window.location.search).get("order_id") ?? "";
+    const importKey = `${organizationId}:${offlineSession.id}:${orderId}`;
+    if (!orderId || importedOnlineOrder.current === importKey) return;
+    let cancelled = false;
+    let completed = false;
+    importedOnlineOrder.current = importKey;
+    void api.getSalesOrder(orderId, organizationId, accessToken)
+      .then((order) => cancelled ? null : importServerOrder(offlineSession, order))
+      .then(async (order) => { if (!order || cancelled) return; await offline.reload(); if (!cancelled) { completed = true; setCurrentOrderId(order.id); setShowOrders(false); } })
+      .catch((caught) => { if (!cancelled) { if (importedOnlineOrder.current === importKey) importedOnlineOrder.current = ""; setError(messageOf(caught)); } });
+    return () => { cancelled = true; if (!completed && importedOnlineOrder.current === importKey) importedOnlineOrder.current = ""; };
+  }, [accessToken, offline, offlineSession, organizationId]);
 
   useEffect(() => {
     let cancelled = false;

@@ -3,6 +3,8 @@ from datetime import UTC, datetime, time
 from decimal import Decimal
 from uuid import UUID, uuid4
 
+from sqlalchemy import select
+
 from beanly.modules.offline_pos.api.schemas import OfflineOrderRequest
 from beanly.modules.offline_pos.domain.exceptions import OrderChangedOnServer
 from beanly.modules.offline_pos.infrastructure.db.models import (
@@ -11,6 +13,8 @@ from beanly.modules.offline_pos.infrastructure.db.models import (
     PosOfflineSessionModel,
 )
 from beanly.modules.offline_pos.infrastructure.snapshot_resolver import resolve_snapshot_item
+from beanly.modules.online_ordering.domain.enums import OnlineOrderStatus
+from beanly.modules.online_ordering.infrastructure.db.models import OnlineOrderModel
 from beanly.modules.organizations.application.queries.get_organization import GetOrganizationQuery
 from beanly.modules.organizations.application.services.organization_service import (
     OrganizationService,
@@ -108,6 +112,17 @@ class OfflineSalesGateway:
                 and order.shift_id == session.shift_id
                 and order.warehouse_id == session.warehouse_id
             )
+            if claimable_online_order:
+                claimable_online_order = bool(
+                    await self.repository.session.scalar(
+                        select(OnlineOrderModel.id).where(
+                            OnlineOrderModel.organization_id == context.organization_id,
+                            OnlineOrderModel.sales_order_id == order.id,
+                            OnlineOrderModel.status
+                            == OnlineOrderStatus.AWAITING_PAYMENT.value,
+                        )
+                    )
+                )
             if not owned_by_session and not claimable_online_order:
                 raise OrderChangedOnServer("Order belongs to another POS session")
             order = await self.repository.update_order(

@@ -2308,6 +2308,7 @@ export type OnlineQuote = {
 
 export type OnlineOrder = {
   id: string;
+  order_number: number;
   organization_id: string;
   location_id: string;
   sales_order_id: string;

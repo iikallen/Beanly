@@ -12,6 +12,7 @@ import {
   LogOut,
   Monitor,
   ReceiptText,
+  RadioTower,
   WalletCards,
   Tags,
   Settings as SettingsIcon,
@@ -21,6 +22,7 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 
 import { useAuth } from "@/components/auth-provider";
 import { Brand } from "@/components/auth-shell";
@@ -28,6 +30,8 @@ import { useWorkspace } from "@/components/workspace-provider";
 import { useOnboardingPermissions } from "@/hooks/use-onboarding-permissions";
 import { useCashPermissions } from "@/hooks/use-cash-permissions";
 import { useKitchenPermissions } from "@/hooks/use-kitchen-permissions";
+import { useOnlineOrderingPermissions } from "@/hooks/use-online-ordering-permissions";
+import { api } from "@/lib/api";
 
 export function AppSidebar({
   active,
@@ -36,7 +40,7 @@ export function AppSidebar({
   settingsCanReadIntegrations,
   settingsCanReadFiscal,
 }: {
-  active: "dashboard" | "analytics" | "pos" | "kitchen" | "cash" | "customers" | "promotions" | "fiscal" | "inventory" | "menu" | "onboarding" | "purchasing" | "finance" | "team" | "settings";
+  active: "dashboard" | "analytics" | "pos" | "online-orders" | "kitchen" | "cash" | "customers" | "promotions" | "fiscal" | "inventory" | "menu" | "onboarding" | "purchasing" | "finance" | "team" | "settings";
   teamView?: "employees" | "invitations";
   onTeamView?: (view: "employees" | "invitations") => void;
   settingsCanReadIntegrations?: boolean;
@@ -50,12 +54,34 @@ export function AppSidebar({
     selectOrganization,
     selectLocation,
   } = useWorkspace();
-  const { logout } = useAuth();
+  const { accessToken, logout } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
   const onboardingPermissions = useOnboardingPermissions();
   const cashPermissions = useCashPermissions();
   const kitchenPermissions = useKitchenPermissions();
+  const onlinePermissions = useOnlineOrderingPermissions();
+  const [pendingOnlineOrders, setPendingOnlineOrders] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer = 0;
+    if (!accessToken || !currentOrganization || !currentLocation || onlinePermissions.loading || !onlinePermissions.canRead) {
+      queueMicrotask(() => { if (!cancelled) setPendingOnlineOrders(0); });
+      return () => { cancelled = true; };
+    }
+    const poll = async () => {
+      try {
+        const orders = await api.listOnlineOrders({ locationId: currentLocation.id, status: "PENDING" }, currentOrganization.id, accessToken);
+        if (!cancelled) setPendingOnlineOrders(orders.length);
+      } catch {
+        if (!cancelled) setPendingOnlineOrders(0);
+      }
+      if (!cancelled) timer = window.setTimeout(poll, 5000);
+    };
+    void poll();
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [accessToken, currentLocation, currentOrganization, onlinePermissions.canRead, onlinePermissions.loading]);
 
   if (!currentOrganization || !currentLocation) return null;
 
@@ -130,6 +156,17 @@ export function AppSidebar({
           <Monitor aria-hidden="true" />
           POS
         </button>
+        {!onlinePermissions.loading && onlinePermissions.canRead && (
+          <button
+            className={active === "online-orders" ? "app-nav-item is-active" : "app-nav-item"}
+            type="button"
+            onClick={() => router.push("/app/online-orders")}
+          >
+            <RadioTower aria-hidden="true" />
+            Online orders
+            {pendingOnlineOrders > 0 && <span className="app-nav-badge" aria-label={`${pendingOnlineOrders} pending online orders`}>{pendingOnlineOrders > 99 ? "99+" : pendingOnlineOrders}</span>}
+          </button>
+        )}
         {!kitchenPermissions.loading && kitchenPermissions.canRead && (
           <button
             className={active === "kitchen" ? "app-nav-item is-active" : "app-nav-item"}

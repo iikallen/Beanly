@@ -117,6 +117,94 @@ export async function applySyncResults(results: SyncResult[]): Promise<void> {
   changed();
 }
 
+export async function importServerOrder(
+  session: OfflineSession,
+  source: SalesOrder,
+): Promise<OfflineOrder> {
+  if (source.status !== "OPEN") throw new Error("Only open orders can be imported into POS");
+  if (source.order_source === "POS") throw new Error("Only online orders can be imported into POS");
+  if (source.organization_id !== session.organization_id || source.shift_id !== session.shift_id || source.location_id !== session.location_id) {
+    throw new Error("Online order belongs to another active shift or location");
+  }
+  const products = session.catalog_snapshot.public_payload.categories.flatMap((category) =>
+    category.products.map((product) => ({ category_id: category.id, product })),
+  );
+  const order: OfflineOrder = {
+    id: source.client_order_id,
+    client_order_id: source.client_order_id,
+    server_order_id: source.id,
+    server_version: source.version,
+    revision: source.version,
+    last_synced_revision: source.version,
+    catalog_snapshot_id: session.catalog_snapshot_id,
+    session_id: session.id,
+    organization_id: source.organization_id,
+    location_id: source.location_id,
+    location_timezone: session.shell.location_timezone ?? "UTC",
+    shift_id: source.shift_id,
+    warehouse_id: source.warehouse_id,
+    offline_display_number: Number(source.number),
+    number: `Order #${source.number}`,
+    order_type: source.order_type,
+    status: "SYNCED_OPEN",
+    currency_code: source.currency_code,
+    items: source.items.map((item) => {
+      const product = products.find((value) => value.product.id === item.product_id);
+      if (!product) throw new Error(`${item.product_name} is not in the current POS catalog`);
+      return {
+        id: item.client_item_id,
+        client_item_id: item.client_item_id,
+        product_id: item.product_id,
+        category_id: product.category_id,
+        product_variant_id: item.product_variant_id,
+        product_name: item.product_name,
+        variant_name: item.variant_name,
+        selected_option_ids: item.modifiers.map((value) => value.modifier_option_id),
+        quantity: item.quantity,
+        base_price_minor: item.base_price_minor,
+        modifier_price_minor: item.modifier_price_minor,
+        unit_price_minor: item.unit_price_minor,
+        line_total_minor: item.line_total_minor,
+        discount_amount_minor: item.discount_amount_minor,
+        net_line_total_minor: item.net_line_total_minor,
+        note: item.note,
+        modifiers: item.modifiers.map((value) => ({
+          modifier_group_id: value.modifier_group_id,
+          modifier_group_name: value.modifier_group_name,
+          modifier_option_id: value.modifier_option_id,
+          modifier_option_name: value.modifier_option_name,
+          price_delta_minor: value.price_delta_minor,
+        })),
+      };
+    }),
+    subtotal_minor: source.subtotal_minor,
+    discount_total_minor: source.discount_total_minor,
+    total_minor: source.total_minor,
+    discounts: source.discounts,
+    manual_promotion_ids: [],
+    pricing_promotions: [],
+    payment: null,
+    cancel_reason: null,
+    created_at: source.created_at,
+    updated_at: source.updated_at,
+    sync_error: null,
+  };
+  const db = await openPosDb();
+  const transaction = db.transaction(stores.orders, "readwrite");
+  const store = transaction.objectStore(stores.orders);
+  const existing = await requestValue(store.get(order.client_order_id)) as OfflineOrder | undefined;
+  if (existing && existing.server_order_id !== source.id) {
+    transaction.abort();
+    db.close();
+    throw new Error("A different local order already uses this client order ID");
+  }
+  if (!existing) store.put(order);
+  await transactionDone(transaction);
+  db.close();
+  if (!existing) changed();
+  return existing ?? order;
+}
+
 export async function markExternalPaymentApproved(clientOrderId: string, attempt: ExternalPaymentAttempt): Promise<OfflineOrder> {
   const db = await openPosDb();
   const transaction = db.transaction(stores.orders, "readwrite");
