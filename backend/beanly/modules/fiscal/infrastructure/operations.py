@@ -394,7 +394,9 @@ class SqlAlchemyFiscalOperations:
                         break
         now, snapshot_id = datetime.now(UTC), uuid4()
         lines: list[FiscalSaleSnapshotLineModel] = []
-        complete = tax is not None
+        # Delivery fee has no configured NKT/VAT profile yet, so keep the receipt
+        # reconcilable but explicitly incomplete instead of claiming tax completeness.
+        complete = tax is not None and order.fulfillment_fee_minor == 0
         for item in order.items:
             profile = profiles.get(item.product_variant_id)
             catalog_variant = offline_fiscal.get(str(item.product_variant_id))

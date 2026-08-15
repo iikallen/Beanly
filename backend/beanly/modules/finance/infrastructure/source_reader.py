@@ -101,7 +101,7 @@ class SqlAlchemyFinanceSourceReader:
             model.cogs_amount or Decimal(0),
             model.cogs_status or "INCOMPLETE",
             model.paid_at,
-            model.subtotal_minor,
+            model.subtotal_minor + model.fulfillment_fee_minor,
             model.discount_total_minor,
         )
 

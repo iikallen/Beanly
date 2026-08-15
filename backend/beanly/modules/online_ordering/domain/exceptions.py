@@ -36,3 +36,15 @@ class OnlineOrderInvalidStation(OnlineOrderingError):
 
 class OnlineOrderCartInvalid(OnlineOrderingError):
     code = "ONLINE_ORDER_CART_INVALID"
+
+
+class OnlineFulfillmentUnavailable(OnlineOrderingError):
+    code = "ONLINE_FULFILLMENT_UNAVAILABLE"
+
+
+class OnlineFulfillmentSlotUnavailable(OnlineOrderingError):
+    code = "ONLINE_FULFILLMENT_SLOT_UNAVAILABLE"
+
+
+class OnlineOrderCancellationForbidden(OnlineOrderingError):
+    code = "ONLINE_ORDER_CANCELLATION_FORBIDDEN"

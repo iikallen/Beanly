@@ -113,6 +113,21 @@ class SqlAlchemyRefundSourceReader:
             .group_by(RefundLineModel.order_item_id)
         )
         refunded = {item_id: int(quantity) for item_id, quantity in refunded_rows}
+        already_refunded_fee = int(
+            await self.session.scalar(
+                select(func.coalesce(func.sum(RefundModel.fulfillment_fee_minor), 0)).where(
+                    RefundModel.organization_id == organization_id,
+                    RefundModel.payment_id == payment.id,
+                    RefundModel.status == "COMPLETED",
+                )
+            )
+            or 0
+        )
+        available_fee = order.fulfillment_fee_minor - already_refunded_fee
+        if value.fulfillment_fee_minor < 0 or value.fulfillment_fee_minor > available_fee:
+            raise RefundPaymentAmountExceeded(
+                "Fulfillment fee refund exceeds the original order fee"
+            )
         preview_lines: list[PreviewLine] = []
         for requested in value.lines:
             item = item_map.get(requested.order_item_id)
@@ -185,7 +200,10 @@ class SqlAlchemyRefundSourceReader:
                     requested.amount_minor,
                 )
             )
-        total = sum(line.total_refund_minor for line in preview_lines)
+        total = (
+            sum(line.total_refund_minor for line in preview_lines)
+            + value.fulfillment_fee_minor
+        )
         if total <= 0 or total != sum(line.amount_minor for line in preview_payments):
             raise RefundTotalMismatch("Refund item and payment totals must match")
 
@@ -223,6 +241,7 @@ class SqlAlchemyRefundSourceReader:
                 total,
                 tuple(preview_lines),
                 tuple(preview_payments),
+                value.fulfillment_fee_minor,
             ),
             order.location_id,
             order.warehouse_id,

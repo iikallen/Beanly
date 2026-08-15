@@ -27,6 +27,7 @@ class RefundInput:
     lines: tuple[RefundLineInput, ...]
     payment_lines: tuple[RefundPaymentLineInput, ...]
     client_refund_id: UUID | None = None
+    fulfillment_fee_minor: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,3 +62,4 @@ class RefundPreview:
     total_amount_minor: int
     lines: tuple[PreviewLine, ...]
     payment_lines: tuple[PreviewPaymentLine, ...]
+    fulfillment_fee_minor: int = 0

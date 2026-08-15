@@ -55,7 +55,9 @@ class RefundService:
         await self.access.ensure_location(context, plan.location_id)
         return plan.preview
 
-    async def complete(self, context: TenantContext, value: RefundInput) -> Refund:
+    async def complete(
+        self, context: TenantContext, value: RefundInput, *, commit: bool = True
+    ) -> Refund:
         if value.client_refund_id is None:
             raise InvalidRefund("client_refund_id is required")
         _bounded(value)
@@ -146,6 +148,7 @@ class RefundService:
                         )
                         for line in plan.preview.payment_lines
                     ),
+                    plan.preview.fulfillment_fee_minor,
                 )
                 await self.store.add(refund)
                 transaction_id, cogs, inventory_events = await self.inventory.stage_return(
@@ -192,7 +195,8 @@ class RefundService:
                             "reason": completed.reason.value,
                         },
                     )
-                await self.store.commit()
+                if commit:
+                    await self.store.commit()
                 metrics.refund_completed.add(1)
                 metrics.refund_amount.add(completed.total_amount_minor)
                 return completed
@@ -222,7 +226,8 @@ class RefundService:
                         "failure_code": getattr(exc, "code", "REFUND_ERROR"),
                     },
                 )
-                await self.store.commit()
+                if commit:
+                    await self.store.commit()
             raise
 
     async def get(self, context: TenantContext, refund_id: UUID) -> Refund:
@@ -293,6 +298,7 @@ def _assert_idempotent(existing: Refund, value: RefundInput) -> None:
         existing.payment_id != value.payment_id
         or existing.reason != value.reason
         or existing.note != _note(value.note)
+        or existing.fulfillment_fee_minor != value.fulfillment_fee_minor
         or lines != requested
         or payments != requested_payments
     ):
@@ -310,3 +316,5 @@ def _reference(value: str | None) -> str | None:
 def _bounded(value: RefundInput) -> None:
     if not 1 <= len(value.lines) <= 100 or not 1 <= len(value.payment_lines) <= 100:
         raise InvalidRefund("Refund supports between 1 and 100 lines")
+    if value.fulfillment_fee_minor < 0:
+        raise InvalidRefund("Fulfillment fee refund cannot be negative")

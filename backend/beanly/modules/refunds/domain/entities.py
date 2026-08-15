@@ -57,3 +57,4 @@ class Refund:
     failure_code: str | None
     lines: tuple[RefundLine, ...]
     payment_lines: tuple[RefundPaymentLine, ...]
+    fulfillment_fee_minor: int = 0

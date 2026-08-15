@@ -54,4 +54,5 @@ def to_refund(value: RefundModel) -> Refund:
             )
             for line in value.payment_lines
         ),
+        value.fulfillment_fee_minor,
     )

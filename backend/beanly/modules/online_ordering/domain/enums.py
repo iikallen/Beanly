@@ -21,3 +21,19 @@ class OrderingStationKind(StrEnum):
     TABLE = "TABLE"
     COUNTER = "COUNTER"
     PICKUP_SPOT = "PICKUP_SPOT"
+
+
+class FulfillmentType(StrEnum):
+    PICKUP = "PICKUP"
+    DELIVERY = "DELIVERY"
+
+
+class FulfillmentTiming(StrEnum):
+    ASAP = "ASAP"
+    SCHEDULED = "SCHEDULED"
+
+
+class SlotReservationStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    RELEASED = "RELEASED"
+    CONSUMED = "CONSUMED"

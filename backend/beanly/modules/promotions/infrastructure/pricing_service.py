@@ -301,7 +301,7 @@ async def reprice_order(
         item.net_line_total_minor = item.line_total_minor - discount
     order.subtotal_minor = result.subtotal_minor
     order.discount_total_minor = result.discount_total_minor
-    order.total_minor = result.total_minor
+    order.total_minor = result.total_minor + order.fulfillment_fee_minor
     order.pricing_revision += 1
     order.priced_at = result.priced_at
     order.version += 1

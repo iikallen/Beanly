@@ -13,6 +13,10 @@ from beanly.modules.online_ordering.api.dependencies import (
 from beanly.modules.online_ordering.api.schemas import (
     AvailabilityResponse,
     ChannelReportRow,
+    DeliveryZonePatch,
+    DeliveryZoneResponse,
+    DeliveryZoneWrite,
+    FulfillmentOptionsResponse,
     LocationSettingsResponse,
     LocationSettingsWrite,
     OnlineOrderResponse,
@@ -33,7 +37,10 @@ from beanly.modules.online_ordering.api.schemas import (
 )
 from beanly.modules.online_ordering.domain.enums import OnlineOrderStatus
 from beanly.modules.online_ordering.domain.exceptions import (
+    OnlineFulfillmentSlotUnavailable,
+    OnlineFulfillmentUnavailable,
     OnlineOrderAlreadyAccepted,
+    OnlineOrderCancellationForbidden,
     OnlineOrderIdempotencyConflict,
     OnlineOrderingError,
     OnlineOrderingNotFound,
@@ -62,6 +69,20 @@ async def public_cancel(
 ) -> PublicOrderStatusResponse:
     try:
         return PublicOrderStatusResponse.from_order(await service.public_cancel(status_token))
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@public_router.get(
+    "/{slug}/fulfillment-options", response_model=FulfillmentOptionsResponse
+)
+async def fulfillment_options(
+    slug: str,
+    service: OnlineOrderingServiceDep,
+    station: str | None = Query(default=None, min_length=20, max_length=200),
+) -> FulfillmentOptionsResponse:
+    try:
+        return await service.fulfillment_options(slug, station)
     except Exception as exc:
         raise _http_error(exc) from exc
 
@@ -196,8 +217,39 @@ async def cancel_order(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Reason is required")
     try:
         return await service.cancel(
-            context, order_id, payload.client_action_id, payload.reason
+            context,
+            order_id,
+            payload.client_action_id,
+            payload.reason,
+            external_refund_confirmed=payload.external_refund_confirmed,
+            refund_reference=payload.refund_reference,
         )
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@router.post("/online-orders/{order_id}/ready", response_model=OnlineOrderResponse)
+async def ready_order(
+    order_id: UUID,
+    payload: StaffActionRequest,
+    context: OnlineOrdersManageDep,
+    service: OnlineOrderingServiceDep,
+) -> OnlineOrderResponse:
+    try:
+        return await service.ready(context, order_id, payload.client_action_id)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@router.post("/online-orders/{order_id}/complete", response_model=OnlineOrderResponse)
+async def complete_order(
+    order_id: UUID,
+    payload: StaffActionRequest,
+    context: OnlineOrdersManageDep,
+    service: OnlineOrderingServiceDep,
+) -> OnlineOrderResponse:
+    try:
+        return await service.complete(context, order_id, payload.client_action_id)
     except Exception as exc:
         raise _http_error(exc) from exc
 
@@ -224,6 +276,49 @@ async def save_settings(
 ) -> LocationSettingsResponse:
     try:
         return await service.save_settings(context, payload)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get("/online-ordering/zones", response_model=list[DeliveryZoneResponse])
+async def list_zones(
+    location_id: UUID,
+    context: OnlineOrderingManageDep,
+    service: OnlineOrderingServiceDep,
+) -> list[DeliveryZoneResponse]:
+    try:
+        return await service.list_zones(context, location_id)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@router.post(
+    "/online-ordering/zones",
+    response_model=DeliveryZoneResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_zone(
+    payload: DeliveryZoneWrite,
+    context: OnlineOrderingManageDep,
+    service: OnlineOrderingServiceDep,
+) -> DeliveryZoneResponse:
+    try:
+        return await service.create_zone(context, payload)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@router.patch(
+    "/online-ordering/zones/{zone_id}", response_model=DeliveryZoneResponse
+)
+async def patch_zone(
+    zone_id: UUID,
+    payload: DeliveryZonePatch,
+    context: OnlineOrderingManageDep,
+    service: OnlineOrderingServiceDep,
+) -> DeliveryZoneResponse:
+    try:
+        return await service.patch_zone(context, zone_id, payload)
     except Exception as exc:
         raise _http_error(exc) from exc
 
@@ -340,7 +435,16 @@ def _http_error(exc: Exception) -> HTTPException:
                 "quote": exc.quote.model_dump(mode="json") if exc.quote else None,
             },
         )
-    if isinstance(exc, (OnlineOrderIdempotencyConflict, OnlineOrderAlreadyAccepted)):
+    if isinstance(
+        exc,
+        (
+            OnlineOrderIdempotencyConflict,
+            OnlineOrderAlreadyAccepted,
+            OnlineFulfillmentUnavailable,
+            OnlineFulfillmentSlotUnavailable,
+            OnlineOrderCancellationForbidden,
+        ),
+    ):
         return HTTPException(status.HTTP_409_CONFLICT, {"code": exc.code, "message": str(exc)})
     if isinstance(exc, OnlineOrderingNotFound):
         return HTTPException(status.HTTP_404_NOT_FOUND, {"code": exc.code, "message": str(exc)})

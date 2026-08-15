@@ -27,6 +27,7 @@ class RefundPreviewRequest(BaseModel):
     note: str | None = Field(default=None, max_length=2000)
     lines: list[RefundLineRequest] = Field(min_length=1, max_length=100)
     payment_lines: list[RefundPaymentLineRequest] = Field(min_length=1, max_length=100)
+    fulfillment_fee_minor: int = Field(default=0, ge=0, le=MAX_BIGINT)
 
 
 class RefundCreateRequest(RefundPreviewRequest):
@@ -63,6 +64,7 @@ class RefundPreviewResponse(BaseModel):
     order_id: UUID
     currency_code: str
     total_amount_minor: str
+    fulfillment_fee_minor: str
     lines: list[RefundPreviewLineResponse]
     payment_lines: list[RefundPreviewPaymentLineResponse]
 
@@ -102,6 +104,7 @@ class RefundResponse(BaseModel):
     note: str | None
     currency_code: str
     total_amount_minor: str
+    fulfillment_fee_minor: str
     inventory_transaction_id: UUID | None
     cogs_reversal_amount: str
     cogs_quality_status: str | None
@@ -145,6 +148,7 @@ class RefundResponse(BaseModel):
                 )
             },
             total_amount_minor=str(value.total_amount_minor),
+            fulfillment_fee_minor=str(value.fulfillment_fee_minor),
             cogs_reversal_amount=str(value.cogs_reversal_amount),
             fiscal_status=fiscal[0],
             fiscal_external_number=fiscal[1],

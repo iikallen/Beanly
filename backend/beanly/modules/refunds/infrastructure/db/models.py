@@ -36,6 +36,9 @@ class RefundModel(Base):
         ),
         CheckConstraint("length(currency_code) = 3", name="ck_refund_currency"),
         CheckConstraint("total_amount_minor > 0", name="ck_refund_total_positive"),
+        CheckConstraint(
+            "fulfillment_fee_minor >= 0", name="ck_refund_fulfillment_fee_nonnegative"
+        ),
         CheckConstraint("cogs_reversal_amount >= 0", name="ck_refund_cogs_nonnegative"),
         CheckConstraint(
             "cogs_quality_status IS NULL OR cogs_quality_status IN "
@@ -57,6 +60,7 @@ class RefundModel(Base):
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     currency_code: Mapped[str] = mapped_column(String(3))
     total_amount_minor: Mapped[int] = mapped_column(BigInteger)
+    fulfillment_fee_minor: Mapped[int] = mapped_column(BigInteger, default=0)
     inventory_transaction_id: Mapped[UUID | None] = mapped_column(
         Uuid, ForeignKey("inventory_transactions.id"), nullable=True, unique=True
     )

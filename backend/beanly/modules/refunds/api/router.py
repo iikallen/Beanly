@@ -119,6 +119,7 @@ def _input(payload: RefundPreviewRequest) -> RefundInput:
             for line in payload.payment_lines
         ),
         getattr(payload, "client_refund_id", None),
+        payload.fulfillment_fee_minor,
     )
 
 

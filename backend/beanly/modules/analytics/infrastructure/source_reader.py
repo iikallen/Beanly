@@ -251,7 +251,7 @@ class SqlAlchemyAnalyticsSourceReader:
             order.cogs_status or "INCOMPLETE",
             items,
             actual_inventory_cogs,
-            Decimal(order.subtotal_minor) / 100,
+            Decimal(order.subtotal_minor + order.fulfillment_fee_minor) / 100,
             Decimal(order.discount_total_minor) / 100,
             tuple(
                 AnalyticsPromotionSnapshot(

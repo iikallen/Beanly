@@ -48,21 +48,30 @@ class SqlAlchemyIntegrationSourceReader:
                 PaymentModel.id == payment_id,
             )
         )
-        order_number = await self.session.scalar(
-            select(SalesOrderModel.number).where(
+        order_row = (
+            await self.session.execute(
+                select(
+                    SalesOrderModel.number,
+                    SalesOrderModel.fulfillment_fee_minor,
+                ).where(
                 SalesOrderModel.organization_id == organization_id,
                 SalesOrderModel.id == snapshot.order_id,
                 SalesOrderModel.status == "PAID",
             )
-        )
-        if payment is None or order_number is None:
+            )
+        ).first()
+        if payment is None or order_row is None:
             raise IntegrationNotFound("Paid fiscal source not found")
+        order_number, fulfillment_fee_minor = order_row
+        items = tuple(_item(line) for line in snapshot.lines)
+        if fulfillment_fee_minor:
+            items = (*items, _fulfillment_fee(int(fulfillment_fee_minor)))
         return FiscalSaleCommand(
             payment_id=payment.id,
             order_number=order_number,
             occurred_at=snapshot.occurred_at,
             currency=snapshot.currency_code,
-            items=tuple(_item(line) for line in snapshot.lines),
+            items=items,
             payment_lines=tuple(
                 FiscalPaymentLine(method=line.method, amount_minor=line.amount_minor)
                 for line in payment.lines
@@ -130,6 +139,8 @@ class SqlAlchemyIntegrationSourceReader:
                     marking_codes=tuple(original.marking_codes),
                 )
             )
+        if refund.fulfillment_fee_minor:
+            items.append(_fulfillment_fee(refund.fulfillment_fee_minor))
         return FiscalRefundCommand(
             refund.id,
             refund.payment_id,
@@ -142,7 +153,8 @@ class SqlAlchemyIntegrationSourceReader:
             ),
             refund.total_amount_minor,
             refund.reason,
-            sum(line.gross_refund_minor for line in refund.lines),
+            sum(line.gross_refund_minor for line in refund.lines)
+            + refund.fulfillment_fee_minor,
             sum(line.discount_refund_minor for line in refund.lines),
         )
 
@@ -161,4 +173,14 @@ def _item(line: FiscalSaleSnapshotLineModel) -> FiscalItem:
         vat_rate=line.vat_rate,
         vat_amount_minor=line.vat_amount_minor,
         marking_codes=tuple(line.marking_codes),
+    )
+
+
+def _fulfillment_fee(amount_minor: int) -> FiscalItem:
+    return FiscalItem(
+        fiscal_name="Delivery fee",
+        quantity=1,
+        unit_price_minor=amount_minor,
+        total_minor=amount_minor,
+        gross_total_minor=amount_minor,
     )

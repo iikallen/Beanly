@@ -56,6 +56,7 @@ class SqlAlchemyRefundRepository:
                     note=value.note,
                     currency_code=value.currency_code,
                     total_amount_minor=value.total_amount_minor,
+                    fulfillment_fee_minor=value.fulfillment_fee_minor,
                     inventory_transaction_id=value.inventory_transaction_id,
                     cogs_reversal_amount=value.cogs_reversal_amount,
                     cogs_quality_status=value.cogs_quality_status,

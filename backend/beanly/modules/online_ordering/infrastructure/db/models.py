@@ -38,6 +38,15 @@ class OnlineOrderingLocationModel(Base):
             "maximum_order_minor IS NULL OR maximum_order_minor >= minimum_order_minor",
             name="ck_online_location_maximum_bounded",
         ),
+        CheckConstraint(
+            "preparation_minutes BETWEEN 0 AND 240 AND "
+            "slot_interval_minutes BETWEEN 5 AND 120 AND slot_capacity BETWEEN 1 AND 1000 AND "
+            "max_advance_minutes BETWEEN 15 AND 43200 AND "
+            "cancellation_cutoff_minutes BETWEEN 0 AND 1440 AND "
+            "delivery_minimum_order_minor >= 0 AND "
+            "default_fulfillment_type IN ('PICKUP','DELIVERY')",
+            name="ck_online_location_fulfillment",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
@@ -63,12 +72,50 @@ class OnlineOrderingLocationModel(Base):
     maximum_order_minor: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     guest_name_required: Mapped[bool] = mapped_column(Boolean, default=False)
     guest_phone_required_pickup: Mapped[bool] = mapped_column(Boolean, default=True)
+    delivery_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    preparation_minutes: Mapped[int] = mapped_column(SmallInteger, default=15)
+    slot_interval_minutes: Mapped[int] = mapped_column(SmallInteger, default=15)
+    slot_capacity: Mapped[int] = mapped_column(SmallInteger, default=20)
+    max_advance_minutes: Mapped[int] = mapped_column(BigInteger, default=10080)
+    cancellation_cutoff_minutes: Mapped[int] = mapped_column(SmallInteger, default=0)
+    delivery_minimum_order_minor: Mapped[int] = mapped_column(BigInteger, default=0)
+    default_fulfillment_type: Mapped[str] = mapped_column(String(16), default="PICKUP")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
     schedules: Mapped[list["OnlineOrderingScheduleModel"]] = relationship(
         cascade="all, delete-orphan"
+    )
+
+
+class DeliveryZoneModel(Base):
+    __tablename__ = "online_delivery_zones"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "location_id", "name", name="uq_online_delivery_zone_name"
+        ),
+        CheckConstraint(
+            "delivery_fee_minor >= 0 AND minimum_order_minor >= 0",
+            name="ck_online_delivery_zone_money",
+        ),
+        Index("ix_online_delivery_zone_location_enabled", "location_id", "enabled"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    organization_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    location_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("locations.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(120))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    delivery_fee_minor: Mapped[int] = mapped_column(BigInteger, default=0)
+    minimum_order_minor: Mapped[int] = mapped_column(BigInteger, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
 
@@ -142,9 +189,10 @@ class OnlineOrderModel(Base):
             name="ck_online_order_status",
         ),
         CheckConstraint(
-            "subtotal_minor >= 0 AND discount_minor >= 0 AND total_minor >= 0 "
+            "subtotal_minor >= 0 AND discount_minor >= 0 AND fulfillment_fee_minor >= 0 "
+            "AND total_minor >= 0 "
             "AND discount_minor <= subtotal_minor "
-            "AND total_minor = subtotal_minor - discount_minor",
+            "AND total_minor = subtotal_minor - discount_minor + fulfillment_fee_minor",
             name="ck_online_order_money",
         ),
         Index("ix_online_order_location_status", "location_id", "status", "created_at"),
@@ -172,6 +220,7 @@ class OnlineOrderModel(Base):
     station_label_snapshot: Mapped[str | None] = mapped_column(String(100), nullable=True)
     subtotal_minor: Mapped[int] = mapped_column(BigInteger)
     discount_minor: Mapped[int] = mapped_column(BigInteger)
+    fulfillment_fee_minor: Mapped[int] = mapped_column(BigInteger, default=0)
     total_minor: Mapped[int] = mapped_column(BigInteger)
     quote_revision: Mapped[str] = mapped_column(String(96))
     status_token_hash: Mapped[str] = mapped_column(String(64))
@@ -238,4 +287,94 @@ class OnlineOrderActionModel(Base):
     client_action_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
     source_event_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class OnlineOrderFulfillmentModel(Base):
+    __tablename__ = "online_order_fulfillments"
+    __table_args__ = (
+        UniqueConstraint("online_order_id", name="uq_online_order_fulfillment_order"),
+        CheckConstraint(
+            "fulfillment_type IN ('PICKUP','DELIVERY')",
+            name="ck_online_fulfillment_type",
+        ),
+        CheckConstraint(
+            "fulfillment_timing IN ('ASAP','SCHEDULED')",
+            name="ck_online_fulfillment_timing",
+        ),
+        CheckConstraint("fulfillment_fee_minor >= 0", name="ck_online_fulfillment_fee"),
+        CheckConstraint(
+            "(fulfillment_timing = 'ASAP' AND requested_at IS NULL) OR "
+            "(fulfillment_timing = 'SCHEDULED' AND requested_at IS NOT NULL)",
+            name="ck_online_fulfillment_requested_at",
+        ),
+        CheckConstraint(
+            "(fulfillment_type = 'DELIVERY' AND delivery_zone_id IS NOT NULL "
+            "AND delivery_address IS NOT NULL) OR "
+            "(fulfillment_type <> 'DELIVERY' AND delivery_zone_id IS NULL "
+            "AND delivery_address IS NULL)",
+            name="ck_online_fulfillment_delivery_shape",
+        ),
+        Index("ix_online_fulfillment_location_promised", "location_id", "promised_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    organization_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    location_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("locations.id", ondelete="RESTRICT"), index=True
+    )
+    online_order_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("online_orders.id", ondelete="CASCADE")
+    )
+    fulfillment_type: Mapped[str] = mapped_column(String(16))
+    fulfillment_timing: Mapped[str] = mapped_column(String(16))
+    requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    promised_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    delivery_zone_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("online_delivery_zones.id", ondelete="RESTRICT"), nullable=True
+    )
+    delivery_address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    guest_instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fulfillment_fee_minor: Mapped[int] = mapped_column(BigInteger, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class OnlineFulfillmentReservationModel(Base):
+    __tablename__ = "online_fulfillment_reservations"
+    __table_args__ = (
+        UniqueConstraint("online_order_id", name="uq_online_reservation_order"),
+        CheckConstraint(
+            "status IN ('ACTIVE','RELEASED','CONSUMED')",
+            name="ck_online_reservation_status",
+        ),
+        Index(
+            "ix_online_reservation_capacity",
+            "location_id",
+            "slot_start_at",
+            "status",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    organization_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("organizations.id", ondelete="CASCADE"), index=True
+    )
+    location_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("locations.id", ondelete="CASCADE"), index=True
+    )
+    online_order_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("online_orders.id", ondelete="CASCADE")
+    )
+    slot_start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(16), default="ACTIVE")
+    released_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

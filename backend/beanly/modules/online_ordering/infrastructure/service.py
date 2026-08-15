@@ -19,10 +19,15 @@ from beanly.core.events.outbox.repositories import OutboxRepository
 from beanly.core.events.outbox.writer import OutboxEventSink
 from beanly.core.observability.metrics import metrics
 from beanly.modules.customers.infrastructure.db.models import PromotionAudienceModel
+from beanly.modules.kitchen.domain.exceptions import KitchenError
+from beanly.modules.kitchen.infrastructure.db.models import KitchenTicketModel
 from beanly.modules.offline_pos.infrastructure.catalog_builder import CatalogSnapshotBuilder
 from beanly.modules.online_ordering.api.schemas import (
     AvailabilityResponse,
     ChannelReportRow,
+    DeliveryZoneResponse,
+    FulfillmentOptionsResponse,
+    FulfillmentSlotResponse,
     LocationSettingsResponse,
     OnlineOrderItemResponse,
     OnlineOrderResponse,
@@ -35,6 +40,8 @@ from beanly.modules.online_ordering.api.schemas import (
     StationResponse,
 )
 from beanly.modules.online_ordering.domain.enums import (
+    FulfillmentTiming,
+    FulfillmentType,
     OnlineOrderSource,
     OnlineOrderStatus,
 )
@@ -45,7 +52,9 @@ from beanly.modules.online_ordering.domain.events import (
     OnlineOrderSubmitted,
 )
 from beanly.modules.online_ordering.domain.exceptions import (
-    OnlineOrderAlreadyAccepted,
+    OnlineFulfillmentSlotUnavailable,
+    OnlineFulfillmentUnavailable,
+    OnlineOrderCancellationForbidden,
     OnlineOrderCartInvalid,
     OnlineOrderIdempotencyConflict,
     OnlineOrderingNotFound,
@@ -55,7 +64,10 @@ from beanly.modules.online_ordering.domain.exceptions import (
     OnlineOrderQuoteChanged,
 )
 from beanly.modules.online_ordering.infrastructure.db.models import (
+    DeliveryZoneModel,
+    OnlineFulfillmentReservationModel,
     OnlineOrderActionModel,
+    OnlineOrderFulfillmentModel,
     OnlineOrderingLocationModel,
     OnlineOrderingScheduleModel,
     OnlineOrderModel,
@@ -87,6 +99,12 @@ from beanly.modules.promotions.infrastructure.db.models import (
 )
 from beanly.modules.promotions.infrastructure.db.repositories import SqlAlchemyPromotionRepository
 from beanly.modules.promotions.infrastructure.pricing_service import reprice_order
+from beanly.modules.refunds.application.dto import (
+    RefundInput,
+    RefundLineInput,
+    RefundPaymentLineInput,
+)
+from beanly.modules.refunds.domain.enums import RefundReason
 from beanly.modules.refunds.infrastructure.db.models import RefundModel
 from beanly.modules.sales.domain.enums import OrderStatus, OrderType, RegisterShiftStatus
 from beanly.modules.sales.infrastructure.db.models import (
@@ -120,6 +138,16 @@ class _ResolvedLine:
         return self.base_price + self.modifier_price
 
 
+@dataclass(frozen=True, slots=True)
+class _ResolvedFulfillment:
+    type: FulfillmentType
+    timing: FulfillmentTiming
+    requested_at: datetime | None
+    promised_at: datetime
+    zone: DeliveryZoneModel | None
+    fee_minor: int
+
+
 class OnlineOrderingService:
     def __init__(
         self,
@@ -146,11 +174,12 @@ class OnlineOrderingService:
             currency_code=organization.currency_code,
             enabled=config.enabled,
             pickup_enabled=config.pickup_enabled,
+            delivery_enabled=config.delivery_enabled,
             qr_dine_in_enabled=config.qr_dine_in_enabled,
             accepting_orders=availability.available,
             unavailable_reason=availability.reasons[0] if availability.reasons else None,
             guest_name_required=station is None or config.guest_name_required,
-            guest_phone_required_pickup=True,
+            guest_phone_required_pickup=config.guest_phone_required_pickup,
             station=(
                 {"kind": station.kind, "label": station.label} if station is not None else None
             ),
@@ -177,10 +206,73 @@ class OnlineOrderingService:
         station = await self._station_token(config, station_token) if station_token else None
         return await self._availability(config, location, station)
 
+    async def fulfillment_options(
+        self, slug: str, station_token: str | None
+    ) -> FulfillmentOptionsResponse:
+        config, location, _ = await self._public_scope(slug)
+        station = await self._station_token(config, station_token) if station_token else None
+        now = datetime.now(UTC)
+        promised = _minute_ceil(now + timedelta(minutes=config.preparation_minutes))
+        slots: list[FulfillmentSlotResponse] = []
+        availability = await self._availability(config, location, station)
+        if (
+            station is None
+            and availability.available
+            and (config.pickup_enabled or config.delivery_enabled)
+        ):
+            starts = _slot_starts(config, location.timezone, promised)
+            counts = dict(
+                (
+                    await self.session.execute(
+                        select(
+                            OnlineFulfillmentReservationModel.slot_start_at,
+                            func.count(OnlineFulfillmentReservationModel.id),
+                        )
+                        .where(
+                            OnlineFulfillmentReservationModel.location_id
+                            == config.location_id,
+                            OnlineFulfillmentReservationModel.status == "ACTIVE",
+                            OnlineFulfillmentReservationModel.slot_start_at.in_(starts),
+                        )
+                        .group_by(OnlineFulfillmentReservationModel.slot_start_at)
+                    )
+                ).all()
+            ) if starts else {}
+            slots = [
+                FulfillmentSlotResponse(
+                    starts_at=value,
+                    remaining_capacity=max(0, config.slot_capacity - int(counts.get(value, 0))),
+                )
+                for value in starts
+                if int(counts.get(value, 0)) < config.slot_capacity
+            ]
+        zones = await self.session.scalars(
+            select(DeliveryZoneModel)
+            .where(
+                DeliveryZoneModel.organization_id == config.organization_id,
+                DeliveryZoneModel.location_id == config.location_id,
+                DeliveryZoneModel.enabled.is_(True),
+            )
+            .order_by(DeliveryZoneModel.name, DeliveryZoneModel.id)
+        )
+        return FulfillmentOptionsResponse(
+            timezone=location.timezone,
+            default_fulfillment_type=config.default_fulfillment_type,
+            pickup_enabled=config.pickup_enabled,
+            delivery_enabled=config.delivery_enabled,
+            preparation_minutes=config.preparation_minutes,
+            slot_interval_minutes=config.slot_interval_minutes,
+            max_advance_minutes=config.max_advance_minutes,
+            cancellation_cutoff_minutes=config.cancellation_cutoff_minutes,
+            asap_promised_at=promised,
+            slots=slots,
+            delivery_zones=[_zone_response(value) for value in zones],
+        )
+
     async def quote(self, slug: str, payload: QuoteRequest) -> QuoteResponse:
         config, location, _ = await self._public_scope(slug)
         station = await self._station_token(config, payload.station_token)
-        await self._require_available(config, location, station)
+        await self._require_available(config, location, station, payload.fulfillment_type)
         return await self._quote(config, location, payload)
 
     async def submit(self, slug: str, payload) -> OnlineOrderResponse:
@@ -201,13 +293,21 @@ class OnlineOrderingService:
             return await self._response(existing, include_token=True)
 
         station = await self._station_token(config, payload.station_token)
-        shift = await self._require_available(config, location, station)
+        shift = await self._require_available(
+            config, location, station, payload.fulfillment_type
+        )
         self._guest(config, station, payload.guest_name, payload.guest_phone)
         quote_payload = QuoteRequest(
             client_order_id=payload.client_order_id,
             station_token=payload.station_token,
             promo_code=payload.promo_code,
             items=payload.items,
+            fulfillment_type=payload.fulfillment_type,
+            fulfillment_timing=payload.fulfillment_timing,
+            requested_at=payload.requested_at,
+            delivery_zone_id=payload.delivery_zone_id,
+            delivery_address=payload.delivery_address,
+            guest_instructions=payload.guest_instructions,
         )
         try:
             issued = int(payload.quote_revision.split(":", 1)[0])
@@ -228,6 +328,7 @@ class OnlineOrderingService:
         lines, pricing, selected = await self._resolve_and_price(
             config, location, shift, quote_payload
         )
+        fulfillment = await self._resolve_fulfillment(config, location, quote_payload)
         online_id = uuid4()
         sales_id = uuid4()
         source = OnlineOrderSource.QR if station else OnlineOrderSource.ONLINE
@@ -240,17 +341,26 @@ class OnlineOrderingService:
             number=await self._next_order_number(),
             client_order_id=payload.client_order_id,
             order_source=source.value,
-            order_type=(OrderType.DINE_IN.value if station else OrderType.TAKEAWAY.value),
+            order_type=(
+                OrderType.DINE_IN.value
+                if station
+                else (
+                    OrderType.DELIVERY.value
+                    if fulfillment.type == FulfillmentType.DELIVERY
+                    else OrderType.TAKEAWAY.value
+                )
+            ),
             status=OrderStatus.OPEN.value,
             currency_code=organization.currency_code,
             guest_count=1 if station else None,
             table_label=station.label if station else None,
-            note=None,
+            note=_text(payload.guest_instructions),
             customer_name_snapshot=_text(payload.guest_name),
             customer_phone_snapshot=_phone(payload.guest_phone),
             subtotal_minor=pricing.subtotal_minor,
             discount_total_minor=0,
-            total_minor=pricing.subtotal_minor,
+            fulfillment_fee_minor=fulfillment.fee_minor,
+            total_minor=pricing.subtotal_minor + fulfillment.fee_minor,
             pricing_revision=1,
             created_by_user_id=None,
             created_at=now,
@@ -299,7 +409,11 @@ class OnlineOrderingService:
             sales.subtotal_minor,
             sales.discount_total_minor,
             sales.total_minor,
-        ) != (pricing.subtotal_minor, pricing.discount_total_minor, pricing.total_minor):
+        ) != (
+            pricing.subtotal_minor,
+            pricing.discount_total_minor,
+            pricing.total_minor + fulfillment.fee_minor,
+        ):
             raise await self._quote_changed(config, location, quote_payload)
         auto_accept = bool(station and config.qr_auto_accept)
         online = OnlineOrderModel(
@@ -321,6 +435,7 @@ class OnlineOrderingService:
             station_label_snapshot=station.label if station else None,
             subtotal_minor=sales.subtotal_minor,
             discount_minor=sales.discount_total_minor,
+            fulfillment_fee_minor=fulfillment.fee_minor,
             total_minor=sales.total_minor,
             quote_revision=payload.quote_revision,
             status_token_hash=_sha(self._status_token(online_id)),
@@ -329,6 +444,48 @@ class OnlineOrderingService:
             updated_at=now,
         )
         self.session.add(online)
+        await self.session.flush()
+        self.session.add(
+            OnlineOrderFulfillmentModel(
+                id=uuid4(),
+                organization_id=config.organization_id,
+                location_id=config.location_id,
+                online_order_id=online.id,
+                fulfillment_type=fulfillment.type.value,
+                fulfillment_timing=fulfillment.timing.value,
+                requested_at=fulfillment.requested_at,
+                promised_at=fulfillment.promised_at,
+                delivery_zone_id=fulfillment.zone.id if fulfillment.zone else None,
+                delivery_address=_text(payload.delivery_address),
+                guest_instructions=_text(payload.guest_instructions),
+                fulfillment_fee_minor=fulfillment.fee_minor,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        if fulfillment.timing == FulfillmentTiming.SCHEDULED:
+            await self._lock_slot(config, fulfillment.requested_at)
+            active = await self.session.scalar(
+                select(func.count(OnlineFulfillmentReservationModel.id)).where(
+                    OnlineFulfillmentReservationModel.location_id == config.location_id,
+                    OnlineFulfillmentReservationModel.slot_start_at
+                    == fulfillment.requested_at,
+                    OnlineFulfillmentReservationModel.status == "ACTIVE",
+                )
+            )
+            if int(active or 0) >= config.slot_capacity:
+                raise OnlineFulfillmentSlotUnavailable("The requested slot is full")
+            self.session.add(
+                OnlineFulfillmentReservationModel(
+                    id=uuid4(),
+                    organization_id=config.organization_id,
+                    location_id=config.location_id,
+                    online_order_id=online.id,
+                    slot_start_at=fulfillment.requested_at,
+                    status="ACTIVE",
+                    created_at=now,
+                )
+            )
         self._action(online, "SUBMIT", None, online.status, None, None)
         await self.events.stage(
             OnlineOrderSubmitted(config.organization_id, online.id, sales.id), occurred_at=now
@@ -364,14 +521,38 @@ class OnlineOrderingService:
 
     async def public_cancel(self, token: str) -> OnlineOrderResponse:
         order = await self._by_status_token(token, lock=True)
-        if order.status != OnlineOrderStatus.PENDING.value:
-            raise OnlineOrderAlreadyAccepted("Only a pending order can be cancelled by the guest")
+        if order.status == OnlineOrderStatus.CANCELLED.value:
+            return await self._response(order)
+        if order.status not in {
+            OnlineOrderStatus.PENDING.value,
+            OnlineOrderStatus.AWAITING_PAYMENT.value,
+        }:
+            raise OnlineOrderCancellationForbidden(
+                "Captured orders must be cancelled by staff"
+            )
+        fulfillment = await self.session.scalar(
+            select(OnlineOrderFulfillmentModel).where(
+                OnlineOrderFulfillmentModel.online_order_id == order.id
+            )
+        )
+        config = await self._config(order.organization_id, order.location_id)
+        now = datetime.now(UTC)
+        if (
+            fulfillment is not None
+            and config is not None
+            and fulfillment.fulfillment_timing == FulfillmentTiming.SCHEDULED.value
+            and now
+            >= _utc(fulfillment.promised_at)
+            - timedelta(minutes=config.cancellation_cutoff_minutes)
+        ):
+            raise OnlineOrderCancellationForbidden("The cancellation cutoff has passed")
         await self._cancel_sales(order, None, "Cancelled by guest")
         previous = order.status
         order.status = OnlineOrderStatus.CANCELLED.value
-        order.cancelled_at = order.updated_at = datetime.now(UTC)
+        order.cancelled_at = order.updated_at = now
         order.cancel_reason = "Cancelled by guest"
         self._action(order, "GUEST_CANCEL", previous, order.status, None, None)
+        await self._release_reservation(order.id, now)
         await self.events.stage(
             OnlineOrderCancelled(order.organization_id, order.id, order.sales_order_id),
             occurred_at=order.cancelled_at,
@@ -454,6 +635,7 @@ class OnlineOrderingService:
         self._action(
             order, "REJECT", previous, order.status, context.user_id, client_action_id, reason
         )
+        await self._release_reservation(order.id, now)
         await self.events.stage(
             OnlineOrderRejected(order.organization_id, order.id, order.sales_order_id),
             occurred_at=now,
@@ -463,19 +645,41 @@ class OnlineOrderingService:
         return await self._response(order)
 
     async def cancel(
-        self, context: TenantContext, order_id: UUID, client_action_id: UUID, reason: str
+        self,
+        context: TenantContext,
+        order_id: UUID,
+        client_action_id: UUID,
+        reason: str,
+        *,
+        external_refund_confirmed: bool = False,
+        refund_reference: str | None = None,
     ) -> OnlineOrderResponse:
         order = await self._staff_order(context, order_id, lock=True)
         if await self._replay(
             context.organization_id, client_action_id, order.id, "CANCEL", reason
         ):
             return await self._response(order)
-        if order.status not in {
+        if order.status == OnlineOrderStatus.CANCELLED.value:
+            return await self._response(order)
+        if order.status in {
             OnlineOrderStatus.PENDING.value,
             OnlineOrderStatus.AWAITING_PAYMENT.value,
         }:
-            raise OnlineOrderInvalidState("Paid online orders require a refund")
-        await self._cancel_sales(order, context.user_id, reason)
+            await self._cancel_sales(order, context.user_id, reason)
+        elif order.status in {
+            OnlineOrderStatus.PAID.value,
+            OnlineOrderStatus.PREPARING.value,
+            OnlineOrderStatus.READY.value,
+        }:
+            await self._refund_paid_order(
+                context,
+                order,
+                reason,
+                external_refund_confirmed=external_refund_confirmed,
+                refund_reference=refund_reference,
+            )
+        else:
+            raise OnlineOrderInvalidState("Completed orders cannot be cancelled")
         previous = order.status
         now = datetime.now(UTC)
         order.status = OnlineOrderStatus.CANCELLED.value
@@ -485,12 +689,76 @@ class OnlineOrderingService:
         self._action(
             order, "CANCEL", previous, order.status, context.user_id, client_action_id, reason
         )
+        await self._release_reservation(order.id, now)
         await self.events.stage(
             OnlineOrderCancelled(order.organization_id, order.id, order.sales_order_id),
             occurred_at=now,
         )
         await self.session.commit()
         metrics.online_orders_cancelled.add(1, {"source": order.source})
+        return await self._response(order)
+
+    async def ready(
+        self, context: TenantContext, order_id: UUID, client_action_id: UUID
+    ) -> OnlineOrderResponse:
+        order = await self._staff_order(context, order_id, lock=True)
+        if await self._replay(context.organization_id, client_action_id, order.id, "READY"):
+            return await self._response(order)
+        if order.status not in {
+            OnlineOrderStatus.PAID.value,
+            OnlineOrderStatus.PREPARING.value,
+        }:
+            raise OnlineOrderInvalidState("Only paid or preparing orders can be marked ready")
+        now = datetime.now(UTC)
+        from beanly.modules.kitchen.infrastructure.service import KitchenService
+
+        try:
+            await KitchenService(self.session, self.organizations).stage_order_ready(
+                context.organization_id, order.sales_order_id, now
+            )
+        except KitchenError as exc:
+            raise OnlineOrderInvalidState(str(exc)) from exc
+        previous = order.status
+        order.status = OnlineOrderStatus.READY.value
+        order.ready_at = order.updated_at = now
+        self._action(
+            order, "READY", previous, order.status, context.user_id, client_action_id
+        )
+        await self.session.commit()
+        return await self._response(order)
+
+    async def complete(
+        self, context: TenantContext, order_id: UUID, client_action_id: UUID
+    ) -> OnlineOrderResponse:
+        order = await self._staff_order(context, order_id, lock=True)
+        if await self._replay(
+            context.organization_id, client_action_id, order.id, "COMPLETE"
+        ):
+            return await self._response(order)
+        if order.status != OnlineOrderStatus.READY.value:
+            raise OnlineOrderInvalidState("Only ready orders can be completed")
+        now = datetime.now(UTC)
+        from beanly.modules.kitchen.infrastructure.service import KitchenService
+
+        try:
+            await KitchenService(self.session, self.organizations).stage_order_complete(
+                context.organization_id, order.sales_order_id, now
+            )
+        except KitchenError as exc:
+            raise OnlineOrderInvalidState(str(exc)) from exc
+        order.status = OnlineOrderStatus.COMPLETED.value
+        order.completed_at = order.updated_at = now
+        self._action(
+            order,
+            "COMPLETE",
+            OnlineOrderStatus.READY.value,
+            order.status,
+            context.user_id,
+            client_action_id,
+        )
+        await self._release_reservation(order.id, now, consumed=True)
+        await self.session.commit()
+        metrics.online_orders_completed.add(1, {"source": order.source})
         return await self._response(order)
 
     async def get_settings(
@@ -529,18 +797,27 @@ class OnlineOrderingService:
             "public_slug",
             "enabled",
             "pickup_enabled",
+            "delivery_enabled",
             "qr_dine_in_enabled",
             "qr_auto_accept",
             "register_id",
             "accepting_orders",
             "guest_name_required",
             "guest_phone_required_pickup",
+            "preparation_minutes",
+            "slot_interval_minutes",
+            "slot_capacity",
+            "max_advance_minutes",
+            "cancellation_cutoff_minutes",
+            "default_fulfillment_type",
         ):
-            setattr(model, field, getattr(payload, field))
+            value = getattr(payload, field)
+            setattr(model, field, value.value if hasattr(value, "value") else value)
         model.minimum_order_minor = int(payload.minimum_order_minor)
         model.maximum_order_minor = (
             int(payload.maximum_order_minor) if payload.maximum_order_minor is not None else None
         )
+        model.delivery_minimum_order_minor = int(payload.delivery_minimum_order_minor)
         model.updated_at = now
         await self.session.flush()
         await self.session.execute(
@@ -568,6 +845,72 @@ class OnlineOrderingService:
         saved = await self._config(context.organization_id, payload.location_id)
         assert saved is not None
         return LocationSettingsResponse.from_model(saved)
+
+    async def list_zones(
+        self, context: TenantContext, location_id: UUID
+    ) -> list[DeliveryZoneResponse]:
+        await self._location_access(context, location_id)
+        values = await self.session.scalars(
+            select(DeliveryZoneModel)
+            .where(
+                DeliveryZoneModel.organization_id == context.organization_id,
+                DeliveryZoneModel.location_id == location_id,
+            )
+            .order_by(DeliveryZoneModel.name, DeliveryZoneModel.id)
+        )
+        return [_zone_response(value) for value in values]
+
+    async def create_zone(self, context: TenantContext, payload) -> DeliveryZoneResponse:
+        await self._location_access(context, payload.location_id)
+        now = datetime.now(UTC)
+        value = DeliveryZoneModel(
+            id=uuid4(),
+            organization_id=context.organization_id,
+            location_id=payload.location_id,
+            name=payload.name.strip(),
+            enabled=payload.enabled,
+            delivery_fee_minor=int(payload.delivery_fee_minor),
+            minimum_order_minor=int(payload.minimum_order_minor),
+            created_at=now,
+            updated_at=now,
+        )
+        self.session.add(value)
+        try:
+            await self.session.commit()
+        except IntegrityError as exc:
+            await self.session.rollback()
+            raise OnlineOrderCartInvalid("Delivery zone name is already in use") from exc
+        return _zone_response(value)
+
+    async def patch_zone(
+        self, context: TenantContext, zone_id: UUID, payload
+    ) -> DeliveryZoneResponse:
+        value = await self.session.scalar(
+            select(DeliveryZoneModel)
+            .where(
+                DeliveryZoneModel.id == zone_id,
+                DeliveryZoneModel.organization_id == context.organization_id,
+            )
+            .with_for_update()
+        )
+        if value is None:
+            raise OnlineOrderingNotFound("Delivery zone not found")
+        await self._location_access(context, value.location_id)
+        for field in ("name", "enabled"):
+            changed = getattr(payload, field)
+            if changed is not None:
+                setattr(value, field, changed.strip() if field == "name" else changed)
+        for field in ("delivery_fee_minor", "minimum_order_minor"):
+            changed = getattr(payload, field)
+            if changed is not None:
+                setattr(value, field, int(changed))
+        value.updated_at = datetime.now(UTC)
+        try:
+            await self.session.commit()
+        except IntegrityError as exc:
+            await self.session.rollback()
+            raise OnlineOrderCartInvalid("Delivery zone name is already in use") from exc
+        return _zone_response(value)
 
     async def pause(self, context: TenantContext, payload) -> LocationSettingsResponse:
         model = await self._managed_config(context, payload.location_id, lock=True)
@@ -700,7 +1043,11 @@ class OnlineOrderingService:
         )
         if config is None or not config.enabled:
             reasons.append("ONLINE_ORDERING_DISABLED")
-        if config and not config.pickup_enabled and not config.qr_dine_in_enabled:
+        if config and not (
+            config.pickup_enabled
+            or config.delivery_enabled
+            or config.qr_dine_in_enabled
+        ):
             reasons.append("NO_ORDERING_CHANNEL_ENABLED")
         if not menu:
             reasons.append("MENU_NOT_READY")
@@ -898,6 +1245,7 @@ class OnlineOrderingService:
         if target == OnlineOrderStatus.PAID:
             metrics.online_orders_paid.add(1, {"source": online.source})
         elif target == OnlineOrderStatus.COMPLETED:
+            await self._release_reservation(online.id, occurred_at, consumed=True)
             metrics.online_orders_completed.add(1, {"source": online.source})
         elif target == OnlineOrderStatus.READY and online.preparing_at:
             metrics.online_ready_seconds.record(
@@ -917,6 +1265,12 @@ class OnlineOrderingService:
         if shift is None:
             raise OnlineOrderingUnavailable("Online ordering requires an open register shift")
         lines, pricing, _ = await self._resolve_and_price(config, location, shift, payload)
+        fulfillment = await self._resolve_fulfillment(config, location, payload)
+        if fulfillment.type == FulfillmentType.DELIVERY and pricing.total_minor < max(
+            config.delivery_minimum_order_minor,
+            fulfillment.zone.minimum_order_minor if fulfillment.zone else 0,
+        ):
+            raise OnlineOrderCartInvalid("Order is below the delivery minimum")
         issued = issued if issued is not None else int(datetime.now(UTC).timestamp())
         expires = datetime.fromtimestamp(issued + _QUOTE_TTL, UTC)
         body = {
@@ -926,7 +1280,23 @@ class OnlineOrderingService:
             "items": [item.model_dump(mode="json") for item in payload.items],
             "subtotal": pricing.subtotal_minor,
             "discount": pricing.discount_total_minor,
-            "total": pricing.total_minor,
+            "fulfillment": {
+                "type": fulfillment.type.value,
+                "timing": fulfillment.timing.value,
+                "requested_at": (
+                    fulfillment.requested_at.isoformat()
+                    if fulfillment.requested_at is not None
+                    else None
+                ),
+                "promised_at": fulfillment.promised_at.isoformat(),
+                "delivery_zone_id": (
+                    str(fulfillment.zone.id) if fulfillment.zone is not None else None
+                ),
+                "delivery_address": _text(payload.delivery_address),
+                "guest_instructions": _text(payload.guest_instructions),
+                "fee": fulfillment.fee_minor,
+            },
+            "total": pricing.total_minor + fulfillment.fee_minor,
             "issued": issued,
         }
         revision = f"{issued}:{hashlib.sha256(_canonical(body)).hexdigest()}"
@@ -934,7 +1304,17 @@ class OnlineOrderingService:
             source=OnlineOrderSource.QR if payload.station_token else OnlineOrderSource.ONLINE,
             subtotal_minor=str(pricing.subtotal_minor),
             discount_minor=str(pricing.discount_total_minor),
-            total_minor=str(pricing.total_minor),
+            fulfillment_fee_minor=str(fulfillment.fee_minor),
+            total_minor=str(pricing.total_minor + fulfillment.fee_minor),
+            fulfillment_type=fulfillment.type,
+            fulfillment_timing=fulfillment.timing,
+            requested_at=fulfillment.requested_at,
+            promised_at=fulfillment.promised_at,
+            delivery_zone=(
+                _zone_response(fulfillment.zone) if fulfillment.zone is not None else None
+            ),
+            delivery_address=_text(payload.delivery_address),
+            guest_instructions=_text(payload.guest_instructions),
             lines=[
                 QuoteLineResponse(
                     client_item_id=line.request.client_item_id,
@@ -1049,6 +1429,83 @@ class OnlineOrderingService:
             raise OnlineOrderCartInvalid("Order exceeds the configured maximum")
         return lines, pricing, selected
 
+    async def _resolve_fulfillment(
+        self,
+        config: OnlineOrderingLocationModel,
+        location: LocationModel,
+        payload: QuoteRequest,
+    ) -> _ResolvedFulfillment:
+        kind = payload.fulfillment_type
+        timing = payload.fulfillment_timing
+        if payload.station_token:
+            if kind != FulfillmentType.PICKUP or timing != FulfillmentTiming.ASAP:
+                raise OnlineFulfillmentUnavailable("QR orders only support ASAP fulfillment")
+        elif kind == FulfillmentType.PICKUP and not config.pickup_enabled:
+            raise OnlineFulfillmentUnavailable("Pickup is disabled")
+        elif kind == FulfillmentType.DELIVERY and not config.delivery_enabled:
+            raise OnlineFulfillmentUnavailable("Delivery is disabled")
+
+        zone = None
+        fee = 0
+        if kind == FulfillmentType.DELIVERY:
+            zone = await self.session.scalar(
+                select(DeliveryZoneModel).where(
+                    DeliveryZoneModel.id == payload.delivery_zone_id,
+                    DeliveryZoneModel.organization_id == config.organization_id,
+                    DeliveryZoneModel.location_id == config.location_id,
+                    DeliveryZoneModel.enabled.is_(True),
+                )
+            )
+            if zone is None:
+                raise OnlineFulfillmentUnavailable("Delivery zone is unavailable")
+            fee = zone.delivery_fee_minor
+
+        now = datetime.now(UTC)
+        earliest = _minute_ceil(now + timedelta(minutes=config.preparation_minutes))
+        if payload.requested_at is not None and (
+            payload.requested_at.tzinfo is None
+            or payload.requested_at.utcoffset() is None
+        ):
+            raise OnlineFulfillmentUnavailable("Scheduled time must include a timezone offset")
+        requested = _utc(payload.requested_at) if payload.requested_at else None
+        promised = requested or earliest
+        if timing == FulfillmentTiming.SCHEDULED:
+            assert requested is not None
+            if requested.second or requested.microsecond:
+                raise OnlineFulfillmentUnavailable("Scheduled time must use minute precision")
+            if requested < earliest:
+                raise OnlineFulfillmentUnavailable("Scheduled time is too soon")
+            if requested > now + timedelta(minutes=config.max_advance_minutes):
+                raise OnlineFulfillmentUnavailable("Scheduled time is too far in advance")
+            if requested not in _slot_starts(config, location.timezone, earliest):
+                raise OnlineFulfillmentUnavailable("Scheduled time is outside ordering hours")
+            active = await self.session.scalar(
+                select(func.count(OnlineFulfillmentReservationModel.id)).where(
+                    OnlineFulfillmentReservationModel.location_id == config.location_id,
+                    OnlineFulfillmentReservationModel.slot_start_at == requested,
+                    OnlineFulfillmentReservationModel.status == "ACTIVE",
+                )
+            )
+            if int(active or 0) >= config.slot_capacity:
+                raise OnlineFulfillmentSlotUnavailable("The requested slot is full")
+        return _ResolvedFulfillment(kind, timing, requested, promised, zone, fee)
+
+    async def _lock_slot(
+        self, config: OnlineOrderingLocationModel, requested_at: datetime | None
+    ) -> None:
+        if requested_at is None:
+            return
+        bind = self.session.get_bind()
+        if bind.dialect.name != "postgresql":
+            return
+        raw = hashlib.sha256(
+            f"{config.organization_id}:{config.location_id}:{requested_at.isoformat()}".encode()
+        ).digest()[:8]
+        key = int.from_bytes(raw, "big", signed=True)
+        await self.session.execute(
+            select(func.pg_advisory_xact_lock(key))
+        )
+
     async def _promo_selection(self, organization_id, code, promotions):
         normalized = _promo(code)
         if normalized is None:
@@ -1090,7 +1547,7 @@ class OnlineOrderingService:
             raise OnlineOrderingNotFound("Ordering page not found")
         return value
 
-    async def _availability(self, config, location, station):
+    async def _availability(self, config, location, station, fulfillment_type=None):
         now = datetime.now(UTC)
         schedule_open = _schedule_open(config, location.timezone, now)
         shift_open = await self._open_shift(config) is not None
@@ -1105,8 +1562,22 @@ class OnlineOrderingService:
             reasons.append("ONLINE_ORDERING_DISABLED")
         if station and not config.qr_dine_in_enabled:
             reasons.append("QR_DINE_IN_DISABLED")
-        if station is None and not config.pickup_enabled:
+        if (
+            station is None
+            and fulfillment_type == FulfillmentType.DELIVERY
+            and not config.delivery_enabled
+        ):
+            reasons.append("DELIVERY_DISABLED")
+        elif (
+            station is None
+            and fulfillment_type == FulfillmentType.PICKUP
+            and not config.pickup_enabled
+        ):
             reasons.append("PICKUP_DISABLED")
+        elif station is None and fulfillment_type is None and not (
+            config.pickup_enabled or config.delivery_enabled
+        ):
+            reasons.append("FULFILLMENT_DISABLED")
         closed_today = config.closed_date == local_date
         if not accepting and not closed_today:
             reasons.append("TEMPORARILY_PAUSED")
@@ -1124,8 +1595,10 @@ class OnlineOrderingService:
             reasons=reasons,
         )
 
-    async def _require_available(self, config, location, station):
-        availability = await self._availability(config, location, station)
+    async def _require_available(self, config, location, station, fulfillment_type=None):
+        availability = await self._availability(
+            config, location, station, fulfillment_type
+        )
         if not availability.available:
             raise OnlineOrderingUnavailable(availability.reasons[0])
         shift = await self._open_shift(config, lock=True)
@@ -1192,6 +1665,38 @@ class OnlineOrderingService:
         )
         if sales is None:
             raise OnlineOrderingNotFound("Online order not found")
+        fulfillment = await self.session.scalar(
+            select(OnlineOrderFulfillmentModel).where(
+                OnlineOrderFulfillmentModel.online_order_id == value.id
+            )
+        )
+        if fulfillment is None:
+            raise OnlineOrderingNotFound("Online order fulfillment not found")
+        zone = (
+            await self.session.get(DeliveryZoneModel, fulfillment.delivery_zone_id)
+            if fulfillment.delivery_zone_id
+            else None
+        )
+        config = await self._config(value.organization_id, value.location_id)
+        cutoff = config.cancellation_cutoff_minutes if config else 0
+        cancellation_deadline = (
+            fulfillment.promised_at - timedelta(minutes=cutoff)
+            if fulfillment.fulfillment_timing == FulfillmentTiming.SCHEDULED.value
+            else None
+        )
+        now = datetime.now(UTC)
+        can_cancel = value.status in {
+            OnlineOrderStatus.PENDING.value,
+            OnlineOrderStatus.AWAITING_PAYMENT.value,
+        } and (
+            cancellation_deadline is None or now < _utc(cancellation_deadline)
+        )
+        kitchen_ticket_id = await self.session.scalar(
+            select(KitchenTicketModel.id).where(
+                KitchenTicketModel.organization_id == value.organization_id,
+                KitchenTicketModel.order_id == value.sales_order_id,
+            )
+        )
         return OnlineOrderResponse(
             id=value.id,
             organization_id=value.organization_id,
@@ -1208,7 +1713,19 @@ class OnlineOrderingService:
             currency_code=sales.currency_code,
             subtotal_minor=str(value.subtotal_minor),
             discount_minor=str(value.discount_minor),
+            fulfillment_fee_minor=str(value.fulfillment_fee_minor),
             total_minor=str(value.total_minor),
+            fulfillment_type=fulfillment.fulfillment_type,
+            fulfillment_timing=fulfillment.fulfillment_timing,
+            requested_at=fulfillment.requested_at,
+            promised_at=fulfillment.promised_at,
+            delivery_zone=_zone_response(zone) if zone else None,
+            delivery_address=fulfillment.delivery_address,
+            guest_instructions=fulfillment.guest_instructions,
+            cancellation_deadline=cancellation_deadline,
+            can_cancel=can_cancel,
+            age_seconds=max(0, int((now - _utc(value.created_at)).total_seconds())),
+            kitchen_ticket_id=kitchen_ticket_id,
             accepted_at=value.accepted_at,
             rejected_at=value.rejected_at,
             rejection_reason=value.rejection_reason,
@@ -1266,6 +1783,78 @@ class OnlineOrderingService:
         )
         if result.rowcount != 1:
             raise OnlineOrderInvalidState("Paid online orders require a refund")
+
+    async def _refund_paid_order(
+        self,
+        context: TenantContext,
+        online: OnlineOrderModel,
+        reason: str,
+        *,
+        external_refund_confirmed: bool,
+        refund_reference: str | None,
+    ) -> None:
+        payment = await self.session.scalar(
+            select(PaymentModel)
+            .options(selectinload(PaymentModel.lines))
+            .where(
+                PaymentModel.organization_id == online.organization_id,
+                PaymentModel.order_id == online.sales_order_id,
+            )
+            .with_for_update()
+        )
+        sales = await self.session.scalar(
+            select(SalesOrderModel)
+            .options(selectinload(SalesOrderModel.items))
+            .where(
+                SalesOrderModel.organization_id == online.organization_id,
+                SalesOrderModel.id == online.sales_order_id,
+            )
+        )
+        if payment is None or sales is None:
+            raise OnlineOrderInvalidState("Captured payment was not found")
+        from beanly.modules.refunds.api.dependencies import refund_service
+
+        await refund_service(self.session, self.settings).complete(
+            context,
+            RefundInput(
+                payment_id=payment.id,
+                reason=RefundReason.ORDER_ERROR,
+                note=reason,
+                lines=tuple(
+                    RefundLineInput(item.id, item.quantity, item.quantity)
+                    for item in sales.items
+                ),
+                payment_lines=tuple(
+                    RefundPaymentLineInput(
+                        line.id,
+                        line.amount_minor,
+                        external_refund_confirmed,
+                        refund_reference,
+                    )
+                    for line in payment.lines
+                ),
+                client_refund_id=uuid5(
+                    NAMESPACE_URL, f"beanly:online-cancel-refund:{online.id}"
+                ),
+                fulfillment_fee_minor=online.fulfillment_fee_minor,
+            ),
+            commit=False,
+        )
+
+    async def _release_reservation(
+        self, online_order_id: UUID, occurred_at: datetime, *, consumed: bool = False
+    ) -> None:
+        await self.session.execute(
+            update(OnlineFulfillmentReservationModel)
+            .where(
+                OnlineFulfillmentReservationModel.online_order_id == online_order_id,
+                OnlineFulfillmentReservationModel.status == "ACTIVE",
+            )
+            .values(
+                status="CONSUMED" if consumed else "RELEASED",
+                released_at=None if consumed else occurred_at,
+            )
+        )
 
     async def _replay(
         self,
@@ -1390,7 +1979,7 @@ class OnlineOrderingService:
         normalized_phone = _phone(phone)
         if (station is None or config.guest_name_required) and not normalized_name:
             raise OnlineOrderCartInvalid("Guest name is required")
-        if station is None and not normalized_phone:
+        if station is None and config.guest_phone_required_pickup and not normalized_phone:
             raise OnlineOrderCartInvalid("Pickup phone is required")
 
 
@@ -1590,6 +2179,53 @@ def _schedule_open(config, timezone: str, now: datetime | None = None) -> bool:
         ):
             return True
     return False
+
+
+def _minute_ceil(value: datetime) -> datetime:
+    value = _utc(value)
+    if value.second or value.microsecond:
+        value += timedelta(minutes=1)
+    return value.replace(second=0, microsecond=0)
+
+
+def _slot_starts(
+    config: OnlineOrderingLocationModel, timezone: str, earliest: datetime
+) -> tuple[datetime, ...]:
+    earliest = _minute_ceil(earliest)
+    horizon = datetime.now(UTC) + timedelta(minutes=config.max_advance_minutes)
+    zone = ZoneInfo(timezone)
+    first_day = earliest.astimezone(zone).date() - timedelta(days=1)
+    last_day = horizon.astimezone(zone).date() + timedelta(days=1)
+    values: set[datetime] = set()
+    day = first_day
+    while day <= last_day:
+        for schedule in config.schedules:
+            if schedule.weekday != day.weekday():
+                continue
+            opened = datetime.combine(day, schedule.opens_at_local, tzinfo=zone)
+            closed_day = day + timedelta(
+                days=1 if schedule.closes_at_local <= schedule.opens_at_local else 0
+            )
+            closed = datetime.combine(closed_day, schedule.closes_at_local, tzinfo=zone)
+            current = opened
+            while current < closed:
+                candidate = current.astimezone(UTC).replace(second=0, microsecond=0)
+                if earliest <= candidate <= horizon:
+                    values.add(candidate)
+                current += timedelta(minutes=config.slot_interval_minutes)
+        day += timedelta(days=1)
+    return tuple(sorted(values))
+
+
+def _zone_response(value: DeliveryZoneModel) -> DeliveryZoneResponse:
+    return DeliveryZoneResponse(
+        id=value.id,
+        location_id=value.location_id,
+        name=value.name,
+        enabled=value.enabled,
+        delivery_fee_minor=str(value.delivery_fee_minor),
+        minimum_order_minor=str(value.minimum_order_minor),
+    )
 
 
 def _payload_hash(slug: str, payload) -> str:

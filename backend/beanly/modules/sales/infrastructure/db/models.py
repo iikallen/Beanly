@@ -92,6 +92,9 @@ class SalesOrderModel(Base):
         CheckConstraint("subtotal_minor >= 0", name="ck_order_subtotal_nonnegative"),
         CheckConstraint("total_minor >= 0", name="ck_order_total_nonnegative"),
         CheckConstraint(
+            "fulfillment_fee_minor >= 0", name="ck_sales_order_fulfillment_fee_nonnegative"
+        ),
+        CheckConstraint(
             "cogs_amount IS NULL OR cogs_amount >= 0",
             name="ck_sales_order_cogs_nonnegative",
         ),
@@ -152,6 +155,7 @@ class SalesOrderModel(Base):
     subtotal_minor: Mapped[int] = mapped_column(BigInteger, default=0)
     total_minor: Mapped[int] = mapped_column(BigInteger, default=0)
     discount_total_minor: Mapped[int] = mapped_column(BigInteger, default=0)
+    fulfillment_fee_minor: Mapped[int] = mapped_column(BigInteger, default=0)
     pricing_revision: Mapped[int] = mapped_column(default=1)
     priced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by_user_id: Mapped[UUID | None] = mapped_column(

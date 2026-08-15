@@ -5,6 +5,8 @@ from uuid import UUID
 from pydantic import BaseModel, Field, model_validator
 
 from beanly.modules.online_ordering.domain.enums import (
+    FulfillmentTiming,
+    FulfillmentType,
     OnlineOrderSource,
     OnlineOrderStatus,
     OrderingStationKind,
@@ -30,6 +32,7 @@ class LocationSettingsWrite(BaseModel):
     public_slug: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{1,98}[a-z0-9]$")]
     enabled: bool = False
     pickup_enabled: bool = True
+    delivery_enabled: bool = False
     qr_dine_in_enabled: bool = True
     qr_auto_accept: bool = False
     register_id: UUID | None = None
@@ -38,6 +41,13 @@ class LocationSettingsWrite(BaseModel):
     maximum_order_minor: Money | None = None
     guest_name_required: bool = False
     guest_phone_required_pickup: bool = True
+    preparation_minutes: Annotated[int, Field(ge=0, le=240)] = 15
+    slot_interval_minutes: Annotated[int, Field(ge=5, le=120)] = 15
+    slot_capacity: Annotated[int, Field(ge=1, le=1000)] = 20
+    max_advance_minutes: Annotated[int, Field(ge=15, le=43200)] = 10080
+    cancellation_cutoff_minutes: Annotated[int, Field(ge=0, le=1440)] = 0
+    delivery_minimum_order_minor: Money = "0"
+    default_fulfillment_type: FulfillmentType = FulfillmentType.PICKUP
     schedules: Annotated[list[ScheduleInput], Field(max_length=28)] = []
 
     @model_validator(mode="after")
@@ -46,6 +56,14 @@ class LocationSettingsWrite(BaseModel):
             self.minimum_order_minor
         ):
             raise ValueError("maximum_order_minor must be at least minimum_order_minor")
+        if self.pickup_enabled or self.delivery_enabled:
+            if self.default_fulfillment_type == FulfillmentType.PICKUP and not self.pickup_enabled:
+                raise ValueError("Default pickup fulfillment must be enabled")
+            if (
+                self.default_fulfillment_type == FulfillmentType.DELIVERY
+                and not self.delivery_enabled
+            ):
+                raise ValueError("Default delivery fulfillment must be enabled")
         return self
 
 
@@ -56,6 +74,7 @@ class LocationSettingsResponse(BaseModel):
     public_slug: str
     enabled: bool
     pickup_enabled: bool
+    delivery_enabled: bool
     qr_dine_in_enabled: bool
     qr_auto_accept: bool
     register_id: UUID | None
@@ -67,6 +86,13 @@ class LocationSettingsResponse(BaseModel):
     maximum_order_minor: str | None
     guest_name_required: bool
     guest_phone_required_pickup: bool
+    preparation_minutes: int
+    slot_interval_minutes: int
+    slot_capacity: int
+    max_advance_minutes: int
+    cancellation_cutoff_minutes: int
+    delivery_minimum_order_minor: str
+    default_fulfillment_type: FulfillmentType
     schedules: list[ScheduleInput]
     created_at: datetime
     updated_at: datetime
@@ -77,12 +103,19 @@ class LocationSettingsResponse(BaseModel):
             **{
                 name: getattr(value, name)
                 for name in cls.model_fields
-                if name not in {"minimum_order_minor", "maximum_order_minor", "schedules"}
+                if name
+                not in {
+                    "minimum_order_minor",
+                    "maximum_order_minor",
+                    "delivery_minimum_order_minor",
+                    "schedules",
+                }
             },
             minimum_order_minor=str(value.minimum_order_minor),
             maximum_order_minor=(
                 str(value.maximum_order_minor) if value.maximum_order_minor is not None else None
             ),
+            delivery_minimum_order_minor=str(value.delivery_minimum_order_minor),
             schedules=[
                 ScheduleInput(
                     weekday=item.weekday,
@@ -143,6 +176,7 @@ class PublicOrderingResponse(BaseModel):
     currency_code: str
     enabled: bool
     pickup_enabled: bool
+    delivery_enabled: bool
     qr_dine_in_enabled: bool
     accepting_orders: bool
     unavailable_reason: str | None
@@ -165,6 +199,49 @@ class AvailabilityResponse(BaseModel):
     reasons: list[str]
 
 
+class DeliveryZoneWrite(BaseModel):
+    location_id: UUID
+    name: Annotated[str, Field(min_length=1, max_length=120)]
+    enabled: bool = True
+    delivery_fee_minor: Money = "0"
+    minimum_order_minor: Money = "0"
+
+
+class DeliveryZonePatch(BaseModel):
+    name: Annotated[str | None, Field(min_length=1, max_length=120)] = None
+    enabled: bool | None = None
+    delivery_fee_minor: Money | None = None
+    minimum_order_minor: Money | None = None
+
+
+class DeliveryZoneResponse(BaseModel):
+    id: UUID
+    location_id: UUID
+    name: str
+    enabled: bool
+    delivery_fee_minor: str
+    minimum_order_minor: str
+
+
+class FulfillmentSlotResponse(BaseModel):
+    starts_at: datetime
+    remaining_capacity: int
+
+
+class FulfillmentOptionsResponse(BaseModel):
+    timezone: str
+    default_fulfillment_type: FulfillmentType
+    pickup_enabled: bool
+    delivery_enabled: bool
+    preparation_minutes: int
+    slot_interval_minutes: int
+    max_advance_minutes: int
+    cancellation_cutoff_minutes: int
+    asap_promised_at: datetime
+    slots: list[FulfillmentSlotResponse]
+    delivery_zones: list[DeliveryZoneResponse]
+
+
 class QuoteItemRequest(BaseModel):
     client_item_id: UUID
     variant_id: UUID
@@ -178,6 +255,30 @@ class QuoteRequest(BaseModel):
     station_token: Annotated[str | None, Field(min_length=20, max_length=200)] = None
     promo_code: Annotated[str | None, Field(min_length=1, max_length=80)] = None
     items: Annotated[list[QuoteItemRequest], Field(min_length=1, max_length=50)]
+    fulfillment_type: FulfillmentType = FulfillmentType.PICKUP
+    fulfillment_timing: FulfillmentTiming = FulfillmentTiming.ASAP
+    requested_at: datetime | None = None
+    delivery_zone_id: UUID | None = None
+    delivery_address: Annotated[str | None, Field(max_length=1000)] = None
+    guest_instructions: Annotated[str | None, Field(max_length=1000)] = None
+
+    @model_validator(mode="after")
+    def fulfillment_shape(self):
+        if self.fulfillment_timing == FulfillmentTiming.SCHEDULED:
+            if self.requested_at is None:
+                raise ValueError("requested_at is required for scheduled fulfillment")
+            if self.requested_at.tzinfo is None or self.requested_at.utcoffset() is None:
+                raise ValueError("requested_at must include a timezone offset")
+            if self.requested_at.second or self.requested_at.microsecond:
+                raise ValueError("requested_at must use minute precision")
+        elif self.requested_at is not None:
+            raise ValueError("requested_at is only valid for scheduled fulfillment")
+        if self.fulfillment_type == FulfillmentType.DELIVERY:
+            if self.delivery_zone_id is None or not (self.delivery_address or "").strip():
+                raise ValueError("Delivery zone and address are required")
+        elif self.delivery_zone_id is not None or self.delivery_address is not None:
+            raise ValueError("Delivery fields are only valid for delivery fulfillment")
+        return self
 
 
 class QuoteLineResponse(BaseModel):
@@ -199,7 +300,15 @@ class QuoteResponse(BaseModel):
     source: OnlineOrderSource
     subtotal_minor: str
     discount_minor: str
+    fulfillment_fee_minor: str
     total_minor: str
+    fulfillment_type: FulfillmentType
+    fulfillment_timing: FulfillmentTiming
+    requested_at: datetime | None
+    promised_at: datetime
+    delivery_zone: DeliveryZoneResponse | None
+    delivery_address: str | None
+    guest_instructions: str | None
     lines: list[QuoteLineResponse]
     applied_promotions: list[dict[str, object]]
     quote_revision: str
@@ -238,7 +347,19 @@ class OnlineOrderResponse(BaseModel):
     currency_code: str
     subtotal_minor: str
     discount_minor: str
+    fulfillment_fee_minor: str
     total_minor: str
+    fulfillment_type: FulfillmentType
+    fulfillment_timing: FulfillmentTiming
+    requested_at: datetime | None
+    promised_at: datetime
+    delivery_zone: DeliveryZoneResponse | None
+    delivery_address: str | None
+    guest_instructions: str | None
+    cancellation_deadline: datetime | None
+    can_cancel: bool
+    age_seconds: int
+    kitchen_ticket_id: UUID | None
     accepted_at: datetime | None
     rejected_at: datetime | None
     rejection_reason: str | None
@@ -255,13 +376,24 @@ class OnlineOrderResponse(BaseModel):
 
 
 class PublicOrderStatusResponse(BaseModel):
+    order_number: int
     source: OnlineOrderSource
     status: OnlineOrderStatus
     station_label: str | None
     currency_code: str
     subtotal_minor: str
     discount_minor: str
+    fulfillment_fee_minor: str
     total_minor: str
+    fulfillment_type: FulfillmentType
+    fulfillment_timing: FulfillmentTiming
+    requested_at: datetime | None
+    promised_at: datetime
+    delivery_zone: DeliveryZoneResponse | None
+    delivery_address: str | None
+    guest_instructions: str | None
+    cancellation_deadline: datetime | None
+    can_cancel: bool
     rejection_reason: str | None
     cancel_reason: str | None
     accepted_at: datetime | None
@@ -296,6 +428,8 @@ class PublicOrderCreatedResponse(PublicOrderStatusResponse):
 class StaffActionRequest(BaseModel):
     client_action_id: UUID
     reason: Annotated[str | None, Field(max_length=1000)] = None
+    external_refund_confirmed: bool = False
+    refund_reference: Annotated[str | None, Field(max_length=200)] = None
 
 
 class PauseRequest(BaseModel):
