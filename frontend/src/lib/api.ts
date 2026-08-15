@@ -2166,6 +2166,10 @@ export type KitchenTicket = {
   table_label: string | null;
   guest_count: number | null;
   note: string | null;
+  order_source: SalesOrderSource | null;
+  fulfillment_type: "PICKUP" | "DELIVERY" | null;
+  promised_at: string | null;
+  guest_instructions: string | null;
   status: KitchenTicketStatus;
   ordered_at: string;
   fired_at: string;
@@ -2217,6 +2221,31 @@ export class ApiError extends Error {
 export type OnlineOrderStatus = "PENDING" | "AWAITING_PAYMENT" | "PAID" | "PREPARING" | "READY" | "COMPLETED" | "REJECTED" | "CANCELLED";
 export type OnlineOrderSource = "ONLINE" | "QR";
 export type OnlineOrderingStationKind = "TABLE" | "COUNTER" | "PICKUP_SPOT";
+export type OnlineFulfillmentType = "PICKUP" | "DELIVERY";
+export type OnlineFulfillmentTiming = "ASAP" | "SCHEDULED";
+
+export type OnlineDeliveryZone = {
+  id: string;
+  location_id: string;
+  name: string;
+  enabled: boolean;
+  delivery_fee_minor: string;
+  minimum_order_minor: string;
+};
+
+export type OnlineFulfillmentOptions = {
+  timezone: string;
+  default_fulfillment_type: OnlineFulfillmentType;
+  pickup_enabled: boolean;
+  delivery_enabled: boolean;
+  preparation_minutes: number;
+  slot_interval_minutes: number;
+  max_advance_minutes: number;
+  cancellation_cutoff_minutes: number;
+  asap_promised_at: string;
+  slots: Array<{ starts_at: string; remaining_capacity: number }>;
+  delivery_zones: OnlineDeliveryZone[];
+};
 
 export type OnlineOrderingLocation = {
   slug: string;
@@ -2226,6 +2255,7 @@ export type OnlineOrderingLocation = {
   currency_code: string;
   enabled: boolean;
   pickup_enabled: boolean;
+  delivery_enabled: boolean;
   qr_dine_in_enabled: boolean;
   accepting_orders: boolean;
   unavailable_reason: string | null;
@@ -2282,11 +2312,28 @@ export type OnlineQuoteItem = {
   note?: string | null;
 };
 
+export type OnlineFulfillmentSelection = {
+  fulfillment_type: OnlineFulfillmentType;
+  fulfillment_timing: OnlineFulfillmentTiming;
+  requested_at?: string | null;
+  delivery_zone_id?: string | null;
+  delivery_address?: string | null;
+  guest_instructions?: string | null;
+};
+
 export type OnlineQuote = {
   source: OnlineOrderSource;
   subtotal_minor: string;
   discount_minor: string;
+  fulfillment_fee_minor: string;
   total_minor: string;
+  fulfillment_type: OnlineFulfillmentType;
+  fulfillment_timing: OnlineFulfillmentTiming;
+  requested_at: string | null;
+  promised_at: string;
+  delivery_zone: OnlineDeliveryZone | null;
+  delivery_address: string | null;
+  guest_instructions: string | null;
   lines: Array<{
     client_item_id: string;
     variant_id: string;
@@ -2322,7 +2369,19 @@ export type OnlineOrder = {
   station_label: string | null;
   subtotal_minor: string;
   discount_minor: string;
+  fulfillment_fee_minor: string;
   total_minor: string;
+  fulfillment_type: OnlineFulfillmentType;
+  fulfillment_timing: OnlineFulfillmentTiming;
+  requested_at: string | null;
+  promised_at: string;
+  delivery_zone: OnlineDeliveryZone | null;
+  delivery_address: string | null;
+  guest_instructions: string | null;
+  cancellation_deadline: string | null;
+  can_cancel: boolean;
+  age_seconds: number;
+  kitchen_ticket_id: string | null;
   accepted_at: string | null;
   rejected_at: string | null;
   rejection_reason: string | null;
@@ -2347,12 +2406,23 @@ export type OnlineOrder = {
 };
 
 export type PublicOnlineOrder = Pick<OnlineOrder,
+  | "order_number"
   | "source"
   | "status"
   | "station_label"
   | "subtotal_minor"
   | "discount_minor"
+  | "fulfillment_fee_minor"
   | "total_minor"
+  | "fulfillment_type"
+  | "fulfillment_timing"
+  | "requested_at"
+  | "promised_at"
+  | "delivery_zone"
+  | "delivery_address"
+  | "guest_instructions"
+  | "cancellation_deadline"
+  | "can_cancel"
   | "accepted_at"
   | "rejected_at"
   | "rejection_reason"
@@ -2377,6 +2447,7 @@ export type OnlineOrderingSettings = {
   public_slug: string;
   enabled: boolean;
   pickup_enabled: boolean;
+  delivery_enabled: boolean;
   qr_dine_in_enabled: boolean;
   qr_auto_accept: boolean;
   register_id: string | null;
@@ -2388,6 +2459,13 @@ export type OnlineOrderingSettings = {
   maximum_order_minor: string | null;
   guest_name_required: boolean;
   guest_phone_required_pickup: boolean;
+  preparation_minutes: number;
+  slot_interval_minutes: number;
+  slot_capacity: number;
+  max_advance_minutes: number;
+  cancellation_cutoff_minutes: number;
+  delivery_minimum_order_minor: string;
+  default_fulfillment_type: OnlineFulfillmentType;
   schedules: Array<{ weekday: number; opens_at_local: string; closes_at_local: string }>;
   created_at: string;
   updated_at: string;
@@ -4323,11 +4401,14 @@ export const api = {
   getPublicOrderingAvailability: (slug: string, station?: string) => request<{ available: boolean; schedule_open: boolean; shift_open: boolean; accepting_orders: boolean; reasons: string[] }>(
     `/api/v1/public/ordering/${encodeURIComponent(slug)}/availability${station ? `?station=${encodeURIComponent(station)}` : ""}`,
   ),
-  quotePublicOrder: (slug: string, input: { client_order_id: string; station_token?: string; promo_code?: string; items: OnlineQuoteItem[] }) => request<OnlineQuote>(
+  getPublicFulfillmentOptions: (slug: string, station?: string) => request<OnlineFulfillmentOptions>(
+    `/api/v1/public/ordering/${encodeURIComponent(slug)}/fulfillment-options${station ? `?station=${encodeURIComponent(station)}` : ""}`,
+  ),
+  quotePublicOrder: (slug: string, input: { client_order_id: string; station_token?: string; promo_code?: string; items: OnlineQuoteItem[] } & OnlineFulfillmentSelection) => request<OnlineQuote>(
     `/api/v1/public/ordering/${encodeURIComponent(slug)}/quote${input.station_token ? `?station=${encodeURIComponent(input.station_token)}` : ""}`,
     { method: "POST", body: JSON.stringify(input) },
   ),
-  submitPublicOrder: (slug: string, input: { client_order_id: string; station_token?: string; promo_code?: string; items: OnlineQuoteItem[]; quote_revision: string; guest_name?: string; guest_phone?: string }) => request<PublicOrderCreated>(
+  submitPublicOrder: (slug: string, input: { client_order_id: string; station_token?: string; promo_code?: string; items: OnlineQuoteItem[]; quote_revision: string; guest_name?: string; guest_phone?: string } & OnlineFulfillmentSelection) => request<PublicOrderCreated>(
     `/api/v1/public/ordering/${encodeURIComponent(slug)}/orders${input.station_token ? `?station=${encodeURIComponent(input.station_token)}` : ""}`,
     { method: "POST", body: JSON.stringify(input) },
   ),
@@ -4352,6 +4433,12 @@ export const api = {
   ),
   cancelOnlineOrder: (id: string, clientActionId: string, reason: string, organizationId: string, accessToken: string) => request<OnlineOrder>(
     `/api/v1/online-orders/${id}/cancel`, { method: "POST", body: JSON.stringify({ client_action_id: clientActionId, reason }), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  readyOnlineOrder: (id: string, clientActionId: string, organizationId: string, accessToken: string) => request<OnlineOrder>(
+    `/api/v1/online-orders/${id}/ready`, { method: "POST", body: JSON.stringify({ client_action_id: clientActionId }), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  completeOnlineOrder: (id: string, clientActionId: string, organizationId: string, accessToken: string) => request<OnlineOrder>(
+    `/api/v1/online-orders/${id}/complete`, { method: "POST", body: JSON.stringify({ client_action_id: clientActionId }), headers: tenantAuthorization(organizationId, accessToken) },
   ),
   getOnlineOrderingSettings: (locationId: string, organizationId: string, accessToken: string) => request<OnlineOrderingSettings>(
     `/api/v1/online-ordering/settings/${locationId}`, { headers: tenantAuthorization(organizationId, accessToken) },

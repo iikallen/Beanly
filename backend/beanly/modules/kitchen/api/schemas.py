@@ -188,12 +188,16 @@ class TicketResponse(BaseModel):
     shift_id: UUID
     order_number: int
     order_type: str
+    order_source: str | None
     customer_id: UUID | None
     customer_name: str | None
     customer_phone: str | None
     table_label: str | None
     guest_count: int | None
     note: str | None
+    fulfillment_type: str | None
+    promised_at: datetime | None
+    guest_instructions: str | None
     status: KitchenTicketStatus
     ordered_at: datetime
     fired_at: datetime

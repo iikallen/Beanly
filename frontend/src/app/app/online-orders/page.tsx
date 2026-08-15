@@ -117,6 +117,12 @@ export default function OnlineOrdersPage() {
     });
   }
 
+  function withReason(key: string, label: string, operation: (reason: string) => Promise<unknown>) {
+    const reason = window.prompt(`${label} reason`);
+    if (!reason?.trim()) return;
+    void run(key, () => operation(reason.trim()));
+  }
+
   const pending = useMemo(() => orders.filter((order) => order.status === "PENDING").length, [orders]);
   if (permissions.loading) return <p>Loading online orders…</p>;
   if (!permissions.canRead) return <div className="empty-state"><RadioTower /><h1>Online order access required</h1></div>;
@@ -129,12 +135,17 @@ export default function OnlineOrdersPage() {
     {view === "ORDERS" ? <div className="online-order-grid" aria-live="polite">
       {orders.length === 0 && <div className="empty-state"><Clock3 /><h2>No online orders yet</h2><p>New pickup and QR orders appear here.</p></div>}
       {orders.map((order) => <article className="online-order-card" key={order.id}>
-        <header><div><strong>#{order.source === "QR" ? "Q" : "O"}-{order.order_number} · {order.source === "QR" ? order.station_label ?? "Table" : "Pickup"}</strong><small>{new Date(order.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small></div><span className={`status-pill status-${order.status.toLowerCase()}`}>{order.status.replaceAll("_", " ")}</span></header>
+        <header><div><strong>#{order.source === "QR" ? "Q" : "O"}-{order.order_number}</strong><small>{minuteTime(order.created_at, location?.timezone)} · {Math.floor(order.age_seconds / 60)}m old</small></div><span className={`status-pill status-${order.status.toLowerCase()}`}>{order.status.replaceAll("_", " ")}</span></header>
+        <div className="online-fulfillment-row"><span className="status-pill">{titleCase(order.fulfillment_type)}</span><span className="status-pill">{order.fulfillment_timing === "ASAP" ? "ASAP" : "Scheduled"} · {dueLabel(order.promised_at, location?.timezone)}</span></div>
         <h2>{order.guest_name || "Guest"}</h2>{order.guest_phone && <p>{order.guest_phone}</p>}
+        {order.delivery_zone && <p><strong>{order.delivery_zone.name}</strong> · {order.delivery_address}</p>}{order.guest_instructions && <p>Instructions: {order.guest_instructions}</p>}
         <ul>{order.items.map((item, index) => <li key={`${item.product_name}-${index}`}><span>{item.quantity} × {item.product_name}{item.variant_name ? ` · ${item.variant_name}` : ""}</span><strong>{formatMenuPriceMinor(item.total_minor, order.currency_code)}</strong></li>)}</ul>
         <footer><strong>{formatMenuPriceMinor(order.total_minor, order.currency_code)}</strong><div>
-          {permissions.canManage && order.status === "PENDING" && <><button type="button" disabled={busy === order.id} onClick={() => void run(order.id, () => api.rejectOnlineOrder(order.id, crypto.randomUUID(), "Rejected by staff", organization!.id, accessToken!))}><XCircle aria-hidden="true" /> Reject</button><button type="button" className="primary-button" disabled={busy === order.id} onClick={() => void run(order.id, () => api.acceptOnlineOrder(order.id, crypto.randomUUID(), organization!.id, accessToken!))}>Accept</button></>}
+          {permissions.canManage && order.status === "PENDING" && <><button type="button" disabled={busy === order.id} onClick={() => withReason(order.id, "Reject", (reason) => api.rejectOnlineOrder(order.id, crypto.randomUUID(), reason, organization!.id, accessToken!))}><XCircle aria-hidden="true" /> Reject</button><button type="button" className="primary-button" disabled={busy === order.id} onClick={() => void run(order.id, () => api.acceptOnlineOrder(order.id, crypto.randomUUID(), organization!.id, accessToken!))}>Accept</button></>}
           {order.status === "AWAITING_PAYMENT" && <Link className="primary-button" href={`/app/pos?order_id=${order.sales_order_id}`}><ExternalLink /> Open in POS</Link>}
+          {permissions.canManage && order.status === "PREPARING" && <button type="button" className="primary-button" disabled={busy === order.id} onClick={() => void run(order.id, () => api.readyOnlineOrder(order.id, crypto.randomUUID(), organization!.id, accessToken!))}>Ready</button>}
+          {permissions.canManage && order.status === "READY" && <button type="button" className="primary-button" disabled={busy === order.id} onClick={() => void run(order.id, () => api.completeOnlineOrder(order.id, crypto.randomUUID(), organization!.id, accessToken!))}>Complete</button>}
+          {permissions.canManage && order.can_cancel && order.status !== "PENDING" && <button type="button" disabled={busy === order.id} onClick={() => withReason(order.id, "Cancel", (reason) => api.cancelOnlineOrder(order.id, crypto.randomUUID(), reason, organization!.id, accessToken!))}>Cancel</button>}
         </div></footer>
       </article>)}
     </div> : <section className="online-setup">
@@ -145,8 +156,11 @@ export default function OnlineOrdersPage() {
   </div>;
 }
 
-const editableSettings = (value: OnlineOrderingSettings): OnlineOrderingSettingsInput => ({ location_id: value.location_id, public_slug: value.public_slug, enabled: value.enabled, pickup_enabled: value.pickup_enabled, qr_dine_in_enabled: value.qr_dine_in_enabled, qr_auto_accept: value.qr_auto_accept, register_id: value.register_id, accepting_orders: value.accepting_orders, minimum_order_minor: value.minimum_order_minor, maximum_order_minor: value.maximum_order_minor, guest_name_required: value.guest_name_required, guest_phone_required_pickup: value.guest_phone_required_pickup, schedules: value.schedules });
-const defaultSettings = (locationId: string): OnlineOrderingSettingsInput => ({ location_id: locationId, public_slug: `location-${locationId.slice(0, 8)}`, enabled: false, pickup_enabled: true, qr_dine_in_enabled: true, qr_auto_accept: false, register_id: null, accepting_orders: true, minimum_order_minor: "0", maximum_order_minor: null, guest_name_required: false, guest_phone_required_pickup: true, schedules: [] });
+const editableSettings = (value: OnlineOrderingSettings): OnlineOrderingSettingsInput => ({ location_id: value.location_id, public_slug: value.public_slug, enabled: value.enabled, pickup_enabled: value.pickup_enabled, delivery_enabled: value.delivery_enabled, qr_dine_in_enabled: value.qr_dine_in_enabled, qr_auto_accept: value.qr_auto_accept, register_id: value.register_id, accepting_orders: value.accepting_orders, minimum_order_minor: value.minimum_order_minor, maximum_order_minor: value.maximum_order_minor, guest_name_required: value.guest_name_required, guest_phone_required_pickup: value.guest_phone_required_pickup, preparation_minutes: value.preparation_minutes, slot_interval_minutes: value.slot_interval_minutes, slot_capacity: value.slot_capacity, max_advance_minutes: value.max_advance_minutes, cancellation_cutoff_minutes: value.cancellation_cutoff_minutes, delivery_minimum_order_minor: value.delivery_minimum_order_minor, default_fulfillment_type: value.default_fulfillment_type, schedules: value.schedules });
+const defaultSettings = (locationId: string): OnlineOrderingSettingsInput => ({ location_id: locationId, public_slug: `location-${locationId.slice(0, 8)}`, enabled: false, pickup_enabled: true, delivery_enabled: false, qr_dine_in_enabled: true, qr_auto_accept: false, register_id: null, accepting_orders: true, minimum_order_minor: "0", maximum_order_minor: null, guest_name_required: false, guest_phone_required_pickup: true, preparation_minutes: 15, slot_interval_minutes: 15, slot_capacity: 20, max_advance_minutes: 10080, cancellation_cutoff_minutes: 0, delivery_minimum_order_minor: "0", default_fulfillment_type: "PICKUP", schedules: [] });
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const weekdayNow = () => (new Date().getDay() + 6) % 7;
 const messageOf = (error: unknown) => error instanceof Error ? error.message : "Something went wrong";
+const minuteTime = (value: string, timeZone?: string) => new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", timeZone });
+const dueLabel = (value: string, timeZone?: string) => `Due ${minuteTime(value, timeZone)}`;
+const titleCase = (value: string) => value.toLowerCase().replaceAll("_", " ").replace(/^./, (first) => first.toUpperCase());

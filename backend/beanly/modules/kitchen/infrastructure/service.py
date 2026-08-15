@@ -46,6 +46,10 @@ from beanly.modules.menu.infrastructure.db.models import (
     ProductModel,
     ProductVariantModel,
 )
+from beanly.modules.online_ordering.infrastructure.db.models import (
+    OnlineOrderFulfillmentModel,
+    OnlineOrderModel,
+)
 from beanly.modules.organizations.application.services.organization_service import (
     OrganizationService,
 )
@@ -60,6 +64,93 @@ class KitchenService:
         self.session = session
         self.organizations = organizations
         self.events = OutboxEventSink(OutboxRepository(session))
+
+    async def cancel_order(self, organization_id: UUID, order_id: UUID) -> None:
+        ticket = await self.session.scalar(
+            select(KitchenTicketModel)
+            .options(selectinload(KitchenTicketModel.work_items))
+            .where(
+                KitchenTicketModel.organization_id == organization_id,
+                KitchenTicketModel.order_id == order_id,
+            )
+            .with_for_update()
+        )
+        if ticket is None or ticket.status in {
+            KitchenTicketStatus.CANCELLED.value,
+            KitchenTicketStatus.COMPLETED.value,
+        }:
+            return
+        ticket.status = KitchenTicketStatus.CANCELLED.value
+        ticket.updated_at = datetime.now(UTC)
+        ticket.version = await self._next_version(ticket.location_id, ticket.version)
+        for work in ticket.work_items:
+            work.status = "CANCELLED"
+            work.updated_at = ticket.updated_at
+        await self.session.flush()
+
+    async def stage_order_ready(
+        self, organization_id: UUID, order_id: UUID, occurred_at: datetime
+    ) -> KitchenTicketModel:
+        ticket = await self.session.scalar(
+            select(KitchenTicketModel)
+            .options(selectinload(KitchenTicketModel.work_items))
+            .where(
+                KitchenTicketModel.organization_id == organization_id,
+                KitchenTicketModel.order_id == order_id,
+            )
+            .with_for_update()
+        )
+        if ticket is None:
+            raise KitchenNotFound("Kitchen ticket has not been created")
+        if ticket.status == KitchenTicketStatus.READY.value:
+            return ticket
+        if ticket.status not in {
+            KitchenTicketStatus.QUEUED.value,
+            KitchenTicketStatus.PREPARING.value,
+        }:
+            raise KitchenInvalid("Kitchen ticket cannot be marked ready")
+        events = []
+        for work in ticket.work_items:
+            if work.status != KitchenWorkStatus.READY.value:
+                work.status = KitchenWorkStatus.READY.value
+                work.ready_at = work.updated_at = occurred_at
+                events.append(
+                    KitchenWorkReady(organization_id, ticket.id, work.id, work.station_id)
+                )
+        ticket.status = KitchenTicketStatus.READY.value
+        ticket.ready_at = ticket.updated_at = occurred_at
+        ticket.version = await self._next_version(ticket.location_id, ticket.version)
+        events.append(KitchenTicketReady(organization_id, ticket.id, ticket.order_id))
+        await self.events.stage_many(tuple(events), occurred_at=occurred_at)
+        await self.session.flush()
+        return ticket
+
+    async def stage_order_complete(
+        self, organization_id: UUID, order_id: UUID, occurred_at: datetime
+    ) -> KitchenTicketModel:
+        ticket = await self.session.scalar(
+            select(KitchenTicketModel)
+            .where(
+                KitchenTicketModel.organization_id == organization_id,
+                KitchenTicketModel.order_id == order_id,
+            )
+            .with_for_update()
+        )
+        if ticket is None:
+            raise KitchenNotFound("Kitchen ticket has not been created")
+        if ticket.status == KitchenTicketStatus.COMPLETED.value:
+            return ticket
+        if ticket.status != KitchenTicketStatus.READY.value:
+            raise KitchenWorkNotReady("Kitchen ticket is not ready")
+        ticket.status = KitchenTicketStatus.COMPLETED.value
+        ticket.completed_at = ticket.updated_at = occurred_at
+        ticket.version = await self._next_version(ticket.location_id, ticket.version)
+        await self.events.stage(
+            KitchenTicketCompleted(organization_id, ticket.id, ticket.order_id),
+            occurred_at=occurred_at,
+        )
+        await self.session.flush()
+        return ticket
 
     async def list_stations(self, context: TenantContext, location_id: UUID):
         await self._location(context, location_id)
@@ -208,6 +299,17 @@ class KitchenService:
         )
         if payment is None or order is None or order.status != "PAID":
             raise KitchenInvalid("Payment source is not a paid order")
+        fulfillment = await self.session.scalar(
+            select(OnlineOrderFulfillmentModel)
+            .join(
+                OnlineOrderModel,
+                OnlineOrderModel.id == OnlineOrderFulfillmentModel.online_order_id,
+            )
+            .where(
+                OnlineOrderModel.organization_id == organization_id,
+                OnlineOrderModel.sales_order_id == order_id,
+            )
+        )
         stations = await self._active_stations(organization_id, order.location_id)
         default = next((value for value in stations if value.is_default), None)
         if default is None:
@@ -242,12 +344,16 @@ class KitchenService:
             shift_id=order.shift_id,
             order_number=order.number,
             order_type=order.order_type,
+            order_source=order.order_source,
             customer_id=order.customer_id,
             customer_name=order.customer_name_snapshot,
             customer_phone=order.customer_phone_snapshot,
             table_label=order.table_label,
             guest_count=order.guest_count,
             note=order.note,
+            fulfillment_type=(fulfillment.fulfillment_type if fulfillment else None),
+            promised_at=(fulfillment.promised_at if fulfillment else None),
+            guest_instructions=(fulfillment.guest_instructions if fulfillment else None),
             status=KitchenTicketStatus.QUEUED,
             ordered_at=_utc(payment.completed_at),
             fired_at=fired_at,

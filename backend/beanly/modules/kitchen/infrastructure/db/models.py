@@ -144,12 +144,16 @@ class KitchenTicketModel(Base):
     )
     order_number: Mapped[int] = mapped_column(BigInteger)
     order_type: Mapped[str] = mapped_column(String(16))
+    order_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
     customer_id: Mapped[UUID | None] = mapped_column(Uuid, nullable=True)
     customer_name: Mapped[str | None] = mapped_column(String(201), nullable=True)
     customer_phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     table_label: Mapped[str | None] = mapped_column(String(100), nullable=True)
     guest_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fulfillment_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    promised_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    guest_instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(16), index=True)
     ordered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     fired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -221,7 +225,10 @@ class KitchenWorkItemModel(Base):
     __tablename__ = "kitchen_work_items"
     __table_args__ = (
         UniqueConstraint("ticket_item_id", "station_id", name="uq_kitchen_work_item_route"),
-        CheckConstraint("status IN ('QUEUED','PREPARING','READY')", name="ck_kitchen_work_status"),
+        CheckConstraint(
+            "status IN ('QUEUED','PREPARING','READY','CANCELLED')",
+            name="ck_kitchen_work_status",
+        ),
         Index("ix_kitchen_work_station_status", "station_id", "status"),
     )
 

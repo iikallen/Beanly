@@ -16,6 +16,7 @@ class KitchenWorkStatus(StrEnum):
     QUEUED = "QUEUED"
     PREPARING = "PREPARING"
     READY = "READY"
+    CANCELLED = "CANCELLED"
 
 
 class KitchenTicketStatus(StrEnum):
