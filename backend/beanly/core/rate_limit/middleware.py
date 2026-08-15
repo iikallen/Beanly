@@ -3,6 +3,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from urllib.parse import parse_qs
 
 from redis.exceptions import RedisError
 from starlette.datastructures import Headers, MutableHeaders
@@ -78,6 +79,83 @@ RULES = (
         60,
         "authorization",
     ),
+    RateLimitRule(
+        "public-order-submit-ip",
+        "POST",
+        re.compile(r"^/api/v1/public/ordering/[^/]+/orders$"),
+        10,
+        60,
+    ),
+    RateLimitRule(
+        "public-order-submit-slug",
+        "POST",
+        re.compile(r"^/api/v1/public/ordering/[^/]+/orders$"),
+        300,
+        60,
+        "public_slug",
+    ),
+    RateLimitRule(
+        "public-order-submit-station",
+        "POST",
+        re.compile(r"^/api/v1/public/ordering/[^/]+/orders$"),
+        30,
+        60,
+        "public_station",
+    ),
+    RateLimitRule(
+        "public-order-cancel",
+        "POST",
+        re.compile(r"^/api/v1/public/ordering/orders/[^/]+/cancel$"),
+        10,
+        60,
+        "path",
+    ),
+    RateLimitRule(
+        "public-order-quote-ip",
+        "POST",
+        re.compile(r"^/api/v1/public/ordering/[^/]+/quote$"),
+        60,
+        60,
+    ),
+    RateLimitRule(
+        "public-order-quote-slug",
+        "POST",
+        re.compile(r"^/api/v1/public/ordering/[^/]+/quote$"),
+        1200,
+        60,
+        "public_slug",
+    ),
+    RateLimitRule(
+        "public-order-quote-station",
+        "POST",
+        re.compile(r"^/api/v1/public/ordering/[^/]+/quote$"),
+        120,
+        60,
+        "public_station",
+    ),
+    RateLimitRule(
+        "public-order-read-ip",
+        "GET",
+        re.compile(r"^/api/v1/public/ordering/.+$"),
+        120,
+        60,
+    ),
+    RateLimitRule(
+        "public-order-read-slug",
+        "GET",
+        re.compile(r"^/api/v1/public/ordering/.+$"),
+        2400,
+        60,
+        "public_slug",
+    ),
+    RateLimitRule(
+        "public-order-read-station",
+        "GET",
+        re.compile(r"^/api/v1/public/ordering/.+$"),
+        240,
+        60,
+        "public_station",
+    ),
 )
 
 
@@ -97,49 +175,49 @@ class RateLimitMiddleware:
         if scope["type"] != "http" or not self.enabled:
             await self.app(scope, receive, send)
             return
-        rule = next(
-            (
-                candidate
-                for candidate in RULES
-                if candidate.method == scope["method"]
-                and candidate.path.fullmatch(scope["path"])
-            ),
-            None,
+        rules = tuple(
+            candidate
+            for candidate in RULES
+            if candidate.method == scope["method"]
+            and candidate.path.fullmatch(scope["path"])
         )
-        if rule is None:
+        if not rules:
             await self.app(scope, receive, send)
             return
         headers = Headers(scope=scope)
-        identity = _identity(rule, scope, headers)
-        try:
-            decision = await self.limiter.check(
-                rule.name,
-                identity,
-                limit=rule.limit,
-                window_seconds=rule.window_seconds,
-            )
-        except RedisError:
-            logger.exception("Rate limiter unavailable", extra={"action": rule.name})
-            if rule.fail_closed:
-                await _json_response(
-                    send,
-                    503,
-                    {"detail": "Rate limit service unavailable", **_request_id(scope)},
+        for rule in rules:
+            identity = _identity(rule, scope, headers)
+            if identity is None:
+                continue
+            try:
+                decision = await self.limiter.check(
+                    rule.name,
+                    identity,
+                    limit=rule.limit,
+                    window_seconds=rule.window_seconds,
                 )
-                return
-        else:
-            if not decision.allowed:
-                await _json_response(
-                    send,
-                    429,
-                    {"detail": "Too many requests", **_request_id(scope)},
-                    retry_after=decision.retry_after,
-                )
-                return
+            except RedisError:
+                logger.exception("Rate limiter unavailable", extra={"action": rule.name})
+                if rule.fail_closed:
+                    await _json_response(
+                        send,
+                        503,
+                        {"detail": "Rate limit service unavailable", **_request_id(scope)},
+                    )
+                    return
+            else:
+                if not decision.allowed:
+                    await _json_response(
+                        send,
+                        429,
+                        {"detail": "Too many requests", **_request_id(scope)},
+                        retry_after=decision.retry_after,
+                    )
+                    return
         await self.app(scope, receive, send)
 
 
-def _identity(rule: RateLimitRule, scope: Scope, headers: Headers) -> str:
+def _identity(rule: RateLimitRule, scope: Scope, headers: Headers) -> str | None:
     client = scope.get("client")
     ip = str(client[0]) if client else "unknown"
     if rule.identity == "path":
@@ -150,6 +228,17 @@ def _identity(rule: RateLimitRule, scope: Scope, headers: Headers) -> str:
     if rule.identity == "session":
         session = headers.get("cookie", "anonymous")
         return f"{ip}:{hashlib.sha256(session.encode()).hexdigest()}"
+    if rule.identity == "public_slug":
+        match = re.match(r"^/api/v1/public/ordering/([^/]+)", scope["path"])
+        if match is None or match.group(1) == "orders":
+            return None
+        return f"slug:{match.group(1)}"
+    if rule.identity == "public_station":
+        query = parse_qs(scope.get("query_string", b"").decode("ascii", "ignore"))
+        station = query.get("station", [""])[0]
+        if not station:
+            return None
+        return f"station:{hashlib.sha256(station.encode()).hexdigest()}"
     return ip
 
 

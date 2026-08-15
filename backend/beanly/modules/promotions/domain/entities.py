@@ -7,6 +7,7 @@ from beanly.modules.promotions.domain.enums import (
     ApplicationMode,
     DiscountKind,
     DiscountSource,
+    PromotionChannel,
     PromotionScope,
     PromotionStatus,
     StackingPolicy,
@@ -77,6 +78,7 @@ class Promotion:
     schedules: tuple[PromotionSchedule, ...] = ()
     targets: tuple[PromotionTarget, ...] = ()
     codes: tuple[PromotionCode, ...] = ()
+    channels: tuple[PromotionChannel, ...] = (PromotionChannel.POS,)
 
 
 @dataclass(frozen=True, slots=True)

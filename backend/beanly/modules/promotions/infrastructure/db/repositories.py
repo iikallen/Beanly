@@ -13,6 +13,7 @@ from beanly.modules.promotions.domain.entities import (
 from beanly.modules.promotions.domain.enums import (
     ApplicationMode,
     DiscountKind,
+    PromotionChannel,
     PromotionScope,
     PromotionStatus,
     StackingPolicy,
@@ -70,10 +71,16 @@ class SqlAlchemyPromotionRepository:
         model.amount_minor = value.amount_minor
         model.fixed_price_minor = value.fixed_price_minor
         from beanly.modules.promotions.infrastructure.db.models import (
+            PromotionChannelModel,
             PromotionLocationModel,
             PromotionScheduleModel,
             PromotionTargetModel,
         )
+
+        model.channels = [
+            PromotionChannelModel(promotion_id=value.id, channel=channel.value)
+            for channel in value.channels
+        ]
 
         model.locations = [
             PromotionLocationModel(promotion_id=value.id, location_id=location_id)
@@ -115,6 +122,7 @@ class SqlAlchemyPromotionRepository:
                 selectinload(PromotionModel.schedules),
                 selectinload(PromotionModel.targets),
                 selectinload(PromotionModel.codes),
+                selectinload(PromotionModel.channels),
             )
         )
 
@@ -180,4 +188,5 @@ def _promotion(value: PromotionModel) -> Promotion:
             )
             for item in sorted(value.codes, key=lambda item: (item.created_at, str(item.id)))
         ),
+        tuple(PromotionChannel(item.channel) for item in value.channels),
     )

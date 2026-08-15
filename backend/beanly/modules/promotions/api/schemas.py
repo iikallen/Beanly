@@ -10,6 +10,7 @@ from beanly.modules.promotions.domain.entities import Promotion
 from beanly.modules.promotions.domain.enums import (
     ApplicationMode,
     DiscountKind,
+    PromotionChannel,
     PromotionScope,
     PromotionStatus,
     StackingPolicy,
@@ -53,6 +54,7 @@ class PromotionWrite(BaseModel):
     location_ids: list[UUID] = []
     schedules: list[ScheduleInput] = []
     targets: list[TargetInput] = []
+    channels: list[PromotionChannel] = [PromotionChannel.POS]
 
     @model_validator(mode="after")
     def validate_rule(self):
@@ -73,6 +75,8 @@ class PromotionWrite(BaseModel):
             raise ValueError("location_ids are required when all_locations is false")
         if any(value.start_local_time >= value.end_local_time for value in self.schedules):
             raise ValueError("schedule start must be before end")
+        if not self.channels:
+            raise ValueError("At least one promotion channel is required")
         if any(
             (value.target_type == TargetType.ALL) != (value.target_id is None)
             for value in self.targets
@@ -122,6 +126,7 @@ class PromotionResponse(BaseModel):
     schedules: list[ScheduleInput]
     targets: list[TargetInput]
     codes: list[dict[str, object]]
+    channels: list[PromotionChannel]
     created_by: UUID
     created_at: datetime
     updated_at: datetime
@@ -185,6 +190,7 @@ class PromotionResponse(BaseModel):
                 }
                 for x in value.codes
             ],
+            channels=list(value.channels),
             created_by=value.created_by,
             created_at=value.created_at,
             updated_at=value.updated_at,

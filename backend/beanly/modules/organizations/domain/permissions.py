@@ -81,6 +81,9 @@ class Permission(StrEnum):
     KITCHEN_EXPO = "kitchen.expo"
     KITCHEN_MANAGE = "kitchen.manage"
     KITCHEN_REPORT = "kitchen.report"
+    ONLINE_ORDERS_READ = "online_orders.read"
+    ONLINE_ORDERS_MANAGE = "online_orders.manage"
+    ONLINE_ORDERING_MANAGE = "online_ordering.manage"
 
 
 _ALL = frozenset(Permission)
@@ -162,6 +165,9 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.KITCHEN_EXPO,
             Permission.KITCHEN_MANAGE,
             Permission.KITCHEN_REPORT,
+            Permission.ONLINE_ORDERS_READ,
+            Permission.ONLINE_ORDERS_MANAGE,
+            Permission.ONLINE_ORDERING_MANAGE,
         }
     ),
     MembershipRole.MANAGER: frozenset(
@@ -224,6 +230,9 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.KITCHEN_EXPO,
             Permission.KITCHEN_MANAGE,
             Permission.KITCHEN_REPORT,
+            Permission.ONLINE_ORDERS_READ,
+            Permission.ONLINE_ORDERS_MANAGE,
+            Permission.ONLINE_ORDERING_MANAGE,
         }
     ),
     MembershipRole.ACCOUNTANT: frozenset(
@@ -265,6 +274,8 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.CASH_DRAWER_USE,
             Permission.CASH_DRAWER_CLOSE,
             Permission.KITCHEN_READ,
+            Permission.ONLINE_ORDERS_READ,
+            Permission.ONLINE_ORDERS_MANAGE,
         }
     ),
     MembershipRole.BARISTA: frozenset(
@@ -282,6 +293,7 @@ ROLE_PERMISSIONS: dict[MembershipRole, frozenset[Permission]] = {
             Permission.CASH_DRAWER_CLOSE,
             Permission.KITCHEN_READ,
             Permission.KITCHEN_WORK,
+            Permission.ONLINE_ORDERS_READ,
         }
     ),
 }

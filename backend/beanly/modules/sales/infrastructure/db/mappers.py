@@ -10,6 +10,7 @@ from beanly.modules.sales.domain.entities import (
     SalesOrder,
 )
 from beanly.modules.sales.domain.enums import (
+    OrderSource,
     OrderStatus,
     OrderType,
     RegisterShiftStatus,
@@ -195,4 +196,5 @@ def to_order(model: SalesOrderModel) -> SalesOrder:
         model.customer_id,
         model.customer_name_snapshot,
         model.customer_phone_snapshot,
+        OrderSource(model.order_source),
     )

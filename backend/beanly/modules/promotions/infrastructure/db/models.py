@@ -88,6 +88,20 @@ class PromotionModel(Base):
     schedules: Mapped[list["PromotionScheduleModel"]] = relationship(cascade="all, delete-orphan")
     targets: Mapped[list["PromotionTargetModel"]] = relationship(cascade="all, delete-orphan")
     codes: Mapped[list["PromotionCodeModel"]] = relationship(cascade="all, delete-orphan")
+    channels: Mapped[list["PromotionChannelModel"]] = relationship(
+        cascade="all, delete-orphan"
+    )
+
+
+class PromotionChannelModel(Base):
+    __tablename__ = "promotion_channels"
+    __table_args__ = (
+        CheckConstraint("channel IN ('POS','ONLINE','QR')", name="ck_promotion_channel"),
+    )
+    promotion_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("promotions.id", ondelete="CASCADE"), primary_key=True
+    )
+    channel: Mapped[str] = mapped_column(String(16), primary_key=True)
 
 
 class PromotionLocationModel(Base):

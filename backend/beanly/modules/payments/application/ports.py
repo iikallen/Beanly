@@ -42,7 +42,7 @@ class PayableOrderSnapshot:
     status: OrderStatus
     currency_code: str
     total_minor: int
-    created_by_user_id: UUID
+    created_by_user_id: UUID | None
     has_items: bool
     shift_is_open: bool
     order_number: int

@@ -148,6 +148,7 @@ class PromotionService:
                 )
                 for item in payload.targets
             ),
+            channels=tuple(payload.channels),
         )
         return await self._save(context, value, "PROMOTION_CREATED")
 
@@ -175,6 +176,7 @@ class PromotionService:
             valid_to=payload.valid_to,
             all_locations=payload.all_locations,
             requires_override_permission=payload.requires_override_permission,
+            channels=tuple(payload.channels),
             updated_at=datetime.now(UTC),
             location_ids=tuple(payload.location_ids),
             schedules=tuple(

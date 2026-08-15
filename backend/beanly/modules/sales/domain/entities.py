@@ -5,6 +5,7 @@ from uuid import UUID
 
 from beanly.modules.inventory.domain.value_objects import UnitCode
 from beanly.modules.sales.domain.enums import (
+    OrderSource,
     OrderStatus,
     OrderType,
     RegisterShiftStatus,
@@ -133,7 +134,7 @@ class SalesOrder:
     note: str | None
     subtotal_minor: int
     total_minor: int
-    created_by_user_id: UUID
+    created_by_user_id: UUID | None
     cancelled_by_user_id: UUID | None
     cancelled_at: datetime | None
     cancel_reason: str | None
@@ -157,3 +158,4 @@ class SalesOrder:
     customer_id: UUID | None = None
     customer_name_snapshot: str | None = None
     customer_phone_snapshot: str | None = None
+    order_source: OrderSource = OrderSource.POS

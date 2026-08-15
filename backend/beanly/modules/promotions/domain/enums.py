@@ -7,6 +7,12 @@ class PromotionStatus(StrEnum):
     ARCHIVED = "ARCHIVED"
 
 
+class PromotionChannel(StrEnum):
+    POS = "POS"
+    ONLINE = "ONLINE"
+    QR = "QR"
+
+
 class ApplicationMode(StrEnum):
     AUTOMATIC = "AUTOMATIC"
     MANUAL = "MANUAL"

@@ -30,6 +30,7 @@ from beanly.modules.menu.infrastructure.db.models import (
 )
 from beanly.modules.offline_pos.infrastructure.db.models import PosCatalogSnapshotModel
 from beanly.modules.promotions.infrastructure.db.models import (
+    PromotionChannelModel,
     PromotionLocationModel,
     PromotionModel,
     PromotionScheduleModel,
@@ -108,10 +109,15 @@ class CatalogSnapshotBuilder:
                         PromotionAudienceModel,
                         PromotionAudienceModel.promotion_id == PromotionModel.id,
                     )
+                    .join(
+                        PromotionChannelModel,
+                        PromotionChannelModel.promotion_id == PromotionModel.id,
+                    )
                     .where(
                         PromotionModel.organization_id == organization_id,
                         PromotionModel.status == "ACTIVE",
                         PromotionModel.application_mode.in_(["AUTOMATIC", "MANUAL"]),
+                        PromotionChannelModel.channel == "POS",
                         (
                             PromotionAudienceModel.promotion_id.is_(None)
                             | (PromotionAudienceModel.kind == "ALL")

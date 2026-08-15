@@ -84,6 +84,9 @@ class SalesOrderModel(Base):
             "order_type IN ('DINE_IN', 'TAKEAWAY', 'DELIVERY')",
             name="ck_sales_order_type",
         ),
+        CheckConstraint(
+            "order_source IN ('POS', 'ONLINE', 'QR')", name="ck_sales_order_source"
+        ),
         CheckConstraint("status IN ('OPEN', 'PAID', 'CANCELLED')", name="ck_sales_order_status"),
         CheckConstraint("guest_count IS NULL OR guest_count > 0", name="ck_order_guest_count"),
         CheckConstraint("subtotal_minor >= 0", name="ck_order_subtotal_nonnegative"),
@@ -138,6 +141,9 @@ class SalesOrderModel(Base):
     )
     offline_display_number: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     order_type: Mapped[str] = mapped_column(String(16))
+    order_source: Mapped[str] = mapped_column(
+        String(16), default="POS", server_default="POS", index=True
+    )
     status: Mapped[str] = mapped_column(String(16), index=True)
     currency_code: Mapped[str] = mapped_column(String(3))
     guest_count: Mapped[int | None] = mapped_column(nullable=True)
@@ -148,7 +154,9 @@ class SalesOrderModel(Base):
     discount_total_minor: Mapped[int] = mapped_column(BigInteger, default=0)
     pricing_revision: Mapped[int] = mapped_column(default=1)
     priced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_by_user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id"))
+    created_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id"), nullable=True
+    )
     cancelled_by_user_id: Mapped[UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id"), nullable=True
     )

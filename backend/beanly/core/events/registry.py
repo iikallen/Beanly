@@ -51,6 +51,12 @@ from beanly.modules.offline_pos.domain.events import (
     PosDevicePaired,
     PosDeviceRevoked,
 )
+from beanly.modules.online_ordering.domain.events import (
+    OnlineOrderAccepted,
+    OnlineOrderCancelled,
+    OnlineOrderRejected,
+    OnlineOrderSubmitted,
+)
 from beanly.modules.payments.domain.events import PaymentCompleted
 from beanly.modules.purchasing.domain.events import (
     GoodsReceiptCreated,
@@ -77,6 +83,18 @@ class EventSpec:
 
 
 EVENT_REGISTRY: dict[type[object], EventSpec] = {
+    OnlineOrderSubmitted: EventSpec(
+        "online.order_submitted", 1, "online_order", "online_order_id"
+    ),
+    OnlineOrderAccepted: EventSpec(
+        "online.order_accepted", 1, "online_order", "online_order_id"
+    ),
+    OnlineOrderRejected: EventSpec(
+        "online.order_rejected", 1, "online_order", "online_order_id"
+    ),
+    OnlineOrderCancelled: EventSpec(
+        "online.order_cancelled", 1, "online_order", "online_order_id"
+    ),
     KitchenTicketCreated: EventSpec(
         "kitchen.ticket_created", 1, "kitchen_ticket", "ticket_id"
     ),

@@ -94,6 +94,18 @@ class BeanlyMetrics:
             "kitchen.ready_to_pickup_seconds", unit="s"
         )
         self.kitchen_late_tickets = meter.create_counter("kitchen.late_tickets.total")
+        self.online_orders_submitted = meter.create_counter("online.orders.submitted")
+        self.online_orders_accepted = meter.create_counter("online.orders.accepted")
+        self.online_orders_rejected = meter.create_counter("online.orders.rejected")
+        self.online_orders_cancelled = meter.create_counter("online.orders.cancelled")
+        self.online_orders_paid = meter.create_counter("online.orders.paid")
+        self.online_orders_completed = meter.create_counter("online.orders.completed")
+        self.online_acceptance_seconds = meter.create_histogram(
+            "online.acceptance_seconds", unit="s"
+        )
+        self.online_ready_seconds = meter.create_histogram(
+            "online.ready_seconds", unit="s"
+        )
         self._lock = Lock()
         self._queue_values: dict[str, float] = {
             "outbox_pending": 0,

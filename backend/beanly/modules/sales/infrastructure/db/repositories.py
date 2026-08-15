@@ -618,6 +618,7 @@ def _order_values(value: SalesOrder) -> dict[str, object]:
         "client_created_at": value.client_created_at,
         "offline_display_number": value.offline_display_number,
         "order_type": value.order_type.value,
+        "order_source": value.order_source.value,
         "status": value.status.value,
         "currency_code": value.currency_code,
         "guest_count": value.guest_count,

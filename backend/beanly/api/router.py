@@ -26,6 +26,8 @@ from beanly.modules.kitchen.api.router import router as kitchen_router
 from beanly.modules.menu.api.router import router as menu_router
 from beanly.modules.offline_pos.api.router import router as offline_pos_router
 from beanly.modules.onboarding.api.router import router as onboarding_router
+from beanly.modules.online_ordering.api.router import public_router as online_public_router
+from beanly.modules.online_ordering.api.router import router as online_ordering_router
 from beanly.modules.organizations.api.router import router as organizations_router
 from beanly.modules.organizations.api.team_router import router as team_router
 from beanly.modules.payments.api.router import router as payments_router
@@ -47,6 +49,8 @@ api_v1_router.include_router(integration_oauth_router)
 api_v1_router.include_router(integrations_router)
 api_v1_router.include_router(inventory_router)
 api_v1_router.include_router(offline_pos_router)
+api_v1_router.include_router(online_public_router)
+api_v1_router.include_router(online_ordering_router)
 api_v1_router.include_router(onboarding_router)
 api_v1_router.include_router(menu_router)
 api_v1_router.include_router(organizations_router)

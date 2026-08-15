@@ -367,6 +367,7 @@ export type RegisterShift = {
 
 export type SalesOrderType = "DINE_IN" | "TAKEAWAY" | "DELIVERY";
 export type SalesOrderStatus = "OPEN" | "PAID" | "CANCELLED";
+export type SalesOrderSource = "POS" | "ONLINE" | "QR";
 
 export type SalesOrderModifier = {
   id: string;
@@ -421,6 +422,7 @@ export type SalesOrder = {
   client_order_id: string;
   version: number;
   order_type: SalesOrderType;
+  order_source: SalesOrderSource;
   status: SalesOrderStatus;
   currency_code: string;
   guest_count: number | null;
@@ -434,7 +436,7 @@ export type SalesOrder = {
   total_minor: string;
   pricing_revision: number;
   priced_at: string | null;
-  created_by_user_id: string;
+  created_by_user_id: string | null;
   cancelled_by_user_id: string | null;
   cancelled_at: string | null;
   cancel_reason: string | null;
@@ -557,6 +559,7 @@ export type PromotionApplicationMode = "AUTOMATIC" | "MANUAL" | "CODE";
 export type PromotionDiscountKind = "PERCENT" | "FIXED_AMOUNT" | "FIXED_PRICE" | "BOGO";
 export type PromotionScope = "ORDER" | "ITEM" | "COMBO";
 export type PromotionStackingPolicy = "EXCLUSIVE" | "STACKABLE";
+export type PromotionChannel = "POS" | "ONLINE" | "QR";
 export type PromotionTargetType = "CATEGORY" | "PRODUCT" | "VARIANT" | "ALL";
 export type PromotionTargetRole = "ELIGIBLE" | "BUY" | "GET" | "COMBO_COMPONENT";
 export type DiscountSource = "AUTOMATIC" | "MANUAL" | "PROMO_CODE" | "CUSTOM";
@@ -614,6 +617,7 @@ export type Promotion = {
   schedules: PromotionSchedule[];
   targets: PromotionTarget[];
   codes: PromotionCode[];
+  channels: PromotionChannel[];
 };
 
 export type PromotionInput = Omit<Promotion, "id" | "organization_id" | "status" | "created_by" | "created_at" | "updated_at" | "codes">;
@@ -2209,6 +2213,208 @@ export class ApiError extends Error {
     this.name = "ApiError";
   }
 }
+
+export type OnlineOrderStatus = "PENDING" | "AWAITING_PAYMENT" | "PAID" | "PREPARING" | "READY" | "COMPLETED" | "REJECTED" | "CANCELLED";
+export type OnlineOrderSource = "ONLINE" | "QR";
+export type OnlineOrderingStationKind = "TABLE" | "COUNTER" | "PICKUP_SPOT";
+
+export type OnlineOrderingLocation = {
+  slug: string;
+  location_id: string;
+  location_name: string;
+  timezone: string;
+  currency_code: string;
+  enabled: boolean;
+  pickup_enabled: boolean;
+  qr_dine_in_enabled: boolean;
+  accepting_orders: boolean;
+  unavailable_reason: string | null;
+  guest_name_required: boolean;
+  guest_phone_required_pickup: boolean;
+  station: { kind: OnlineOrderingStationKind; label: string } | null;
+};
+
+export type PublicModifierGroup = {
+  id: string;
+  name: string;
+  selection_type: ModifierSelectionType;
+  min_selections: number;
+  max_selections: number;
+  options: Array<{
+    id: string;
+    name: string;
+    price_delta_minor: string;
+    is_default: boolean;
+    is_available: boolean;
+  }>;
+};
+
+export type PublicOrderingMenu = {
+  location_id: string;
+  currency_code: string;
+  categories: Array<{
+    id: string;
+    name: string;
+    sort_order: number;
+    products: Array<{
+      id: string;
+      name: string;
+      description: string | null;
+      image_url: string | null;
+      is_available: boolean;
+      variants: Array<{
+        id: string;
+        name: string;
+        price_minor: string;
+        is_default: boolean;
+        sort_order: number;
+        modifier_groups: PublicModifierGroup[];
+      }>;
+    }>;
+  }>;
+};
+
+export type OnlineQuoteItem = {
+  client_item_id: string;
+  variant_id: string;
+  quantity: number;
+  modifier_option_ids: string[];
+  note?: string | null;
+};
+
+export type OnlineQuote = {
+  source: OnlineOrderSource;
+  subtotal_minor: string;
+  discount_minor: string;
+  total_minor: string;
+  lines: Array<{
+    client_item_id: string;
+    variant_id: string;
+    product_name: string;
+    variant_name: string;
+    quantity: number;
+    base_price_minor: string;
+    modifier_price_minor: string;
+    unit_price_minor: string;
+    subtotal_minor: string;
+    discount_minor: string;
+    total_minor: string;
+    modifiers: Array<{ name?: string }>;
+  }>;
+  applied_promotions: Array<{ name?: string; discount_minor?: string }>;
+  quote_revision: string;
+  expires_at: string;
+};
+
+export type OnlineOrder = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  sales_order_id: string;
+  station_id: string | null;
+  client_order_id: string;
+  source: OnlineOrderSource;
+  status: OnlineOrderStatus;
+  currency_code: string;
+  guest_name: string | null;
+  guest_phone: string | null;
+  station_label: string | null;
+  subtotal_minor: string;
+  discount_minor: string;
+  total_minor: string;
+  accepted_at: string | null;
+  rejected_at: string | null;
+  rejection_reason: string | null;
+  cancelled_at: string | null;
+  cancel_reason: string | null;
+  paid_at: string | null;
+  preparing_at: string | null;
+  ready_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  items: Array<{
+    product_name: string;
+    variant_name: string;
+    quantity: number;
+    note: string | null;
+    unit_price_minor: string;
+    total_minor: string;
+    modifiers: string[];
+  }>;
+  status_token?: string | null;
+};
+
+export type PublicOnlineOrder = Pick<OnlineOrder,
+  | "source"
+  | "status"
+  | "station_label"
+  | "subtotal_minor"
+  | "discount_minor"
+  | "total_minor"
+  | "accepted_at"
+  | "rejected_at"
+  | "rejection_reason"
+  | "cancelled_at"
+  | "cancel_reason"
+  | "paid_at"
+  | "preparing_at"
+  | "ready_at"
+  | "completed_at"
+  | "created_at"
+  | "updated_at"
+  | "items"
+  | "currency_code"
+>;
+
+export type PublicOrderCreated = PublicOnlineOrder & { status_token: string };
+
+export type OnlineOrderingSettings = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  public_slug: string;
+  enabled: boolean;
+  pickup_enabled: boolean;
+  qr_dine_in_enabled: boolean;
+  qr_auto_accept: boolean;
+  register_id: string | null;
+  accepting_orders: boolean;
+  manual_pause_reason: string | null;
+  paused_until: string | null;
+  closed_date: string | null;
+  minimum_order_minor: string;
+  maximum_order_minor: string | null;
+  guest_name_required: boolean;
+  guest_phone_required_pickup: boolean;
+  schedules: Array<{ weekday: number; opens_at_local: string; closes_at_local: string }>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OnlineOrderingSettingsInput = Omit<OnlineOrderingSettings, "id" | "organization_id" | "manual_pause_reason" | "paused_until" | "closed_date" | "created_at" | "updated_at">;
+
+export type OnlineOrderingStation = {
+  id: string;
+  organization_id: string;
+  location_id: string;
+  kind: OnlineOrderingStationKind;
+  label: string;
+  is_active: boolean;
+  public_token: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OnlineOrderingReadiness = {
+  ready: boolean;
+  menu_ready: boolean;
+  register_configured: boolean;
+  shift_open: boolean;
+  schedule_open: boolean;
+  default_location_available: boolean;
+  reasons: string[];
+};
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const isFormData = typeof FormData !== "undefined" && init.body instanceof FormData;
@@ -4107,6 +4313,72 @@ export const api = {
       `/api/v1/kitchen/readiness?${new URLSearchParams({ location_id: locationId })}`,
       { headers: tenantAuthorization(organizationId, accessToken) },
     ),
+  getPublicOrdering: (slug: string, station?: string) => request<OnlineOrderingLocation>(
+    `/api/v1/public/ordering/${encodeURIComponent(slug)}${station ? `?station=${encodeURIComponent(station)}` : ""}`,
+  ),
+  getPublicOrderingMenu: (slug: string) => request<PublicOrderingMenu>(
+    `/api/v1/public/ordering/${encodeURIComponent(slug)}/menu`,
+  ),
+  getPublicOrderingAvailability: (slug: string, station?: string) => request<{ available: boolean; schedule_open: boolean; shift_open: boolean; accepting_orders: boolean; reasons: string[] }>(
+    `/api/v1/public/ordering/${encodeURIComponent(slug)}/availability${station ? `?station=${encodeURIComponent(station)}` : ""}`,
+  ),
+  quotePublicOrder: (slug: string, input: { client_order_id: string; station_token?: string; promo_code?: string; items: OnlineQuoteItem[] }) => request<OnlineQuote>(
+    `/api/v1/public/ordering/${encodeURIComponent(slug)}/quote${input.station_token ? `?station=${encodeURIComponent(input.station_token)}` : ""}`,
+    { method: "POST", body: JSON.stringify(input) },
+  ),
+  submitPublicOrder: (slug: string, input: { client_order_id: string; station_token?: string; promo_code?: string; items: OnlineQuoteItem[]; quote_revision: string; guest_name?: string; guest_phone?: string }) => request<PublicOrderCreated>(
+    `/api/v1/public/ordering/${encodeURIComponent(slug)}/orders${input.station_token ? `?station=${encodeURIComponent(input.station_token)}` : ""}`,
+    { method: "POST", body: JSON.stringify(input) },
+  ),
+  getPublicOnlineOrder: (statusToken: string) => request<PublicOnlineOrder>(
+    `/api/v1/public/ordering/orders/${encodeURIComponent(statusToken)}`,
+  ),
+  cancelPublicOnlineOrder: (statusToken: string) => request<PublicOnlineOrder>(
+    `/api/v1/public/ordering/orders/${encodeURIComponent(statusToken)}/cancel`, { method: "POST" },
+  ),
+  listOnlineOrders: (filters: { locationId?: string; status?: OnlineOrderStatus }, organizationId: string, accessToken: string) => request<OnlineOrder[]>(
+    `/api/v1/online-orders?${operationFilters(filters)}`,
+    { headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  getOnlineOrder: (id: string, organizationId: string, accessToken: string) => request<OnlineOrder>(
+    `/api/v1/online-orders/${id}`, { headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  acceptOnlineOrder: (id: string, clientActionId: string, organizationId: string, accessToken: string) => request<OnlineOrder>(
+    `/api/v1/online-orders/${id}/accept`, { method: "POST", body: JSON.stringify({ client_action_id: clientActionId }), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  rejectOnlineOrder: (id: string, clientActionId: string, reason: string, organizationId: string, accessToken: string) => request<OnlineOrder>(
+    `/api/v1/online-orders/${id}/reject`, { method: "POST", body: JSON.stringify({ client_action_id: clientActionId, reason }), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  cancelOnlineOrder: (id: string, clientActionId: string, reason: string, organizationId: string, accessToken: string) => request<OnlineOrder>(
+    `/api/v1/online-orders/${id}/cancel`, { method: "POST", body: JSON.stringify({ client_action_id: clientActionId, reason }), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  getOnlineOrderingSettings: (locationId: string, organizationId: string, accessToken: string) => request<OnlineOrderingSettings>(
+    `/api/v1/online-ordering/settings/${locationId}`, { headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  saveOnlineOrderingSettings: (input: OnlineOrderingSettingsInput, organizationId: string, accessToken: string) => request<OnlineOrderingSettings>(
+    "/api/v1/online-ordering/settings", { method: "PUT", body: JSON.stringify(input), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  pauseOnlineOrdering: (locationId: string, reason: string, minutes: number | null, organizationId: string, accessToken: string, closedToday = false) => request<OnlineOrderingSettings>(
+    "/api/v1/online-ordering/pause", { method: "POST", body: JSON.stringify({ location_id: locationId, reason, minutes, closed_today: closedToday }), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  resumeOnlineOrdering: (locationId: string, organizationId: string, accessToken: string) => request<OnlineOrderingSettings>(
+    "/api/v1/online-ordering/resume", { method: "POST", body: JSON.stringify({ location_id: locationId }), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  listOnlineOrderingStations: (locationId: string, organizationId: string, accessToken: string) => request<OnlineOrderingStation[]>(
+    `/api/v1/online-ordering/stations?location_id=${locationId}`, { headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  createOnlineOrderingStation: (input: { location_id: string; kind: OnlineOrderingStationKind; label: string }, organizationId: string, accessToken: string) => request<OnlineOrderingStation>(
+    "/api/v1/online-ordering/stations", { method: "POST", body: JSON.stringify(input), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  updateOnlineOrderingStation: (id: string, input: Partial<Pick<OnlineOrderingStation, "kind" | "label" | "is_active">>, organizationId: string, accessToken: string) => request<OnlineOrderingStation>(
+    `/api/v1/online-ordering/stations/${id}`, { method: "PATCH", body: JSON.stringify(input), headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  rotateOnlineOrderingStation: (id: string, organizationId: string, accessToken: string) => request<OnlineOrderingStation>(
+    `/api/v1/online-ordering/stations/${id}/rotate`, { method: "POST", headers: tenantAuthorization(organizationId, accessToken) },
+  ),
+  getOnlineOrderingReadiness: (locationId: string, organizationId: string, accessToken: string) => request<OnlineOrderingReadiness>(
+    `/api/v1/online-ordering/readiness?location_id=${locationId}`, { headers: tenantAuthorization(organizationId, accessToken) },
+  ),
   getKitchenPerformance: (
     filters: { locationId?: string; dateFrom?: string; dateTo?: string },
     organizationId: string,

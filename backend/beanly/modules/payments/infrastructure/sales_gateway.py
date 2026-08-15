@@ -16,6 +16,7 @@ from beanly.modules.payments.domain.exceptions import (
     InvalidPayment,
     LoyaltyReservationInvalid,
     OrderAlreadyPaid,
+    OrderNotPayable,
     PaymentNotFound,
 )
 from beanly.modules.sales.domain.enums import RegisterShiftStatus, SaleCostStatus
@@ -39,6 +40,28 @@ class SalesSettlementGateway:
         if order is None:
             raise PaymentNotFound("Order not found")
         await self.organizations.ensure_location_access(context, order.location_id)
+        if order.order_source.value in {"ONLINE", "QR"}:
+            from sqlalchemy import select
+
+            from beanly.modules.online_ordering.infrastructure.db.models import (
+                OnlineOrderModel,
+            )
+
+            online_status = await self.repository.session.scalar(
+                select(OnlineOrderModel.status).where(
+                    OnlineOrderModel.organization_id == context.organization_id,
+                    OnlineOrderModel.sales_order_id == order.id,
+                )
+            )
+            if online_status not in {
+                "AWAITING_PAYMENT",
+                "PAID",
+                "PREPARING",
+                "READY",
+                "COMPLETED",
+            }:
+                raise OrderNotPayable("Online order must be accepted before payment")
+        from beanly.modules.promotions.domain.enums import PromotionChannel
         from beanly.modules.promotions.infrastructure.pricing_service import reprice_order
 
         if order.offline_session_id is None:
@@ -46,6 +69,7 @@ class SalesSettlementGateway:
                 self.repository.session,
                 context.organization_id,
                 order_id,
+                channel=PromotionChannel(order.order_source.value),
             )
         order = await self.repository.get_order(context.organization_id, order_id, lock=True)
         assert order is not None

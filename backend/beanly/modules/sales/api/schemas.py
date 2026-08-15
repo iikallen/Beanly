@@ -13,7 +13,12 @@ from beanly.modules.sales.domain.entities import (
     OrderItemModifier,
     SalesOrder,
 )
-from beanly.modules.sales.domain.enums import OrderStatus, OrderType, RegisterShiftStatus
+from beanly.modules.sales.domain.enums import (
+    OrderSource,
+    OrderStatus,
+    OrderType,
+    RegisterShiftStatus,
+)
 
 
 class RegisterCreateRequest(BaseModel):
@@ -263,6 +268,7 @@ class OrderResponse(BaseModel):
     client_order_id: UUID
     version: int
     order_type: OrderType
+    order_source: OrderSource
     status: OrderStatus
     currency_code: str
     guest_count: int | None
@@ -273,7 +279,7 @@ class OrderResponse(BaseModel):
     total_minor: str
     pricing_revision: int
     priced_at: datetime | None
-    created_by_user_id: UUID
+    created_by_user_id: UUID | None
     cancelled_by_user_id: UUID | None
     cancelled_at: datetime | None
     cancel_reason: str | None
@@ -303,6 +309,7 @@ class OrderResponse(BaseModel):
             client_order_id=value.client_order_id,
             version=value.version,
             order_type=value.order_type,
+            order_source=value.order_source,
             status=value.status,
             currency_code=value.currency_code,
             guest_count=value.guest_count,

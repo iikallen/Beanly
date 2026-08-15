@@ -54,6 +54,10 @@ from beanly.modules.onboarding.infrastructure.db.repositories import (
 )
 from beanly.modules.onboarding.infrastructure.gateway import SqlAlchemyOnboardingGateway
 from beanly.modules.onboarding.infrastructure.handlers import register_onboarding_handlers
+from beanly.modules.online_ordering.infrastructure.handlers import (
+    register_online_ordering_handlers,
+)
+from beanly.modules.online_ordering.infrastructure.service import OnlineOrderingService
 from beanly.modules.organizations.application.services.organization_service import (
     OrganizationService,
 )
@@ -99,6 +103,14 @@ async def run_worker(shutdown: ShutdownSignal | None = None) -> None:
             KitchenService(
                 session,
                 OrganizationService(SqlAlchemyOrganizationRepository(session)),
+            ),
+        )
+        register_online_ordering_handlers(
+            handlers,
+            OnlineOrderingService(
+                session,
+                OrganizationService(SqlAlchemyOrganizationRepository(session)),
+                settings,
             ),
         )
         register_integration_handlers(

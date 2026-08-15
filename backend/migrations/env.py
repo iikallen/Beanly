@@ -26,6 +26,9 @@ from beanly.modules.kitchen.infrastructure.db import models as kitchen_models  #
 from beanly.modules.menu.infrastructure.db import models as menu_models  # noqa: F401
 from beanly.modules.offline_pos.infrastructure.db import models as offline_pos_models  # noqa: F401
 from beanly.modules.onboarding.infrastructure.db import models as onboarding_models  # noqa: F401
+from beanly.modules.online_ordering.infrastructure.db import (
+    models as online_ordering_models,  # noqa: F401
+)
 from beanly.modules.organizations.infrastructure.db import (
     models as organization_models,  # noqa: F401
 )

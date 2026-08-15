@@ -29,7 +29,7 @@ from beanly.modules.promotions.domain.enums import (
 from beanly.modules.promotions.infrastructure.pricing_service import reprice_order
 from beanly.modules.sales.application.order_service import _snapshot_item
 from beanly.modules.sales.domain.entities import SalesOrder
-from beanly.modules.sales.domain.enums import OrderStatus
+from beanly.modules.sales.domain.enums import OrderSource, OrderStatus
 from beanly.modules.sales.domain.exceptions import OrderImmutable
 from beanly.modules.sales.domain.repositories import SalesRepository
 
@@ -93,17 +93,30 @@ class OfflineSalesGateway:
             order = await self.repository.get_order(context.organization_id, order.id, lock=True)
             if order is None:
                 raise OrderChangedOnServer("Order disappeared during sync")
-            if order.offline_session_id != session.id or order.pos_device_id != device.id:
-                raise OrderChangedOnServer("Order belongs to another POS session")
             if request.base_server_version != order.version:
                 raise OrderChangedOnServer("Order changed on server")
             if order.status != OrderStatus.OPEN:
                 raise OrderChangedOnServer("Order is immutable on server")
+            owned_by_session = (
+                order.offline_session_id == session.id and order.pos_device_id == device.id
+            )
+            claimable_online_order = (
+                order.offline_session_id is None
+                and order.pos_device_id is None
+                and order.order_source in (OrderSource.ONLINE, OrderSource.QR)
+                and order.location_id == session.location_id
+                and order.shift_id == session.shift_id
+                and order.warehouse_id == session.warehouse_id
+            )
+            if not owned_by_session and not claimable_online_order:
+                raise OrderChangedOnServer("Order belongs to another POS session")
             order = await self.repository.update_order(
                 replace(
                     order,
                     order_type=request.order_type,
                     offline_display_number=request.offline_display_number,
+                    pos_device_id=device.id,
+                    offline_session_id=session.id,
                     updated_at=datetime.now(UTC),
                     version=order.version + 1,
                 )
@@ -137,6 +150,24 @@ class OfflineSalesGateway:
             if item.client_item_id not in desired_ids:
                 await self.repository.delete_item(order.id, item.id)
         order = await self.repository.recalculate_order_totals(context.organization_id, order.id)
+        occurred_at = request.payment.completed_at if request.payment else request.updated_at
+        if order.order_source in (OrderSource.ONLINE, OrderSource.QR):
+            if request.manual_promotion_ids:
+                raise OrderImmutable("Online order promotions are server-authoritative")
+            await reprice_order(
+                self.repository.session,
+                context.organization_id,
+                order.id,
+                occurred_at=occurred_at,
+            )
+            order = await self.repository.get_order(context.organization_id, order.id)
+            assert order is not None
+            if request.status == "CANCELLED":
+                raise OrderImmutable("Online orders must be cancelled through Online Orders")
+            if request.status == "PAID" and not order.items:
+                raise OrderImmutable("Paid offline order must contain items")
+            return order
+
         promotions = _compiled_promotions(snapshot.public_payload, context.organization_id)
         requested = set(request.manual_promotion_ids)
         allowed_manual = {
@@ -151,7 +182,7 @@ class OfflineSalesGateway:
             self.repository.session,
             context.organization_id,
             order.id,
-            occurred_at=request.payment.completed_at if request.payment else request.updated_at,
+            occurred_at=occurred_at,
             promotion_snapshot=promotions,
             manual_promotion_ids=tuple(sorted(requested, key=str)),
         )

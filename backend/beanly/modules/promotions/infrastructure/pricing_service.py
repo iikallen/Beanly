@@ -31,6 +31,7 @@ from beanly.modules.promotions.domain.entities import PricingItem
 from beanly.modules.promotions.domain.enums import (
     DiscountKind,
     DiscountSource,
+    PromotionChannel,
     PromotionScope,
     PromotionStatus,
 )
@@ -58,6 +59,7 @@ async def reprice_order(
     occurred_at: datetime | None = None,
     promotion_snapshot: tuple | None = None,
     manual_promotion_ids: tuple[UUID, ...] = (),
+    channel: PromotionChannel | None = None,
 ):
     started = datetime.now(UTC)
     metrics.promotion_evaluations_total.add(1)
@@ -70,6 +72,7 @@ async def reprice_order(
         raise PromotionNotFound("Order not found")
     if order.status != OrderStatus.OPEN.value:
         return order
+    channel = channel or PromotionChannel(order.order_source)
     item_rows = list(
         await session.scalars(
             select(SalesOrderItemModel)
@@ -134,7 +137,7 @@ async def reprice_order(
     promotions = promotion_snapshot or tuple(
         value
         for value in await repo.list(organization_id)
-        if value.status == PromotionStatus.ACTIVE
+        if value.status == PromotionStatus.ACTIVE and channel in value.channels
     )
     evaluation_time = occurred_at or datetime.now(UTC)
     audience_kind_by_id: dict[UUID, str] = {}

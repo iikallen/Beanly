@@ -13,6 +13,12 @@ class OrderType(StrEnum):
     DELIVERY = "DELIVERY"
 
 
+class OrderSource(StrEnum):
+    POS = "POS"
+    ONLINE = "ONLINE"
+    QR = "QR"
+
+
 class OrderStatus(StrEnum):
     OPEN = "OPEN"
     PAID = "PAID"
