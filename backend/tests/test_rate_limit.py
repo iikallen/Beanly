@@ -34,6 +34,17 @@ class _UnavailableLimiter:
         raise RedisError("redis unavailable")
 
 
+class _CaptureLimiter:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    async def check(
+        self, action: str, identity: str, **_kwargs: object
+    ) -> RateLimitDecision:
+        self.calls.append((action, identity))
+        return RateLimitDecision(True, 0, 1)
+
+
 async def _ok(_request: object) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
@@ -48,6 +59,9 @@ def _app(limiter: object) -> Starlette:
                 methods=["POST"],
             ),
             Route("/api/v1/onboarding/imports/ai", _ok, methods=["POST"]),
+            Route(
+                "/api/v1/public/ordering/{slug}/quote", _ok, methods=["POST"]
+            ),
         ]
     )
     app.add_middleware(RateLimitMiddleware, limiter=limiter, enabled=True)
@@ -104,3 +118,31 @@ async def test_sensitive_rate_limit_fails_closed_but_webhook_fails_open() -> Non
     assert login.json()["request_id"] == login.headers["x-request-id"]
     assert ai_import.status_code == 503
     assert webhook.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_public_order_rate_limit_separates_and_hashes_station_tokens() -> None:
+    limiter = _CaptureLimiter()
+    tokens = ("station-token-a-00000000", "station-token-b-00000000")
+    async with AsyncClient(
+        transport=ASGITransport(app=_app(limiter)),
+        base_url="http://test",
+    ) as client:
+        for token in tokens:
+            response = await client.post(
+                "/api/v1/public/ordering/cafe/quote", params={"station": token}
+            )
+            assert response.status_code == 200
+
+    identities_by_action: defaultdict[str, set[str]] = defaultdict(set)
+    for action, identity in limiter.calls:
+        identities_by_action[action].add(identity)
+
+    assert len(identities_by_action) >= 3
+    assert sum(len(identities) == 1 for identities in identities_by_action.values()) >= 2
+    assert any(len(identities) == 2 for identities in identities_by_action.values())
+    assert all(
+        token not in identity
+        for _, identity in limiter.calls
+        for token in tokens
+    )

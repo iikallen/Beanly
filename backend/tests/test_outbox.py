@@ -57,6 +57,12 @@ from beanly.modules.offline_pos.domain.events import (
     PosDevicePaired,
     PosDeviceRevoked,
 )
+from beanly.modules.online_ordering.domain.events import (
+    OnlineOrderAccepted,
+    OnlineOrderCancelled,
+    OnlineOrderRejected,
+    OnlineOrderSubmitted,
+)
 from beanly.modules.payments.domain.events import PaymentCompleted
 from beanly.modules.purchasing.domain.events import (
     GoodsReceiptCreated,
@@ -104,7 +110,32 @@ def _event_contracts() -> tuple[tuple[object, str, str, UUID], ...]:
     ticket_id = uuid4()
     work_item_id = uuid4()
     station_id = uuid4()
+    online_order_id = uuid4()
     return (
+        (
+            OnlineOrderSubmitted(organization_id, online_order_id, order_id),
+            "online.order_submitted",
+            "online_order",
+            online_order_id,
+        ),
+        (
+            OnlineOrderAccepted(organization_id, online_order_id, order_id),
+            "online.order_accepted",
+            "online_order",
+            online_order_id,
+        ),
+        (
+            OnlineOrderRejected(organization_id, online_order_id, order_id),
+            "online.order_rejected",
+            "online_order",
+            online_order_id,
+        ),
+        (
+            OnlineOrderCancelled(organization_id, online_order_id, order_id),
+            "online.order_cancelled",
+            "online_order",
+            online_order_id,
+        ),
         (
             KitchenTicketCreated(organization_id, ticket_id, order_id, payment_id),
             "kitchen.ticket_created",
